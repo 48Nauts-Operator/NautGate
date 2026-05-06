@@ -8,6 +8,7 @@ from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
 from app.logging_config import configure_logging
 from app.routes import health, v1
+from app.services.nautrouter import NautRouterClient
 from app.settings import get_settings
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
@@ -21,7 +22,7 @@ async def lifespan(app: FastAPI):
 
     app.state.settings = settings
     app.state.db = None
-    app.state.nautrouter = None  # Day 2 wires the NautRouter HTTP sidecar client
+    app.state.nautrouter = None
 
     if settings.nautgate_db_url:
         try:
@@ -34,9 +35,16 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("no_db_url_configured", hint="set NAUTGATE_DB_URL to enable persistence")
 
+    if settings.nautrouter_base_url:
+        app.state.nautrouter = NautRouterClient(settings.nautrouter_base_url)
+        log.info("nautrouter_client_ready", base_url=settings.nautrouter_base_url)
+
     try:
         yield
     finally:
+        if app.state.nautrouter is not None:
+            await app.state.nautrouter.aclose()
+            log.info("nautrouter_client_closed")
         if app.state.db is not None:
             await app.state.db.close()
             log.info("db_pool_closed")

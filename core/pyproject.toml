@@ -31,7 +31,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]
-ignore = ["E501"]
+# ASYNC240: pathlib in async — the migration runner reads SQL once at startup; sync IO is fine.
+# ASYNC230: ditto for open() at startup. Tighten if migrations grow beyond a single file.
+ignore = ["E501", "ASYNC240", "ASYNC230"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

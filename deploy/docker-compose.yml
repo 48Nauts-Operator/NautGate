@@ -1,5 +1,6 @@
 # NautGate — local dev compose stack.
-# Day 1: nautgate-db + nautgate-core. Day 2 adds nautrouter.
+# Default `up` brings nautgate-db + nautrouter (the sidecar wrap target).
+# nautgate-core is profiled `full` — Day 1-3 iteration runs it via `uv run uvicorn` directly.
 
 services:
   nautgate-db:
@@ -20,6 +21,30 @@ services:
       retries: 10
     restart: unless-stopped
 
+  nautrouter:
+    build:
+      context: ../vendor/NautRouter
+    container_name: nautrouter
+    environment:
+      NAUT_PORT: "8404"
+      NAUT_WS_PORT: "8403"
+      NAUT_PROFILE: ${NAUTGATE_PROFILE:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LMSTUDIO_URL: ${LMSTUDIO_BASE_URL:-}
+      MEMORY_API: ${MEMORY_API:-}
+    ports:
+      - "127.0.0.1:8404:8404"   # loopback only; never expose
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8404/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   nautgate-core:
     build:
       context: ../core
@@ -27,13 +52,15 @@ services:
     depends_on:
       nautgate-db:
         condition: service_healthy
+      nautrouter:
+        condition: service_healthy
     environment:
       NAUTGATE_DB_URL: postgres://nautgate:nautgate@nautgate-db:5432/nautgate
       NAUTGATE_LISTEN_HOST: 0.0.0.0
       NAUTGATE_LISTEN_PORT: "8090"
       NAUTGATE_LOG_LEVEL: ${NAUTGATE_LOG_LEVEL:-INFO}
       NAUTGATE_PROFILE: ${NAUTGATE_PROFILE:-auto}
-      NAUTROUTER_BASE_URL: ${NAUTROUTER_BASE_URL:-http://nautrouter:8404}
+      NAUTROUTER_BASE_URL: http://nautrouter:8404
     ports:
       - "127.0.0.1:8090:8090"
     healthcheck:
@@ -43,8 +70,6 @@ services:
       retries: 5
     restart: unless-stopped
     profiles: ["full"]
-    # Day 1 verification runs nautgate-core via `uv run uvicorn` directly (faster iteration).
-    # Bring this service up explicitly with: docker compose --profile full up -d
 
 volumes:
   nautgate-db-data:
