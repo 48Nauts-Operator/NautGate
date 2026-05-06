@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # Container deploys override this via NAUTGATE_OUTCOME_SPOOL_PATH=/var/lib/nautgate/spool/...
     nautgate_outcome_spool_path: str = "/tmp/nautgate/outcomes.ndjson"  # noqa: S108
 
+    # Day 5a/b: tier → provider/model table for `model: "auto"`.
+    # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys
+    # override via NAUTGATE_ROUTING_CONFIG_PATH=/etc/nautgate/routing.yaml.
+    nautgate_routing_config_path: str | None = None
+
     nautrouter_base_url: str = "http://localhost:8404"
 
 

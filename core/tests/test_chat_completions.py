@@ -125,13 +125,19 @@ async def test_round_trip_returns_response_and_writes_rows(chat_client):
     assert pc["agent_id"] == "anonymous"
     assert pc["inbound_format"] == "openai_chat"
     assert pc["model_requested"] == "claude-haiku-4.5"
-    assert pc["classified_tier"] == "UNCLASSIFIED"
+    # Day 5a: short "say hi" → fast tier, low score.
+    assert pc["classified_tier"] == "fast"
+    assert pc["classified_score"] is not None and pc["classified_score"] < 0.15
     assert pc["classified_sensitivity"] == "none"  # Day 4b: clean prompt
     assert pc["classified_signals"] == []
     assert pc["prompt_excerpt"] == "say hi"
     # Day 4c: none → full prompt body stored as JSON.
     assert pc["prompt_body"] is not None
     assert "say hi" in pc["prompt_body"]
+    # Day 5b: explicit model → decision_provider stays "passthrough".
+    assert pc["decision_provider"] == "passthrough"
+    assert pc["decision_model"] == "claude-haiku-4.5"
+    assert pc["decision_reason"] == "explicit:claude-haiku-4.5"
 
     # Outcome row was written after forward.
     assert len(calls["outcome"]) == 1
@@ -185,6 +191,98 @@ async def test_not_empty_when_content_present(chat_client):
     assert resp.status_code == 200
     assert resp.headers["x-nautgate-was-empty"] == "false"
     assert calls["outcome"][0]["was_empty"] is False
+
+
+# --- Day 5b: model:auto routing --------------------------------------------
+
+
+@pytest.fixture
+def routing_table():
+    return {
+        "fast": {
+            "primary": {"provider": "openai", "model": "gpt-4o-mini"},
+            "fallback": {"provider": "anthropic", "model": "claude-haiku-4-5"},
+        },
+        "balanced": {"primary": {"provider": "anthropic", "model": "claude-haiku-4-5"}},
+        "deep": {"primary": {"provider": "anthropic", "model": "claude-sonnet-4-6"}},
+        "expert": {"primary": {"provider": "anthropic", "model": "claude-opus-4-7"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_auto_routes_short_prompt_to_fast(chat_app, routing_table):
+    app, calls = chat_app
+    app.state.routing_table = routing_table
+
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-tier"] == "fast"
+    assert resp.headers["x-nautgate-provider"] == "openai"
+    assert resp.headers["x-nautgate-model"] == "gpt-4o-mini"
+
+    pc = calls["precapture"][0]
+    assert pc["classified_tier"] == "fast"
+    assert pc["model_requested"] == "auto"
+    assert pc["decision_provider"] == "openai"
+    assert pc["decision_model"] == "gpt-4o-mini"
+    assert "auto:fast" in pc["decision_reason"]
+    # NautRouter received the rewritten model.
+    forwarded = calls["mock"].chat_completions.call_args.args[0]
+    assert forwarded["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_auto_returns_503_when_routing_table_missing(chat_app):
+    app, calls = chat_app
+    app.state.routing_table = None
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_explicit_model_does_not_invoke_routing(chat_app, routing_table):
+    """A request with an explicit model passes through verbatim."""
+    app, calls = chat_app
+    app.state.routing_table = routing_table
+
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={
+                "model": "my-pinned-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-provider"] == "passthrough"
+    assert resp.headers["x-nautgate-model"] == "my-pinned-model"
+    forwarded = calls["mock"].chat_completions.call_args.args[0]
+    assert forwarded["model"] == "my-pinned-model"
 
 
 # --- Sensitivity classifier (Day 4b) ----------------------------------------

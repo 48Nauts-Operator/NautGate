@@ -26,6 +26,7 @@ async def precapture(
     prompt_tokens: int | None = None,
     classified_sensitivity: str | None = None,
     classified_signals: list[dict] | None = None,
+    classified_score: float | None = None,
     prompt_body: str | None = None,
     prompt_body_truncated_at_byte: int | None = None,
 ) -> None:
@@ -36,10 +37,11 @@ async def precapture(
             """
             INSERT INTO nautgate.route_decisions
                 (id, agent_id, inbound_format, model_requested, prompt_excerpt,
-                 prompt_tokens, classified_tier, classified_sensitivity, classified_signals,
+                 prompt_tokens, classified_tier, classified_score,
+                 classified_sensitivity, classified_signals,
                  decision_provider, decision_model, decision_reason,
                  prompt_body, prompt_body_truncated_at_byte)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15)
             """,
             decision_id,
             agent_id,
@@ -48,6 +50,7 @@ async def precapture(
             prompt_excerpt,
             prompt_tokens,
             classified_tier,
+            classified_score,
             classified_sensitivity,
             signals_json,
             decision_provider,

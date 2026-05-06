@@ -12,7 +12,10 @@ from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
 from app.db import queries
 from app.outcome import persist_outcome
+from app.scoring import resolve, score, to_tier
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
+
+AUTO_MODEL_TOKEN = "auto"
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 log = structlog.get_logger()
@@ -63,10 +66,30 @@ async def chat_completions(request: Request) -> JSONResponse:
     prompt_excerpt = queries.excerpt_last_user_message(messages)
 
     # CLASSIFY — fast-path regex over the full assembled user text (Tech Paper §7.3).
-    # Runs on the full text so a secret past the 200-char excerpt boundary still trips the gate.
     classification = classify(assemble_user_text(messages))
 
-    # BODY_CAPTURE — policy-gated by sensitivity (Day 4c). secret → suppressed, pii → redacted.
+    # SCORE — 14-dimension complexity scorer (Day 5a). Always runs so we capture
+    # tier/score for every request, even when the caller pinned an explicit model.
+    score_vector = score(payload)
+    tier = to_tier(score_vector)
+
+    # DECIDE — when model is "auto", resolve via the routing table; otherwise passthrough.
+    routing_table = getattr(request.app.state, "routing_table", None)
+    if model_requested == AUTO_MODEL_TOKEN:
+        if routing_table is None:
+            raise HTTPException(status_code=503, detail="routing_table_unavailable")
+        route_pick = resolve(tier, routing_table)
+        decision_provider = route_pick.provider
+        decision_model = route_pick.model
+        decision_reason = f"auto:{tier}->{route_pick.provider}/{route_pick.model}"
+        # Rewrite payload model so NautRouter forwards to the chosen target.
+        payload["model"] = decision_model
+    else:
+        decision_provider = "passthrough"
+        decision_model = model_requested
+        decision_reason = f"explicit:{model_requested}"
+
+    # BODY_CAPTURE — policy-gated by sensitivity (Day 4c).
     captured = capture_prompt(messages, classification.sensitivity)
 
     # PRECAPTURE — synchronous audit row before forwarding upstream (Tech Paper §9).
@@ -76,19 +99,22 @@ async def chat_completions(request: Request) -> JSONResponse:
         agent_id=agent_id,
         inbound_format="openai_chat",
         model_requested=model_requested,
-        classified_tier="UNCLASSIFIED",  # Day 5 fills with the complexity scorer's tier
+        classified_tier=tier,
+        classified_score=score_vector.aggregate,
         classified_sensitivity=classification.sensitivity,
         classified_signals=classification.signals,
-        decision_provider="passthrough",  # Day 5 fills with real provider after SCORE+DECIDE
-        decision_model=model_requested,
-        decision_reason="day-2-passthrough",
+        decision_provider=decision_provider,
+        decision_model=decision_model,
+        decision_reason=decision_reason,
         prompt_excerpt=prompt_excerpt,
         prompt_body=captured.body,
         prompt_body_truncated_at_byte=captured.truncated_at_byte,
     )
 
-    # Stash sensitivity for the streaming branch's response capture.
+    # Stash sensitivity + chosen route for the streaming branch's response headers.
     request.state.classified_sensitivity = classification.sensitivity
+    request.state.decision_provider = decision_provider
+    request.state.decision_model = decision_model
 
     if payload.get("stream"):
         return await _stream_chat_completions(
@@ -169,8 +195,10 @@ async def chat_completions(request: Request) -> JSONResponse:
         headers={
             "X-Nautgate-Decision-Id": str(decision_id),
             "X-Nautgate-Latency-Ms": str(duration_ms),
-            "X-Nautgate-Provider": "passthrough",
-            "X-Nautgate-Model": str(model_requested),
+            "X-Nautgate-Provider": decision_provider,
+            "X-Nautgate-Model": str(decision_model),
+            "X-Nautgate-Tier": tier,
+            "X-Nautgate-Score": f"{score_vector.aggregate:.4f}",
             "X-Nautgate-Brain-Used": "false",
             "X-Nautgate-Was-Empty": "true" if was_empty else "false",
         },
@@ -238,13 +266,15 @@ async def _stream_chat_completions(
                     decision_id=str(decision_id),
                 )
 
+    decision_provider = getattr(request.state, "decision_provider", "passthrough")
+    decision_model = getattr(request.state, "decision_model", model_requested)
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
         headers={
             "X-Nautgate-Decision-Id": str(decision_id),
-            "X-Nautgate-Provider": "passthrough",
-            "X-Nautgate-Model": str(model_requested),
+            "X-Nautgate-Provider": decision_provider,
+            "X-Nautgate-Model": str(decision_model),
             "X-Nautgate-Brain-Used": "false",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

@@ -9,11 +9,15 @@ from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
 from app.logging_config import configure_logging
 from app.routes import health, v1
+from app.scoring import load_routing_table
 from app.services.nautrouter import NautRouterClient
 from app.settings import get_settings
 from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
+DEFAULT_ROUTING_CONFIG = (
+    Path(__file__).resolve().parents[2] / "config" / "routing.yaml"
+)
 
 
 @asynccontextmanager
@@ -26,6 +30,15 @@ async def lifespan(app: FastAPI):
     app.state.db = None
     app.state.nautrouter = None
     app.state.outcome_spool = OutcomeSpool(settings.nautgate_outcome_spool_path)
+
+    # Day 5a/b: tier → provider/model routing table for `model: "auto"`.
+    routing_path = Path(settings.nautgate_routing_config_path or DEFAULT_ROUTING_CONFIG)
+    try:
+        app.state.routing_table = load_routing_table(routing_path)
+        log.info("routing_table_loaded", path=str(routing_path), tiers=len(app.state.routing_table))
+    except Exception as exc:
+        log.warning("routing_table_load_failed", path=str(routing_path), error=str(exc))
+        app.state.routing_table = None
 
     if settings.nautgate_db_url:
         try:
