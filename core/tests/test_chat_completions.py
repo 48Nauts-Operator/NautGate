@@ -129,6 +129,9 @@ async def test_round_trip_returns_response_and_writes_rows(chat_client):
     assert pc["classified_sensitivity"] == "none"  # Day 4b: clean prompt
     assert pc["classified_signals"] == []
     assert pc["prompt_excerpt"] == "say hi"
+    # Day 4c: none → full prompt body stored as JSON.
+    assert pc["prompt_body"] is not None
+    assert "say hi" in pc["prompt_body"]
 
     # Outcome row was written after forward.
     assert len(calls["outcome"]) == 1
@@ -189,7 +192,10 @@ async def test_not_empty_when_content_present(chat_client):
 
 @pytest.mark.asyncio
 async def test_classifier_flags_secret_in_prompt(chat_client):
-    """Day 4b: a request with a secret in the user prompt is captured as 'secret'."""
+    """Day 4b: a request with a secret in the user prompt is captured as 'secret'.
+
+    Day 4c: prompt_body is suppressed (None) and response_body is suppressed too.
+    """
     c, calls = chat_client
 
     calls["mock"].chat_completions.return_value = {
@@ -214,10 +220,15 @@ async def test_classifier_flags_secret_in_prompt(chat_client):
     pc = calls["precapture"][0]
     assert pc["classified_sensitivity"] == "secret"
     assert any(s["rule_id"] == "github_pat" for s in pc["classified_signals"])
+    # Day 4c: secret → no body capture.
+    assert pc["prompt_body"] is None
+    oc = calls["outcome"][0]
+    assert oc["response_body"] is None
 
 
 @pytest.mark.asyncio
 async def test_classifier_flags_pii_when_no_secret(chat_client):
+    """Day 4b: PII detected. Day 4c: prompt_body captured but PII spans redacted."""
     c, calls = chat_client
 
     calls["mock"].chat_completions.return_value = {
@@ -236,6 +247,10 @@ async def test_classifier_flags_pii_when_no_secret(chat_client):
     assert resp.status_code == 200
     pc = calls["precapture"][0]
     assert pc["classified_sensitivity"] == "pii"
+    # Day 4c: pii → body kept but matched spans replaced.
+    assert pc["prompt_body"] is not None
+    assert "[email-redacted]" in pc["prompt_body"]
+    assert "@48nauts.com" not in pc["prompt_body"]
 
 
 # --- Upstream failure -------------------------------------------------------

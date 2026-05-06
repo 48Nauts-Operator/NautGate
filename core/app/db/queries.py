@@ -26,6 +26,8 @@ async def precapture(
     prompt_tokens: int | None = None,
     classified_sensitivity: str | None = None,
     classified_signals: list[dict] | None = None,
+    prompt_body: str | None = None,
+    prompt_body_truncated_at_byte: int | None = None,
 ) -> None:
     """Insert the audit row before forwarding upstream. Synchronous by design."""
     signals_json = json.dumps(classified_signals) if classified_signals else None
@@ -35,8 +37,9 @@ async def precapture(
             INSERT INTO nautgate.route_decisions
                 (id, agent_id, inbound_format, model_requested, prompt_excerpt,
                  prompt_tokens, classified_tier, classified_sensitivity, classified_signals,
-                 decision_provider, decision_model, decision_reason)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
+                 decision_provider, decision_model, decision_reason,
+                 prompt_body, prompt_body_truncated_at_byte)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14)
             """,
             decision_id,
             agent_id,
@@ -50,6 +53,8 @@ async def precapture(
             decision_provider,
             decision_model,
             decision_reason,
+            prompt_body,
+            prompt_body_truncated_at_byte,
         )
 
 
@@ -70,6 +75,8 @@ async def write_outcome(
     client_disconnected: bool = False,
     was_truncated: bool = False,
     truncated_at_byte: int | None = None,
+    response_body: str | None = None,
+    response_body_truncated_at_byte: int | None = None,
 ) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
@@ -78,8 +85,9 @@ async def write_outcome(
                 (decision_id, status_code, duration_ms, first_byte_ms,
                  prompt_tokens, completion_tokens, reasoning_tokens, cost_usd,
                  was_empty, used_fallback, fallback_count, client_disconnected,
-                 was_truncated, truncated_at_byte)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 was_truncated, truncated_at_byte,
+                 response_body, response_body_truncated_at_byte)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             """,
             decision_id,
             status_code,
@@ -95,6 +103,8 @@ async def write_outcome(
             client_disconnected,
             was_truncated,
             truncated_at_byte,
+            response_body,
+            response_body_truncated_at_byte,
         )
 
 

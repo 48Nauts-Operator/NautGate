@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth import authenticate
+from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
 from app.db import queries
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
@@ -64,6 +65,9 @@ async def chat_completions(request: Request) -> JSONResponse:
     # Runs on the full text so a secret past the 200-char excerpt boundary still trips the gate.
     classification = classify(assemble_user_text(messages))
 
+    # BODY_CAPTURE — policy-gated by sensitivity (Day 4c). secret → suppressed, pii → redacted.
+    captured = capture_prompt(messages, classification.sensitivity)
+
     # PRECAPTURE — synchronous audit row before forwarding upstream (Tech Paper §9).
     await queries.precapture(
         pool,
@@ -78,7 +82,12 @@ async def chat_completions(request: Request) -> JSONResponse:
         decision_model=model_requested,
         decision_reason="day-2-passthrough",
         prompt_excerpt=prompt_excerpt,
+        prompt_body=captured.body,
+        prompt_body_truncated_at_byte=captured.truncated_at_byte,
     )
+
+    # Stash sensitivity for the streaming branch's response capture.
+    request.state.classified_sensitivity = classification.sensitivity
 
     if payload.get("stream"):
         return await _stream_chat_completions(
@@ -133,7 +142,10 @@ async def chat_completions(request: Request) -> JSONResponse:
             content = ""
         was_empty = bool((completion_tokens or 0) > 0 and not content)
 
-    # Outcome write — Day 2 ships synchronous-on-healthy-DB; durable-spool comes Day 4.
+    # BODY_CAPTURE for the response, gated by the same sensitivity classification.
+    response_captured = capture_response(upstream_resp, classification.sensitivity)
+
+    # Outcome write — synchronous on healthy DB; durable-spool fallback comes Day 4d.
     await queries.write_outcome(
         pool,
         decision_id=decision_id,
@@ -142,6 +154,8 @@ async def chat_completions(request: Request) -> JSONResponse:
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         was_empty=was_empty,
+        response_body=response_captured.body,
+        response_body_truncated_at_byte=response_captured.truncated_at_byte,
     )
 
     if upstream_resp is None:
@@ -193,6 +207,8 @@ async def _stream_chat_completions(
         finally:
             duration_ms = int((time.monotonic() - started) * 1000)
             parsed = parse_sse_for_outcome(bytes(capture.accumulator))
+            sensitivity = getattr(request.state, "classified_sensitivity", "none")
+            response_captured = capture_response(parsed.get("assembled_content"), sensitivity)
             try:
                 await queries.write_outcome(
                     pool,
@@ -207,6 +223,8 @@ async def _stream_chat_completions(
                     was_truncated=capture.was_truncated,
                     truncated_at_byte=capture.truncated_at_byte,
                     client_disconnected=state["client_disconnected"],
+                    response_body=response_captured.body,
+                    response_body_truncated_at_byte=response_captured.truncated_at_byte,
                 )
             except Exception as exc:
                 log.error(
