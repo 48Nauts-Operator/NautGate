@@ -4,12 +4,14 @@ from pathlib import Path
 import structlog
 from fastapi import FastAPI
 
+from app.db import queries
 from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
 from app.logging_config import configure_logging
 from app.routes import health, v1
 from app.services.nautrouter import NautRouterClient
 from app.settings import get_settings
+from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
 
@@ -23,6 +25,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.db = None
     app.state.nautrouter = None
+    app.state.outcome_spool = OutcomeSpool(settings.nautgate_outcome_spool_path)
 
     if settings.nautgate_db_url:
         try:
@@ -30,6 +33,17 @@ async def lifespan(app: FastAPI):
             await apply_migrations(pool, MIGRATIONS_DIR)
             app.state.db = pool
             log.info("db_pool_ready", url_host=_redacted_host(settings.nautgate_db_url))
+            try:
+                result = await app.state.outcome_spool.drain(queries.write_outcome, pool)
+                if result.drained or result.pending or result.skipped_bad:
+                    log.info(
+                        "outcome_spool_drain_on_startup",
+                        drained=result.drained,
+                        pending=result.pending,
+                        skipped_bad=result.skipped_bad,
+                    )
+            except Exception as exc:
+                log.warning("outcome_spool_drain_failed", error=str(exc))
         except Exception as exc:
             log.error("db_pool_failed", error=str(exc))
     else:

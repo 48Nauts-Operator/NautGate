@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     nautgate_profile: str = "auto"
     nautgate_config_path: str | None = None
 
+    # Day 4d: durable-spool fallback for route_outcomes when Postgres is down.
+    # Container deploys override this via NAUTGATE_OUTCOME_SPOOL_PATH=/var/lib/nautgate/spool/...
+    nautgate_outcome_spool_path: str = "/tmp/nautgate/outcomes.ndjson"  # noqa: S108
+
     nautrouter_base_url: str = "http://localhost:8404"
 
 

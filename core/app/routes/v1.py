@@ -11,6 +11,7 @@ from app.auth import authenticate
 from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
 from app.db import queries
+from app.outcome import persist_outcome
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -145,9 +146,11 @@ async def chat_completions(request: Request) -> JSONResponse:
     # BODY_CAPTURE for the response, gated by the same sensitivity classification.
     response_captured = capture_response(upstream_resp, classification.sensitivity)
 
-    # Outcome write — synchronous on healthy DB; durable-spool fallback comes Day 4d.
-    await queries.write_outcome(
+    # Outcome write — synchronous on healthy DB; falls back to spool when DB fails (Day 4d).
+    spool = getattr(request.app.state, "outcome_spool", None)
+    await persist_outcome(
         pool,
+        spool,
         decision_id=decision_id,
         status_code=upstream_status,
         duration_ms=duration_ms,
@@ -209,9 +212,11 @@ async def _stream_chat_completions(
             parsed = parse_sse_for_outcome(bytes(capture.accumulator))
             sensitivity = getattr(request.state, "classified_sensitivity", "none")
             response_captured = capture_response(parsed.get("assembled_content"), sensitivity)
+            spool = getattr(request.app.state, "outcome_spool", None)
             try:
-                await queries.write_outcome(
+                await persist_outcome(
                     pool,
+                    spool,
                     decision_id=decision_id,
                     status_code=200,
                     duration_ms=duration_ms,
