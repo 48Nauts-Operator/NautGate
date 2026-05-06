@@ -1,0 +1,24 @@
+# NautGate tier → provider/model routing table (Day 5a).
+#
+# Used when the caller passes model: "auto". The 14-dimension scorer
+# (app/scoring.py) maps the request to a tier; this table maps tier → route.
+#
+# `primary` is tried first. `fallback` is used when the primary provider is
+# unhealthy (Day 5c) or the call fails.
+#
+# All concrete model names below are best-of-breed picks as of 2026-Q2.
+# Update as the menu changes — keep this file the single source of truth.
+
+tiers:
+  fast:
+    primary: { provider: openai, model: gpt-4o-mini }
+    fallback: { provider: anthropic, model: claude-haiku-4-5 }
+  balanced:
+    primary: { provider: anthropic, model: claude-haiku-4-5 }
+    fallback: { provider: openai, model: gpt-4o }
+  deep:
+    primary: { provider: anthropic, model: claude-sonnet-4-6 }
+    fallback: { provider: openai, model: gpt-4-turbo }
+  expert:
+    primary: { provider: anthropic, model: claude-opus-4-7 }
+    fallback: { provider: openai, model: o1-preview }
