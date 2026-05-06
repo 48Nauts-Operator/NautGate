@@ -1,16 +1,29 @@
+"""V1 routes. /v1/chat/completions, /v1/messages share a common pipeline core.
+
+Pipeline (Tech Paper §2):
+    auth → CLASSIFY → SCORE → DECIDE → PRECAPTURE → forward → outcome → respond
+
+Both /v1/chat/completions and /v1/messages translate to the canonical OpenAI Chat
+shape before forwarding to NautRouter, then translate the response back as needed.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import time
 import uuid
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
 from app.db import queries
+from app.formats import anthropic as ant
 from app.outcome import persist_outcome
 from app.provider_health import upsert_health
 from app.scoring import resolve_healthy, score, to_tier
@@ -30,14 +43,32 @@ def _stub(coming_in: str, message: str) -> JSONResponse:
     )
 
 
-@router.post("/chat/completions")
-async def chat_completions(request: Request) -> JSONResponse:
-    """Day 2: non-streaming `/v1/chat/completions` forwards through NautRouter sidecar.
+# ============================================================================
+# Shared pipeline core
+# ============================================================================
 
-    Pipeline (Day 2 subset of the full Tech Paper §2 pipeline):
-        auth → PRECAPTURE → forward → write outcome → return.
-    Day 4 fills CLASSIFY before forward, Day 5 fills SCORE + DECIDE.
-    Streaming branch is a Day-3 stub.
+
+async def _process_chat_request(
+    request: Request,
+    *,
+    payload: dict,
+    inbound_format: str,
+    response_translator: Callable[[dict, str], dict] | None = None,
+    stream_translator: Callable[[bytes], list[bytes]] | None = None,
+    stream_translator_finish: Callable[[], list[bytes]] | None = None,
+) -> Response:
+    """Run the full chat pipeline against a canonical OpenAI-Chat-shaped payload.
+
+    Args:
+        request: FastAPI request (for app.state and request.state).
+        payload: OpenAI Chat-shaped dict. Mutated only to rewrite `model` for auto-routing.
+        inbound_format: identifier written to route_decisions.inbound_format
+            (e.g. "openai_chat", "anthropic").
+        response_translator: optional fn(upstream_dict, decision_model) → final dict
+            applied to the non-streaming upstream response before JSON-encoding.
+        stream_translator: optional fn(chunk_bytes) → list[bytes] applied to each
+            upstream SSE chunk on the streaming path. The client sees translator output.
+        stream_translator_finish: optional fn() → list[bytes] flushed at stream close.
     """
     pool = getattr(request.app.state, "db", None)
     if pool is None:
@@ -45,14 +76,8 @@ async def chat_completions(request: Request) -> JSONResponse:
 
     agent_id = await authenticate(pool, request)
 
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
-
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
-
     model_requested = payload.get("model")
     if not model_requested:
         raise HTTPException(status_code=400, detail="missing 'model'")
@@ -66,42 +91,38 @@ async def chat_completions(request: Request) -> JSONResponse:
     messages = payload.get("messages")
     prompt_excerpt = queries.excerpt_last_user_message(messages)
 
-    # CLASSIFY — fast-path regex over the full assembled user text (Tech Paper §7.3).
+    # CLASSIFY
     classification = classify(assemble_user_text(messages))
 
-    # SCORE — 14-dimension complexity scorer (Day 5a). Always runs so we capture
-    # tier/score for every request, even when the caller pinned an explicit model.
+    # SCORE
     score_vector = score(payload)
     tier = to_tier(score_vector)
 
-    # DECIDE — when model is "auto", resolve via the routing table; otherwise passthrough.
+    # DECIDE
     routing_table = getattr(request.app.state, "routing_table", None)
     health_tracker = getattr(request.app.state, "health_tracker", None)
     if model_requested == AUTO_MODEL_TOKEN:
         if routing_table is None:
             raise HTTPException(status_code=503, detail="routing_table_unavailable")
-        # Day 5c: skip the primary if it's currently unhealthy (3+ consecutive empties).
         is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
         route_pick = resolve_healthy(tier, routing_table, is_unhealthy)
         decision_provider = route_pick.provider
         decision_model = route_pick.model
         decision_reason = f"auto:{tier}->{route_pick.provider}/{route_pick.model}"
-        # Rewrite payload model so NautRouter forwards to the chosen target.
         payload["model"] = decision_model
     else:
         decision_provider = "passthrough"
         decision_model = model_requested
         decision_reason = f"explicit:{model_requested}"
 
-    # BODY_CAPTURE — policy-gated by sensitivity (Day 4c).
     captured = capture_prompt(messages, classification.sensitivity)
 
-    # PRECAPTURE — synchronous audit row before forwarding upstream (Tech Paper §9).
+    # PRECAPTURE
     await queries.precapture(
         pool,
         decision_id=decision_id,
         agent_id=agent_id,
-        inbound_format="openai_chat",
+        inbound_format=inbound_format,
         model_requested=model_requested,
         classified_tier=tier,
         classified_score=score_vector.aggregate,
@@ -115,23 +136,38 @@ async def chat_completions(request: Request) -> JSONResponse:
         prompt_body_truncated_at_byte=captured.truncated_at_byte,
     )
 
-    # Stash sensitivity + chosen route for the streaming branch's response headers.
     request.state.classified_sensitivity = classification.sensitivity
     request.state.decision_provider = decision_provider
     request.state.decision_model = decision_model
 
+    common_headers = {
+        "X-Nautgate-Decision-Id": str(decision_id),
+        "X-Nautgate-Provider": decision_provider,
+        "X-Nautgate-Model": str(decision_model),
+        "X-Nautgate-Tier": tier,
+        "X-Nautgate-Score": f"{score_vector.aggregate:.4f}",
+        "X-Nautgate-Brain-Used": "false",
+        "X-Nautgate-Inbound-Format": inbound_format,
+    }
+
     if payload.get("stream"):
-        return await _stream_chat_completions(
-            request,
+        return _streaming_response(
+            request=request,
             payload=payload,
             decision_id=decision_id,
             started=started,
-            model_requested=model_requested,
-            nautrouter=nautrouter,
+            decision_provider=decision_provider,
+            decision_model=decision_model,
+            classification_sensitivity=classification.sensitivity,
+            health_tracker=health_tracker,
             pool=pool,
+            nautrouter=nautrouter,
+            common_headers=common_headers,
+            stream_translator=stream_translator,
+            stream_translator_finish=stream_translator_finish,
         )
 
-    # Forward upstream (non-streaming).
+    # --- non-streaming ---
     upstream_status = 200
     upstream_resp: dict | None = None
     try:
@@ -145,8 +181,6 @@ async def chat_completions(request: Request) -> JSONResponse:
         log.error("nautrouter_call_failed", error=str(exc), decision_id=str(decision_id))
         raw = None
 
-    # NautRouter returns a JSON list (per-provider error array) when all providers fail.
-    # Treat that as an upstream failure rather than letting it crash downstream parsing.
     if isinstance(raw, dict):
         upstream_resp = raw
     elif raw is not None:
@@ -159,7 +193,6 @@ async def chat_completions(request: Request) -> JSONResponse:
 
     duration_ms = int((time.monotonic() - started) * 1000)
 
-    # Outcome metrics — was_empty per Tech Paper §8 (the Tongyi failure mode).
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     was_empty = False
@@ -173,10 +206,7 @@ async def chat_completions(request: Request) -> JSONResponse:
             content = ""
         was_empty = bool((completion_tokens or 0) > 0 and not content)
 
-    # BODY_CAPTURE for the response, gated by the same sensitivity classification.
     response_captured = capture_response(upstream_resp, classification.sensitivity)
-
-    # Outcome write — synchronous on healthy DB; falls back to spool when DB fails (Day 4d).
     spool = getattr(request.app.state, "outcome_spool", None)
     await persist_outcome(
         pool,
@@ -191,9 +221,6 @@ async def chat_completions(request: Request) -> JSONResponse:
         response_body_truncated_at_byte=response_captured.truncated_at_byte,
     )
 
-    # Day 5c: provider_health rollup + streak counter. Only when we actually
-    # routed to a real provider (auto path), not for passthrough where we don't
-    # know which underlying provider NautRouter picked.
     if decision_provider != "passthrough":
         if health_tracker is not None:
             health_tracker.record(decision_provider, decision_model, was_empty=was_empty)
@@ -217,56 +244,62 @@ async def chat_completions(request: Request) -> JSONResponse:
     if upstream_resp is None:
         raise HTTPException(status_code=502, detail="upstream_failed")
 
-    return JSONResponse(
-        content=upstream_resp,
-        headers={
-            "X-Nautgate-Decision-Id": str(decision_id),
-            "X-Nautgate-Latency-Ms": str(duration_ms),
-            "X-Nautgate-Provider": decision_provider,
-            "X-Nautgate-Model": str(decision_model),
-            "X-Nautgate-Tier": tier,
-            "X-Nautgate-Score": f"{score_vector.aggregate:.4f}",
-            "X-Nautgate-Brain-Used": "false",
-            "X-Nautgate-Was-Empty": "true" if was_empty else "false",
-        },
+    final = (
+        response_translator(upstream_resp, decision_model) if response_translator else upstream_resp
     )
 
+    headers = dict(common_headers)
+    headers["X-Nautgate-Latency-Ms"] = str(duration_ms)
+    headers["X-Nautgate-Was-Empty"] = "true" if was_empty else "false"
+    return JSONResponse(content=final, headers=headers)
 
-async def _stream_chat_completions(
-    request: Request,
+
+def _streaming_response(
     *,
+    request: Request,
     payload: dict,
     decision_id: uuid.UUID,
     started: float,
-    model_requested: str,
-    nautrouter,
+    decision_provider: str,
+    decision_model: str,
+    classification_sensitivity: str,
+    health_tracker,
     pool,
+    nautrouter,
+    common_headers: dict,
+    stream_translator: Callable[[bytes], list[bytes]] | None,
+    stream_translator_finish: Callable[[], list[bytes]] | None,
 ) -> StreamingResponse:
-    """Day 3: tee-pattern streaming with 8 MB cap (Tech Paper §11).
-
-    The accumulator runs in-process; truncation cuts at SSE event boundaries
-    (`\\n\\n`) so captured bytes are always parseable. The client receives the
-    full byte stream regardless of cap — truncation is capture-only.
-    """
+    """Tee + cap + (optional) inline format translation. Tech Paper §11."""
     capture = StreamCapture(cap_bytes=ACCUMULATOR_CAP_BYTES_DEFAULT)
     state = {"first_byte_ms": None, "client_disconnected": False}
 
-    async def gen():
+    async def gen() -> AsyncIterator[bytes]:
         try:
             async for chunk in nautrouter.chat_completions_stream(payload):
                 if state["first_byte_ms"] is None:
                     state["first_byte_ms"] = int((time.monotonic() - started) * 1000)
+                # Capture the upstream (canonical) bytes for parsing/audit.
                 capture.append(chunk)
-                yield chunk
+                # If a translator is active, what the client sees is the translated form.
+                if stream_translator is None:
+                    yield chunk
+                else:
+                    for out in stream_translator(chunk):
+                        yield out
+            # Upstream finished cleanly. If a translator buffered partial state, flush.
+            if stream_translator_finish is not None:
+                for out in stream_translator_finish():
+                    yield out
         except asyncio.CancelledError:
-            # Client closed the connection while we were still receiving from upstream.
             state["client_disconnected"] = True
             raise
         finally:
             duration_ms = int((time.monotonic() - started) * 1000)
             parsed = parse_sse_for_outcome(bytes(capture.accumulator))
-            sensitivity = getattr(request.state, "classified_sensitivity", "none")
-            response_captured = capture_response(parsed.get("assembled_content"), sensitivity)
+            response_captured = capture_response(
+                parsed.get("assembled_content"), classification_sensitivity
+            )
             spool = getattr(request.app.state, "outcome_spool", None)
             try:
                 await persist_outcome(
@@ -293,18 +326,16 @@ async def _stream_chat_completions(
                     decision_id=str(decision_id),
                 )
 
-            # Day 5c: provider_health rollup + streak counter for streaming.
-            ds_provider = getattr(request.state, "decision_provider", "passthrough")
-            ds_model = getattr(request.state, "decision_model", model_requested)
-            tracker = getattr(request.app.state, "health_tracker", None)
-            if ds_provider != "passthrough":
-                if tracker is not None:
-                    tracker.record(ds_provider, ds_model, was_empty=parsed.get("was_empty", False))
+            if decision_provider != "passthrough":
+                if health_tracker is not None:
+                    health_tracker.record(
+                        decision_provider, decision_model, was_empty=parsed.get("was_empty", False)
+                    )
                 try:
                     await upsert_health(
                         pool,
-                        provider=ds_provider,
-                        model=ds_model,
+                        provider=decision_provider,
+                        model=decision_model,
                         duration_ms=duration_ms,
                         was_empty=parsed.get("was_empty", False),
                         success=not state["client_disconnected"],
@@ -312,30 +343,83 @@ async def _stream_chat_completions(
                 except Exception as exc:
                     log.warning("provider_health_upsert_failed_stream", error=str(exc))
 
-    decision_provider = getattr(request.state, "decision_provider", "passthrough")
-    decision_model = getattr(request.state, "decision_model", model_requested)
-
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={
-            "X-Nautgate-Decision-Id": str(decision_id),
-            "X-Nautgate-Provider": decision_provider,
-            "X-Nautgate-Model": str(decision_model),
-            "X-Nautgate-Brain-Used": "false",
+    headers = dict(common_headers)
+    headers.update(
+        {
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-        },
+        }
     )
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
+
+# ============================================================================
+# OpenAI Chat
+# ============================================================================
+
+
+@router.post("/chat/completions")
+async def chat_completions(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    return await _process_chat_request(request, payload=payload, inbound_format="openai_chat")
+
+
+# ============================================================================
+# Anthropic Messages (Week 1b)
+# ============================================================================
 
 
 @router.post("/messages")
-async def messages(request: Request) -> JSONResponse:
-    return _stub(
-        coming_in="week-1b",
-        message="Anthropic Messages format is Week 1b (Build Plan §Week 1b).",
+async def messages(request: Request) -> Response:
+    try:
+        raw = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    payload = ant.request_to_openai_chat(raw)
+
+    stream_translator = None
+    stream_translator_finish = None
+    if payload.get("stream"):
+        # The translator needs the chosen model name; we don't know it yet (auto-routing
+        # may rewrite it). Build a thin closure that defers binding until the first chunk.
+        translator_holder: dict = {"t": None}
+
+        def _ensure(model_name: str):
+            if translator_holder["t"] is None:
+                translator_holder["t"] = ant.AnthropicStreamTranslator(model=model_name)
+            return translator_holder["t"]
+
+        def _on_chunk(chunk: bytes) -> list[bytes]:
+            t = _ensure(getattr(request.state, "decision_model", payload.get("model", "")))
+            return t.feed(chunk)
+
+        def _on_finish() -> list[bytes]:
+            t = translator_holder["t"]
+            return t.finish() if t else []
+
+        stream_translator = _on_chunk
+        stream_translator_finish = _on_finish
+
+    return await _process_chat_request(
+        request,
+        payload=payload,
+        inbound_format="anthropic",
+        response_translator=ant.response_to_anthropic,
+        stream_translator=stream_translator,
+        stream_translator_finish=stream_translator_finish,
     )
+
+
+# ============================================================================
+# Stubs (filled later)
+# ============================================================================
 
 
 @router.post("/responses")

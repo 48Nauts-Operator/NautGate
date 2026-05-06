@@ -30,9 +30,13 @@ async def chat_app(monkeypatch):
             raise HTTPException(status_code=401, detail="missing or invalid bearer token")
         return "anonymous"
 
+    async def fake_upsert_health(pool, **kw):
+        pass
+
     monkeypatch.setattr("app.db.queries.precapture", fake_precapture)
     monkeypatch.setattr("app.db.queries.write_outcome", fake_write_outcome)
     monkeypatch.setattr("app.routes.v1.authenticate", fake_authenticate)
+    monkeypatch.setattr("app.routes.v1.upsert_health", fake_upsert_health)
 
     from app.main import create_app
 
