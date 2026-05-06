@@ -1,0 +1,42 @@
+# NautGate config — example. Copy to nautgate.yaml or set NAUTGATE_CONFIG_PATH.
+# Env vars take precedence over file values.
+
+server:
+  host: 0.0.0.0
+  port: 8090
+
+database:
+  url: ${NAUTGATE_DB_URL}     # required
+  pool_min_size: 2
+  pool_max_size: 20
+
+routing:
+  profile: auto               # eco | auto | premium
+
+# NautRouter sidecar (Day 2+)
+nautrouter:
+  base_url: ${NAUTROUTER_BASE_URL:-http://localhost:8404}
+  timeout_s: 120
+
+# Streaming capture (Tech Paper §11.3)
+capture:
+  accumulator_cap_bytes: 8388608     # 8 MB default; per-key override via api_keys.accumulator_cap_bytes
+  excerpt_chars: 200                 # PRECAPTURE excerpt length
+
+# Plugin contract — sidecar extensions. All optional, all HTTP, all configured here.
+# Per Concept §"plugin contract" and Tech Paper §6.
+extensions:
+  before_route: []
+    # - http://sb-brain:8402/hints           # 50 ms timeout; advisory hints
+
+  on_request: []
+    # - http://sb-capture:8401/capture       # mirror inbound (fire-and-forget)
+
+  on_response: []
+    # - http://sb-capture:8401/capture       # mirror outbound (fire-and-forget)
+
+  after_route: []
+    # - http://sb-brain:8402/log             # log the routing decision
+
+  on_outcome: []
+    # - http://sb-brain:8402/outcome         # latency/tokens/cost feedback

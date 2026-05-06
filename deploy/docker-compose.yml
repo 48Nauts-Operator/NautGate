@@ -1,0 +1,50 @@
+# NautGate — local dev compose stack.
+# Day 1: nautgate-db + nautgate-core. Day 2 adds nautrouter.
+
+services:
+  nautgate-db:
+    image: postgres:16
+    container_name: nautgate-db
+    environment:
+      POSTGRES_USER: nautgate
+      POSTGRES_PASSWORD: nautgate
+      POSTGRES_DB: nautgate
+    volumes:
+      - nautgate-db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nautgate -d nautgate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  nautgate-core:
+    build:
+      context: ../core
+    container_name: nautgate-core
+    depends_on:
+      nautgate-db:
+        condition: service_healthy
+    environment:
+      NAUTGATE_DB_URL: postgres://nautgate:nautgate@nautgate-db:5432/nautgate
+      NAUTGATE_LISTEN_HOST: 0.0.0.0
+      NAUTGATE_LISTEN_PORT: "8090"
+      NAUTGATE_LOG_LEVEL: ${NAUTGATE_LOG_LEVEL:-INFO}
+      NAUTGATE_PROFILE: ${NAUTGATE_PROFILE:-auto}
+      NAUTROUTER_BASE_URL: ${NAUTROUTER_BASE_URL:-http://nautrouter:8404}
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    profiles: ["full"]
+    # Day 1 verification runs nautgate-core via `uv run uvicorn` directly (faster iteration).
+    # Bring this service up explicitly with: docker compose --profile full up -d
+
+volumes:
+  nautgate-db-data:

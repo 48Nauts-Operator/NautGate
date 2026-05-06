@@ -1,0 +1,5 @@
+# Sidecar extensions land here in Week 2+:
+#   sb-capture/   — mirror traffic to SecondBrain memories (Week 2)
+#   sb-brain/     — memory-driven routing hints (Week 3)
+#   sb-privacy/   — Privacy-Swarm pipeline as a stage (Week 4)
+#   sb-cli-tester/— quality data feeder

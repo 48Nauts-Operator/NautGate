@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+
+# uv / venv
+.venv/
+.uv/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Vendored Node deps (NautRouter sidecar source is committed; its node_modules is not)
+vendor/**/node_modules/
+vendor/**/dist/
+vendor/**/build/
+
+# Logs
+logs/
+*.log
+
+# Docker
+*.pid

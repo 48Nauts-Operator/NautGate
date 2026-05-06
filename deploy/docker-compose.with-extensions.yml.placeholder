@@ -1,0 +1,12 @@
+# Placeholder — populated in Week 2+ when sidecar extensions exist.
+#
+# Usage will be:
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.with-extensions.yml up -d
+#
+# Adds (when implemented):
+#   sb-capture    — mirror traffic to SecondBrain memories
+#   sb-brain      — memory-driven routing hints
+#   sb-privacy    — Privacy-Swarm pipeline
+#
+# See Build Plan §Week 2-4.
