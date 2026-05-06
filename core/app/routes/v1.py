@@ -7,7 +7,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.auth import auth_stub
+from app.auth import authenticate
 from app.db import queries
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 
@@ -32,7 +32,11 @@ async def chat_completions(request: Request) -> JSONResponse:
     Day 4 fills CLASSIFY before forward, Day 5 fills SCORE + DECIDE.
     Streaming branch is a Day-3 stub.
     """
-    agent_id = await auth_stub(request)
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+
+    agent_id = await authenticate(pool, request)
 
     try:
         payload = await request.json()
@@ -49,10 +53,6 @@ async def chat_completions(request: Request) -> JSONResponse:
     nautrouter = getattr(request.app.state, "nautrouter", None)
     if nautrouter is None:
         raise HTTPException(status_code=503, detail="nautrouter_unavailable")
-
-    pool = getattr(request.app.state, "db", None)
-    if pool is None:
-        raise HTTPException(status_code=503, detail="db_unavailable")
 
     decision_id = uuid.uuid4()
     started = time.monotonic()
@@ -87,13 +87,27 @@ async def chat_completions(request: Request) -> JSONResponse:
     upstream_status = 200
     upstream_resp: dict | None = None
     try:
-        upstream_resp = await nautrouter.chat_completions(payload)
+        raw = await nautrouter.chat_completions(payload)
     except httpx.HTTPStatusError as exc:
         upstream_status = exc.response.status_code
         log.warning("nautrouter_status_error", status=upstream_status, decision_id=str(decision_id))
+        raw = None
     except Exception as exc:
         upstream_status = 502
         log.error("nautrouter_call_failed", error=str(exc), decision_id=str(decision_id))
+        raw = None
+
+    # NautRouter returns a JSON list (per-provider error array) when all providers fail.
+    # Treat that as an upstream failure rather than letting it crash downstream parsing.
+    if isinstance(raw, dict):
+        upstream_resp = raw
+    elif raw is not None:
+        upstream_status = 502
+        log.warning(
+            "nautrouter_non_dict_response",
+            response_type=type(raw).__name__,
+            decision_id=str(decision_id),
+        )
 
     duration_ms = int((time.monotonic() - started) * 1000)
 

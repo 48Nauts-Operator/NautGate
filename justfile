@@ -43,6 +43,11 @@ logs:
 psql:
     docker compose -f deploy/docker-compose.yml exec nautgate-db psql -U nautgate -d nautgate
 
+# Issue a fresh API key for an agent. Prints the plaintext token ONCE.
+# Usage: just issue-key alice
+issue-key agent_id profile="auto":
+    cd core && NAUTGATE_DB_URL="${NAUTGATE_DB_URL:-postgres://nautgate:nautgate@localhost:5432/nautgate}" uv run python ../scripts/issue_key.py --agent-id {{agent_id}} --profile {{profile}}
+
 # --- Git ---
 
 push:

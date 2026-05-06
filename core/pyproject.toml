@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "structlog>=24.1",
     "pyyaml>=6.0",
+    "argon2-cffi>=23.1",
 ]
 
 [dependency-groups]

@@ -167,8 +167,17 @@ async def streaming_app(monkeypatch):
     async def fake_write_outcome(pool, **kw):
         outcome_calls.append(kw)
 
+    async def fake_authenticate(pool, request):
+        from fastapi import HTTPException
+
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer ng_"):
+            raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+        return "anonymous"
+
     monkeypatch.setattr("app.db.queries.precapture", fake_precapture)
     monkeypatch.setattr("app.db.queries.write_outcome", fake_write_outcome)
+    monkeypatch.setattr("app.routes.v1.authenticate", fake_authenticate)
 
     from app.main import create_app
 
