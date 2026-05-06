@@ -1,13 +1,15 @@
+import asyncio
 import time
 import uuid
 
 import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth import auth_stub
 from app.db import queries
+from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 log = structlog.get_logger()
@@ -40,9 +42,6 @@ async def chat_completions(request: Request) -> JSONResponse:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
 
-    if payload.get("stream"):
-        return _stub(coming_in="day-3", message="Streaming SSE lands Day 3 (Tech Paper §11).")
-
     model_requested = payload.get("model")
     if not model_requested:
         raise HTTPException(status_code=400, detail="missing 'model'")
@@ -73,7 +72,18 @@ async def chat_completions(request: Request) -> JSONResponse:
         prompt_excerpt=prompt_excerpt,
     )
 
-    # Forward upstream.
+    if payload.get("stream"):
+        return await _stream_chat_completions(
+            request,
+            payload=payload,
+            decision_id=decision_id,
+            started=started,
+            model_requested=model_requested,
+            nautrouter=nautrouter,
+            pool=pool,
+        )
+
+    # Forward upstream (non-streaming).
     upstream_status = 200
     upstream_resp: dict | None = None
     try:
@@ -124,6 +134,76 @@ async def chat_completions(request: Request) -> JSONResponse:
             "X-Nautgate-Model": str(model_requested),
             "X-Nautgate-Brain-Used": "false",
             "X-Nautgate-Was-Empty": "true" if was_empty else "false",
+        },
+    )
+
+
+async def _stream_chat_completions(
+    request: Request,
+    *,
+    payload: dict,
+    decision_id: uuid.UUID,
+    started: float,
+    model_requested: str,
+    nautrouter,
+    pool,
+) -> StreamingResponse:
+    """Day 3: tee-pattern streaming with 8 MB cap (Tech Paper §11).
+
+    The accumulator runs in-process; truncation cuts at SSE event boundaries
+    (`\\n\\n`) so captured bytes are always parseable. The client receives the
+    full byte stream regardless of cap — truncation is capture-only.
+    """
+    capture = StreamCapture(cap_bytes=ACCUMULATOR_CAP_BYTES_DEFAULT)
+    state = {"first_byte_ms": None, "client_disconnected": False}
+
+    async def gen():
+        try:
+            async for chunk in nautrouter.chat_completions_stream(payload):
+                if state["first_byte_ms"] is None:
+                    state["first_byte_ms"] = int((time.monotonic() - started) * 1000)
+                capture.append(chunk)
+                yield chunk
+        except asyncio.CancelledError:
+            # Client closed the connection while we were still receiving from upstream.
+            state["client_disconnected"] = True
+            raise
+        finally:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            parsed = parse_sse_for_outcome(bytes(capture.accumulator))
+            try:
+                await queries.write_outcome(
+                    pool,
+                    decision_id=decision_id,
+                    status_code=200,
+                    duration_ms=duration_ms,
+                    first_byte_ms=state["first_byte_ms"],
+                    prompt_tokens=parsed.get("prompt_tokens"),
+                    completion_tokens=parsed.get("completion_tokens"),
+                    reasoning_tokens=parsed.get("reasoning_tokens"),
+                    was_empty=parsed.get("was_empty", False),
+                    was_truncated=capture.was_truncated,
+                    truncated_at_byte=capture.truncated_at_byte,
+                    client_disconnected=state["client_disconnected"],
+                )
+            except Exception as exc:
+                log.error(
+                    "outcome_write_failed_in_stream",
+                    error=str(exc),
+                    decision_id=str(decision_id),
+                )
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "X-Nautgate-Decision-Id": str(decision_id),
+            "X-Nautgate-Provider": "passthrough",
+            "X-Nautgate-Model": str(model_requested),
+            "X-Nautgate-Brain-Used": "false",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 

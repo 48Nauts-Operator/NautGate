@@ -76,16 +76,7 @@ async def test_missing_model_returns_400(chat_client):
     assert resp.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_stream_true_returns_501_day_3(chat_client):
-    c, _ = chat_client
-    resp = await c.post(
-        "/v1/chat/completions",
-        headers={"Authorization": "Bearer ng_test"},
-        json={"model": "x", "messages": [], "stream": True},
-    )
-    assert resp.status_code == 501
-    assert resp.headers.get("x-nautgate-coming-in") == "day-3"
+# Streaming behavior is exercised in tests/test_streaming.py.
 
 
 # --- Happy path -------------------------------------------------------------
