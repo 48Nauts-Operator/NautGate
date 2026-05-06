@@ -12,7 +12,8 @@ from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
 from app.db import queries
 from app.outcome import persist_outcome
-from app.scoring import resolve, score, to_tier
+from app.provider_health import upsert_health
+from app.scoring import resolve_healthy, score, to_tier
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 
 AUTO_MODEL_TOKEN = "auto"
@@ -75,10 +76,13 @@ async def chat_completions(request: Request) -> JSONResponse:
 
     # DECIDE — when model is "auto", resolve via the routing table; otherwise passthrough.
     routing_table = getattr(request.app.state, "routing_table", None)
+    health_tracker = getattr(request.app.state, "health_tracker", None)
     if model_requested == AUTO_MODEL_TOKEN:
         if routing_table is None:
             raise HTTPException(status_code=503, detail="routing_table_unavailable")
-        route_pick = resolve(tier, routing_table)
+        # Day 5c: skip the primary if it's currently unhealthy (3+ consecutive empties).
+        is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
+        route_pick = resolve_healthy(tier, routing_table, is_unhealthy)
         decision_provider = route_pick.provider
         decision_model = route_pick.model
         decision_reason = f"auto:{tier}->{route_pick.provider}/{route_pick.model}"
@@ -187,6 +191,29 @@ async def chat_completions(request: Request) -> JSONResponse:
         response_body_truncated_at_byte=response_captured.truncated_at_byte,
     )
 
+    # Day 5c: provider_health rollup + streak counter. Only when we actually
+    # routed to a real provider (auto path), not for passthrough where we don't
+    # know which underlying provider NautRouter picked.
+    if decision_provider != "passthrough":
+        if health_tracker is not None:
+            health_tracker.record(decision_provider, decision_model, was_empty=was_empty)
+        try:
+            await upsert_health(
+                pool,
+                provider=decision_provider,
+                model=decision_model,
+                duration_ms=duration_ms,
+                was_empty=was_empty,
+                success=200 <= upstream_status < 300,
+            )
+        except Exception as exc:
+            log.warning(
+                "provider_health_upsert_failed",
+                error=str(exc),
+                provider=decision_provider,
+                model=decision_model,
+            )
+
     if upstream_resp is None:
         raise HTTPException(status_code=502, detail="upstream_failed")
 
@@ -266,8 +293,28 @@ async def _stream_chat_completions(
                     decision_id=str(decision_id),
                 )
 
+            # Day 5c: provider_health rollup + streak counter for streaming.
+            ds_provider = getattr(request.state, "decision_provider", "passthrough")
+            ds_model = getattr(request.state, "decision_model", model_requested)
+            tracker = getattr(request.app.state, "health_tracker", None)
+            if ds_provider != "passthrough":
+                if tracker is not None:
+                    tracker.record(ds_provider, ds_model, was_empty=parsed.get("was_empty", False))
+                try:
+                    await upsert_health(
+                        pool,
+                        provider=ds_provider,
+                        model=ds_model,
+                        duration_ms=duration_ms,
+                        was_empty=parsed.get("was_empty", False),
+                        success=not state["client_disconnected"],
+                    )
+                except Exception as exc:
+                    log.warning("provider_health_upsert_failed_stream", error=str(exc))
+
     decision_provider = getattr(request.state, "decision_provider", "passthrough")
     decision_model = getattr(request.state, "decision_model", model_requested)
+
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",

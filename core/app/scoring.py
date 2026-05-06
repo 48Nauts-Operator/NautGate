@@ -241,6 +241,24 @@ def to_provider_model(tier: str, table: dict[str, dict]) -> tuple[str, str]:
     return (r.provider, r.model)
 
 
+def resolve_healthy(
+    tier: str,
+    table: dict[str, dict],
+    is_unhealthy_fn,
+) -> ResolvedRoute:
+    """Like ``resolve`` but skips the primary if ``is_unhealthy_fn(provider, model)``
+    returns True. Falls back to the tier's secondary entry; if there is none, the
+    primary is returned unchanged so we don't strand a request.
+    """
+    primary = resolve(tier, table)
+    if not is_unhealthy_fn(primary.provider, primary.model):
+        return primary
+    if primary.fallback is None:
+        return primary
+    fb_provider, fb_model = primary.fallback
+    return ResolvedRoute(provider=fb_provider, model=fb_model, fallback=None)
+
+
 # --- Glue ------------------------------------------------------------------
 
 
