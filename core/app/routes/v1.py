@@ -24,6 +24,7 @@ from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
 from app.db import queries
 from app.formats import anthropic as ant
+from app.formats import openai_responses as resp_fmt
 from app.outcome import persist_outcome
 from app.provider_health import upsert_health
 from app.scoring import resolve_healthy, score, to_tier
@@ -423,10 +424,30 @@ async def messages(request: Request) -> Response:
 
 
 @router.post("/responses")
-async def responses(request: Request) -> JSONResponse:
-    return _stub(
-        coming_in="week-1b",
-        message="OpenAI Responses API format is Week 1b (Build Plan §Week 1b).",
+async def responses(request: Request) -> Response:
+    try:
+        raw = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    payload = resp_fmt.request_to_openai_chat(raw)
+
+    # Streaming for /v1/responses lands as a follow-up; the event set
+    # (response.created / output_item / content_part / output_text.delta /
+    #  output_item.done / response.completed) is large enough to deserve its own commit.
+    if payload.get("stream"):
+        return _stub(
+            coming_in="week-1b-stream",
+            message="Streaming /v1/responses lands in a follow-up — non-streaming works today.",
+        )
+
+    return await _process_chat_request(
+        request,
+        payload=payload,
+        inbound_format="openai_responses",
+        response_translator=resp_fmt.response_to_openai_responses,
     )
 
 
