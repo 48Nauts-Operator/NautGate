@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth import authenticate
+from app.classify import assemble_user_text, classify
 from app.db import queries
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 
@@ -56,7 +57,12 @@ async def chat_completions(request: Request) -> JSONResponse:
 
     decision_id = uuid.uuid4()
     started = time.monotonic()
-    prompt_excerpt = queries.excerpt_last_user_message(payload.get("messages"))
+    messages = payload.get("messages")
+    prompt_excerpt = queries.excerpt_last_user_message(messages)
+
+    # CLASSIFY — fast-path regex over the full assembled user text (Tech Paper §7.3).
+    # Runs on the full text so a secret past the 200-char excerpt boundary still trips the gate.
+    classification = classify(assemble_user_text(messages))
 
     # PRECAPTURE — synchronous audit row before forwarding upstream (Tech Paper §9).
     await queries.precapture(
@@ -65,7 +71,9 @@ async def chat_completions(request: Request) -> JSONResponse:
         agent_id=agent_id,
         inbound_format="openai_chat",
         model_requested=model_requested,
-        classified_tier="UNCLASSIFIED",  # Day 4 fills with real classifier output
+        classified_tier="UNCLASSIFIED",  # Day 5 fills with the complexity scorer's tier
+        classified_sensitivity=classification.sensitivity,
+        classified_signals=classification.signals,
         decision_provider="passthrough",  # Day 5 fills with real provider after SCORE+DECIDE
         decision_model=model_requested,
         decision_reason="day-2-passthrough",

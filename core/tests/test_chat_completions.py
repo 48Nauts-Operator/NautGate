@@ -126,6 +126,8 @@ async def test_round_trip_returns_response_and_writes_rows(chat_client):
     assert pc["inbound_format"] == "openai_chat"
     assert pc["model_requested"] == "claude-haiku-4.5"
     assert pc["classified_tier"] == "UNCLASSIFIED"
+    assert pc["classified_sensitivity"] == "none"  # Day 4b: clean prompt
+    assert pc["classified_signals"] == []
     assert pc["prompt_excerpt"] == "say hi"
 
     # Outcome row was written after forward.
@@ -180,6 +182,60 @@ async def test_not_empty_when_content_present(chat_client):
     assert resp.status_code == 200
     assert resp.headers["x-nautgate-was-empty"] == "false"
     assert calls["outcome"][0]["was_empty"] is False
+
+
+# --- Sensitivity classifier (Day 4b) ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_classifier_flags_secret_in_prompt(chat_client):
+    """Day 4b: a request with a secret in the user prompt is captured as 'secret'."""
+    c, calls = chat_client
+
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    resp = await c.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer ng_test"},
+        json={
+            "model": "x",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "rotate this for me: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ab",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    pc = calls["precapture"][0]
+    assert pc["classified_sensitivity"] == "secret"
+    assert any(s["rule_id"] == "github_pat" for s in pc["classified_signals"])
+
+
+@pytest.mark.asyncio
+async def test_classifier_flags_pii_when_no_secret(chat_client):
+    c, calls = chat_client
+
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    resp = await c.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer ng_test"},
+        json={
+            "model": "x",
+            "messages": [{"role": "user", "content": "email me at hello@48nauts.com"}],
+        },
+    )
+    assert resp.status_code == 200
+    pc = calls["precapture"][0]
+    assert pc["classified_sensitivity"] == "pii"
 
 
 # --- Upstream failure -------------------------------------------------------

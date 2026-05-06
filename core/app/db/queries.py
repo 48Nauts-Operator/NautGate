@@ -1,10 +1,11 @@
-"""Day-2 minimal query layer. Synchronous PRECAPTURE writes (audit log) and outcome writes.
+"""Query layer. Synchronous PRECAPTURE writes (audit log) and outcome writes.
 
 The ledger durability contract (Tech Paper §9) requires `route_decisions` to be written
 synchronously *before* upstream forward; `route_outcomes` is also synchronous on healthy
-DB and gets a durable-spool fallback in Day 4.
+DB and gets a durable-spool fallback (Day 4d).
 """
 
+import json
 from uuid import UUID
 
 import asyncpg
@@ -23,16 +24,19 @@ async def precapture(
     decision_reason: str | None = None,
     prompt_excerpt: str | None = None,
     prompt_tokens: int | None = None,
+    classified_sensitivity: str | None = None,
+    classified_signals: list[dict] | None = None,
 ) -> None:
     """Insert the audit row before forwarding upstream. Synchronous by design."""
+    signals_json = json.dumps(classified_signals) if classified_signals else None
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO nautgate.route_decisions
                 (id, agent_id, inbound_format, model_requested, prompt_excerpt,
-                 prompt_tokens, classified_tier, decision_provider, decision_model,
-                 decision_reason)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 prompt_tokens, classified_tier, classified_sensitivity, classified_signals,
+                 decision_provider, decision_model, decision_reason)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
             """,
             decision_id,
             agent_id,
@@ -41,6 +45,8 @@ async def precapture(
             prompt_excerpt,
             prompt_tokens,
             classified_tier,
+            classified_sensitivity,
+            signals_json,
             decision_provider,
             decision_model,
             decision_reason,
