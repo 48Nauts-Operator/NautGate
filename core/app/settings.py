@@ -29,6 +29,12 @@ class Settings(BaseSettings):
 
     nautrouter_base_url: str = "http://localhost:8404"
 
+    # CLASSIFY slow-path (Tech Paper §7.3). Off by default. When on, ambiguous
+    # fast-path-"none" prompts get a one-shot LLM verify with a 500ms timeout.
+    nautgate_classify_llm_confirm: bool = False
+    nautgate_classify_llm_confirm_model: str = "claude-haiku-4-5"
+    nautgate_classify_llm_confirm_timeout_s: float = 0.5
+
 
 @lru_cache
 def get_settings() -> Settings:

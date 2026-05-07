@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
+from app.classify_llm import maybe_upgrade_classification
 from app.db import queries
 from app.formats import anthropic as ant
 from app.formats import openai_responses as resp_fmt
@@ -92,8 +93,21 @@ async def _process_chat_request(
     messages = payload.get("messages")
     prompt_excerpt = queries.excerpt_last_user_message(messages)
 
-    # CLASSIFY
-    classification = classify(assemble_user_text(messages))
+    # CLASSIFY — fast path
+    user_text = assemble_user_text(messages)
+    classification = classify(user_text)
+
+    # CLASSIFY — slow path (LLM-confirm), gated on settings + fast-path returned "none".
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None and settings.nautgate_classify_llm_confirm:
+        classification = await maybe_upgrade_classification(
+            classification,
+            text=user_text,
+            nautrouter=nautrouter,
+            enabled=True,
+            model=settings.nautgate_classify_llm_confirm_model,
+            timeout_s=settings.nautgate_classify_llm_confirm_timeout_s,
+        )
 
     # SCORE
     score_vector = score(payload)
