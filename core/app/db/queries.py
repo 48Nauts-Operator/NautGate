@@ -29,19 +29,22 @@ async def precapture(
     classified_score: float | None = None,
     prompt_body: str | None = None,
     prompt_body_truncated_at_byte: int | None = None,
+    brain_hints: dict | None = None,
 ) -> None:
     """Insert the audit row before forwarding upstream. Synchronous by design."""
     signals_json = json.dumps(classified_signals) if classified_signals else None
+    brain_hints_json = json.dumps(brain_hints) if brain_hints else None
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO nautgate.route_decisions
                 (id, agent_id, inbound_format, model_requested, prompt_excerpt,
                  prompt_tokens, classified_tier, classified_score,
-                 classified_sensitivity, classified_signals,
+                 classified_sensitivity, classified_signals, brain_hints,
                  decision_provider, decision_model, decision_reason,
                  prompt_body, prompt_body_truncated_at_byte)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+                    $12, $13, $14, $15, $16)
             """,
             decision_id,
             agent_id,
@@ -53,6 +56,7 @@ async def precapture(
             classified_score,
             classified_sensitivity,
             signals_json,
+            brain_hints_json,
             decision_provider,
             decision_model,
             decision_reason,

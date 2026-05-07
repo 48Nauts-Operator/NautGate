@@ -113,6 +113,31 @@ async def _process_chat_request(
     score_vector = score(payload)
     tier = to_tier(score_vector)
 
+    # PLUGINS: before_route — synchronous fan-out to extensions that subscribe.
+    # On timeout (50ms default per ext) or error: skipped. Aggregated hints can
+    # extend banned_models or override the scored tier.
+    plugins = getattr(request.app.state, "plugins", None)
+    brain_hints: dict | None = None
+    plugin_banned: list[str] = []
+    if plugins is not None and not plugins.is_empty and plugins.subscribers("before_route"):
+        agg = await plugins.call_before_route(
+            {
+                "agent_id": agent_id,
+                "inbound_format": inbound_format,
+                "model_requested": model_requested,
+                "classified_tier": tier,
+                "classified_score": score_vector.aggregate,
+                "classified_sensitivity": classification.sensitivity,
+                "classified_signals": classification.signals,
+                "prompt_excerpt": prompt_excerpt,
+            }
+        )
+        if agg["brain_hints"]:
+            brain_hints = agg["brain_hints"]
+        plugin_banned = agg["banned_models"]
+        if agg["preferred_tier"]:
+            tier = agg["preferred_tier"]
+
     # DECIDE
     routing_table = getattr(request.app.state, "routing_table", None)
     health_tracker = getattr(request.app.state, "health_tracker", None)
@@ -121,9 +146,8 @@ async def _process_chat_request(
             raise HTTPException(status_code=503, detail="routing_table_unavailable")
         prefs = await queries.get_routing_preferences(pool, agent_id=agent_id)
         is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
-        route_pick = resolve_healthy(
-            tier, routing_table, is_unhealthy, banned_models=prefs["banned_models"]
-        )
+        all_banned = list(dict.fromkeys([*prefs["banned_models"], *plugin_banned]))
+        route_pick = resolve_healthy(tier, routing_table, is_unhealthy, banned_models=all_banned)
         decision_provider = route_pick.provider
         decision_model = route_pick.model
         decision_reason = f"auto:{tier}->{route_pick.provider}/{route_pick.model}"
@@ -146,6 +170,7 @@ async def _process_chat_request(
         classified_score=score_vector.aggregate,
         classified_sensitivity=classification.sensitivity,
         classified_signals=classification.signals,
+        brain_hints=brain_hints,
         decision_provider=decision_provider,
         decision_model=decision_model,
         decision_reason=decision_reason,
@@ -154,9 +179,27 @@ async def _process_chat_request(
         prompt_body_truncated_at_byte=captured.truncated_at_byte,
     )
 
+    # PLUGINS: on_request — fire-and-forget after PRECAPTURE.
+    if plugins is not None and not plugins.is_empty:
+        plugins.dispatch_on_request(
+            {
+                "decision_id": decision_id,
+                "agent_id": agent_id,
+                "inbound_format": inbound_format,
+                "model_requested": model_requested,
+                "decision_provider": decision_provider,
+                "decision_model": decision_model,
+                "classified_tier": tier,
+                "classified_sensitivity": classification.sensitivity,
+                "prompt_excerpt": prompt_excerpt,
+                "prompt_body": captured.body,
+            }
+        )
+
     request.state.classified_sensitivity = classification.sensitivity
     request.state.decision_provider = decision_provider
     request.state.decision_model = decision_model
+    request.state.plugins = plugins
 
     common_headers = {
         "X-Nautgate-Decision-Id": str(decision_id),
@@ -259,6 +302,31 @@ async def _process_chat_request(
                 model=decision_model,
             )
 
+    # PLUGINS: on_response + on_outcome (fire-and-forget). after_route fires after JSON build.
+    if plugins is not None and not plugins.is_empty:
+        plugins.dispatch_on_response(
+            {
+                "decision_id": decision_id,
+                "response_body": response_captured.body,
+                "was_empty": was_empty,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "status_code": upstream_status,
+            }
+        )
+        plugins.dispatch_on_outcome(
+            {
+                "decision_id": decision_id,
+                "status_code": upstream_status,
+                "duration_ms": duration_ms,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "was_empty": was_empty,
+                "decision_provider": decision_provider,
+                "decision_model": decision_model,
+            }
+        )
+
     if upstream_resp is None:
         raise HTTPException(status_code=502, detail="upstream_failed")
 
@@ -269,6 +337,17 @@ async def _process_chat_request(
     headers = dict(common_headers)
     headers["X-Nautgate-Latency-Ms"] = str(duration_ms)
     headers["X-Nautgate-Was-Empty"] = "true" if was_empty else "false"
+
+    # PLUGINS: after_route — response is now ready to deliver.
+    if plugins is not None and not plugins.is_empty:
+        plugins.dispatch_after_route(
+            {
+                "decision_id": decision_id,
+                "status_code": upstream_status,
+                "duration_ms": duration_ms,
+            }
+        )
+
     return JSONResponse(content=final, headers=headers)
 
 
@@ -360,6 +439,28 @@ def _streaming_response(
                     )
                 except Exception as exc:
                     log.warning("provider_health_upsert_failed_stream", error=str(exc))
+
+            # PLUGINS: stream finished — fire on_response, after_route, on_outcome.
+            stream_plugins = getattr(request.state, "plugins", None)
+            if stream_plugins is not None and not stream_plugins.is_empty:
+                base_payload = {
+                    "decision_id": decision_id,
+                    "status_code": 200,
+                    "duration_ms": duration_ms,
+                    "first_byte_ms": state["first_byte_ms"],
+                    "prompt_tokens": parsed.get("prompt_tokens"),
+                    "completion_tokens": parsed.get("completion_tokens"),
+                    "was_empty": parsed.get("was_empty", False),
+                    "was_truncated": capture.was_truncated,
+                    "client_disconnected": state["client_disconnected"],
+                    "decision_provider": decision_provider,
+                    "decision_model": decision_model,
+                }
+                stream_plugins.dispatch_on_response(
+                    {**base_payload, "response_body": response_captured.body}
+                )
+                stream_plugins.dispatch_after_route(base_payload)
+                stream_plugins.dispatch_on_outcome(base_payload)
 
     headers = dict(common_headers)
     headers.update(

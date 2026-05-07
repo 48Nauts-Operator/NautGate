@@ -8,6 +8,7 @@ from app.db import queries
 from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
 from app.logging_config import configure_logging
+from app.plugins import PluginRegistry
 from app.provider_health import ProviderHealthTracker
 from app.routes import health, v1
 from app.scoring import load_routing_table
@@ -30,6 +31,13 @@ async def lifespan(app: FastAPI):
     app.state.nautrouter = None
     app.state.outcome_spool = OutcomeSpool(settings.nautgate_outcome_spool_path)
     app.state.health_tracker = ProviderHealthTracker()
+    app.state.plugins = PluginRegistry.from_config(settings.nautgate_config_path)
+    if not app.state.plugins.is_empty:
+        log.info(
+            "plugins_loaded",
+            count=len(app.state.plugins.extensions),
+            names=[e.name for e in app.state.plugins.extensions],
+        )
 
     # Day 5a/b: tier → provider/model routing table for `model: "auto"`.
     routing_path = Path(settings.nautgate_routing_config_path or DEFAULT_ROUTING_CONFIG)
@@ -69,6 +77,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if getattr(app.state, "plugins", None) is not None:
+            await app.state.plugins.aclose()
         if app.state.nautrouter is not None:
             await app.state.nautrouter.aclose()
             log.info("nautrouter_client_closed")
