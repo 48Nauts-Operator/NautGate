@@ -5,7 +5,6 @@ import pytest
 @pytest.mark.parametrize(
     "method,path,expected_coming_in",
     [
-        ("GET", "/v1/models", "week-1"),
         ("GET", "/v1/stats", "week-1"),
         ("GET", "/v1/profile", "week-1"),
     ],

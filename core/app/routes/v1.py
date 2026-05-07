@@ -452,8 +452,63 @@ async def responses(request: Request) -> Response:
 
 
 @router.get("/models")
-async def list_models(request: Request) -> JSONResponse:
-    return _stub(coming_in="week-1", message="Provider model list lands later in Week 1.")
+async def list_models(request: Request) -> Response:
+    """Lists models available via NautGate.
+
+    Composed from the routing table (each tier's primary + fallback) plus the
+    synthetic ``auto`` entry. Annotates `nautgate_unhealthy: true` for any
+    (provider, model) the in-process health tracker has demoted.
+
+    Shape mirrors OpenAI's `/v1/models`: `{object, data: [{id, object, owned_by, ...}]}`.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    table = getattr(request.app.state, "routing_table", None) or {}
+    tracker = getattr(request.app.state, "health_tracker", None)
+
+    seen: dict[tuple[str, str], dict] = {}
+    tier_seen: dict[tuple[str, str], list[str]] = {}
+    for tier_name, body in table.items():
+        for slot in ("primary", "fallback"):
+            entry = body.get(slot) if isinstance(body, dict) else None
+            if not isinstance(entry, dict):
+                continue
+            provider = entry.get("provider")
+            model = entry.get("model")
+            if not provider or not model:
+                continue
+            key = (provider, model)
+            tier_seen.setdefault(key, []).append(f"{tier_name}:{slot}")
+            if key not in seen:
+                seen[key] = {
+                    "id": model,
+                    "object": "model",
+                    "owned_by": provider,
+                    "nautgate_provider": provider,
+                    "nautgate_tiers": [],
+                }
+
+    for key, item in seen.items():
+        item["nautgate_tiers"] = tier_seen.get(key, [])
+        if tracker is not None and tracker.is_unhealthy(*key):
+            item["nautgate_unhealthy"] = True
+
+    data = sorted(seen.values(), key=lambda m: (m["nautgate_provider"], m["id"]))
+    # Synthetic "auto" entry — NautGate's tier-driven router.
+    data.insert(
+        0,
+        {
+            "id": "auto",
+            "object": "model",
+            "owned_by": "nautgate",
+            "nautgate_provider": "nautgate",
+            "nautgate_tiers": list(table.keys()),
+        },
+    )
+    return JSONResponse({"object": "list", "data": data})
 
 
 @router.get("/stats")
