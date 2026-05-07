@@ -111,6 +111,74 @@ async def write_outcome(
         )
 
 
+async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
+    """Aggregate stats over recent route_decisions + route_outcomes for one agent.
+
+    Returns the dict shape expected by /v1/stats. All counts default to 0,
+    rates to 0.0, cost_usd_total to None when there are no rows.
+    """
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)                                                 AS requests_total,
+                COUNT(*) FILTER (WHERE o.was_empty)                      AS empty_count,
+                AVG(o.duration_ms)::FLOAT                                AS avg_latency_ms,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.duration_ms)
+                                                                          AS p50_ms,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY o.duration_ms)
+                                                                          AS p95_ms,
+                SUM(o.cost_usd)::FLOAT                                   AS cost_usd_total
+            FROM nautgate.route_decisions d
+            LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+            WHERE d.agent_id = $1
+              AND d.ts > NOW() - make_interval(hours => $2)
+            """,
+            agent_id,
+            hours,
+        )
+        by_tier = await conn.fetch(
+            """
+            SELECT classified_tier AS k, COUNT(*) AS n
+              FROM nautgate.route_decisions
+             WHERE agent_id = $1 AND ts > NOW() - make_interval(hours => $2)
+             GROUP BY classified_tier
+             ORDER BY n DESC
+            """,
+            agent_id,
+            hours,
+        )
+        by_format = await conn.fetch(
+            """
+            SELECT inbound_format AS k, COUNT(*) AS n
+              FROM nautgate.route_decisions
+             WHERE agent_id = $1 AND ts > NOW() - make_interval(hours => $2)
+             GROUP BY inbound_format
+             ORDER BY n DESC
+            """,
+            agent_id,
+            hours,
+        )
+
+    requests_total = (totals or {}).get("requests_total") or 0
+    empty_count = (totals or {}).get("empty_count") or 0
+    return {
+        "agent_id": agent_id,
+        "window_hours": hours,
+        "requests_total": int(requests_total),
+        "empty_count": int(empty_count),
+        "empty_rate": (empty_count / requests_total) if requests_total else 0.0,
+        "latency_ms": {
+            "avg": (totals or {}).get("avg_latency_ms"),
+            "p50": (totals or {}).get("p50_ms"),
+            "p95": (totals or {}).get("p95_ms"),
+        },
+        "cost_usd_total": (totals or {}).get("cost_usd_total"),
+        "requests_by_tier": {r["k"]: int(r["n"]) for r in by_tier},
+        "requests_by_inbound_format": {r["k"]: int(r["n"]) for r in by_format},
+    }
+
+
 def excerpt_last_user_message(messages: list[dict] | None, *, max_chars: int = 200) -> str | None:
     """Find the last user message and excerpt its text content. Returns None if not found."""
     if not messages:

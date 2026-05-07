@@ -512,8 +512,25 @@ async def list_models(request: Request) -> Response:
 
 
 @router.get("/stats")
-async def stats(request: Request) -> JSONResponse:
-    return _stub(coming_in="week-1", message="Stats endpoint lands later in Week 1.")
+async def stats(request: Request) -> Response:
+    """Aggregate stats for the authenticated agent over the last `hours` (default 24).
+
+    Reads route_decisions + route_outcomes; all counts default to 0 when empty.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    try:
+        hours = int(request.query_params.get("hours", "24"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+
+    body = await queries.get_stats(pool, agent_id=agent_id, hours=hours)
+    return JSONResponse(body)
 
 
 @router.get("/profile")
