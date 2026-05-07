@@ -1,0 +1,48 @@
+# Extensions overlay. Brings up reference extension(s) alongside the main stack.
+#
+# Usage:
+#   docker compose \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.with-extensions.yml \
+#     up -d
+#
+# Mount your nautgate.yaml into nautgate-core (NAUTGATE_CONFIG_PATH) so the
+# gateway actually wires the extension in. See config/nautgate.example.yaml
+# for the wiring block.
+
+services:
+  sb-capture:
+    build:
+      context: ../extensions/sb-capture
+    container_name: sb-capture
+    environment:
+      SB_CAPTURE_OUTPUT_PATH: /var/lib/sb-capture/events.ndjson
+    volumes:
+      - sb-capture-data:/var/lib/sb-capture
+    ports:
+      - "127.0.0.1:8001:8001"   # loopback only
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8001/health').read()"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+  # When running with extensions, the core needs to know about them.
+  # Mount the example config (or your own) so PluginRegistry picks it up.
+  nautgate-core:
+    depends_on:
+      sb-capture:
+        condition: service_healthy
+    environment:
+      NAUTGATE_CONFIG_PATH: /etc/nautgate/nautgate.yaml
+    volumes:
+      - ../config/nautgate.example.yaml:/etc/nautgate/nautgate.yaml:ro
+
+volumes:
+  sb-capture-data:

@@ -1,42 +1,39 @@
 # NautGate config — example. Copy to nautgate.yaml or set NAUTGATE_CONFIG_PATH.
 # Env vars take precedence over file values.
+#
+# This file shows how to wire optional sidecar extensions into the plugin
+# contract. With no `extensions:` block (or all entries commented out),
+# NautGate runs in standalone mode — full audit + routing pipeline, no hooks.
 
-server:
-  host: 0.0.0.0
-  port: 8090
+# --- Plugin contract — sidecar extensions ---------------------------------
+# Per Concept §"plugin contract". Each extension declares which hooks it
+# subscribes to. Only POST <base_url>/v1/<hook_name> is called. Timeouts are
+# overridable per-extension; before_route is synchronous (default 50ms),
+# all other hooks are fire-and-forget.
 
-database:
-  url: ${NAUTGATE_DB_URL}     # required
-  pool_min_size: 2
-  pool_max_size: 20
+extensions: {}
+#   sb-capture:
+#     base_url: http://sb-capture:8001
+#     hooks: [on_request, on_response, on_outcome, after_route]
+#     timeout_ms: 200
+#
+#   sb-brain:
+#     base_url: http://sb-brain:8002
+#     hooks: [before_route, on_outcome]
+#     timeout_ms_before_route: 50    # synchronous hop — must stay tight
+#     timeout_ms: 500                # fire-and-forget on_outcome
+#
+#   sb-privacy:
+#     base_url: http://sb-privacy:8003
+#     hooks: [before_route]
+#     timeout_ms_before_route: 50
 
-routing:
-  profile: auto               # eco | auto | premium
-
-# NautRouter sidecar (Day 2+)
-nautrouter:
-  base_url: ${NAUTROUTER_BASE_URL:-http://localhost:8404}
-  timeout_s: 120
-
-# Streaming capture (Tech Paper §11.3)
-capture:
-  accumulator_cap_bytes: 8388608     # 8 MB default; per-key override via api_keys.accumulator_cap_bytes
-  excerpt_chars: 200                 # PRECAPTURE excerpt length
-
-# Plugin contract — sidecar extensions. All optional, all HTTP, all configured here.
-# Per Concept §"plugin contract" and Tech Paper §6.
-extensions:
-  before_route: []
-    # - http://sb-brain:8402/hints           # 50 ms timeout; advisory hints
-
-  on_request: []
-    # - http://sb-capture:8401/capture       # mirror inbound (fire-and-forget)
-
-  on_response: []
-    # - http://sb-capture:8401/capture       # mirror outbound (fire-and-forget)
-
-  after_route: []
-    # - http://sb-brain:8402/log             # log the routing decision
-
-  on_outcome: []
-    # - http://sb-brain:8402/outcome         # latency/tokens/cost feedback
+# --- Notes (env-var settings) ---------------------------------------------
+# Most other settings live in environment variables, not this file:
+#   NAUTGATE_DB_URL                 — required, Postgres URL
+#   NAUTGATE_LISTEN_HOST/PORT       — bind address
+#   NAUTGATE_LOG_LEVEL              — INFO / DEBUG / WARNING
+#   NAUTROUTER_BASE_URL             — sidecar URL
+#   NAUTGATE_OUTCOME_SPOOL_PATH     — durable spool fallback
+#   NAUTGATE_ROUTING_CONFIG_PATH    — tier → provider/model table (default: ./config/routing.yaml)
+#   NAUTGATE_CLASSIFY_LLM_CONFIRM   — true|false; opt-in CLASSIFY slow-path
