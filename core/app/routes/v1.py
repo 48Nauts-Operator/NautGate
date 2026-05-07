@@ -391,22 +391,20 @@ async def messages(request: Request) -> Response:
     stream_translator = None
     stream_translator_finish = None
     if payload.get("stream"):
-        # The translator needs the chosen model name; we don't know it yet (auto-routing
-        # may rewrite it). Build a thin closure that defers binding until the first chunk.
+        # Lazy-build the translator on first chunk (we need decision_model, set during DECIDE).
         translator_holder: dict = {"t": None}
 
-        def _ensure(model_name: str):
+        def _ensure():
             if translator_holder["t"] is None:
+                model_name = getattr(request.state, "decision_model", payload.get("model", ""))
                 translator_holder["t"] = ant.AnthropicStreamTranslator(model=model_name)
             return translator_holder["t"]
 
         def _on_chunk(chunk: bytes) -> list[bytes]:
-            t = _ensure(getattr(request.state, "decision_model", payload.get("model", "")))
-            return t.feed(chunk)
+            return _ensure().feed(chunk)
 
         def _on_finish() -> list[bytes]:
-            t = translator_holder["t"]
-            return t.finish() if t else []
+            return _ensure().finish()
 
         stream_translator = _on_chunk
         stream_translator_finish = _on_finish
@@ -437,20 +435,34 @@ async def responses(request: Request) -> Response:
 
     payload = resp_fmt.request_to_openai_chat(raw)
 
-    # Streaming for /v1/responses lands as a follow-up; the event set
-    # (response.created / output_item / content_part / output_text.delta /
-    #  output_item.done / response.completed) is large enough to deserve its own commit.
+    stream_translator = None
+    stream_translator_finish = None
     if payload.get("stream"):
-        return _stub(
-            coming_in="week-1b-stream",
-            message="Streaming /v1/responses lands in a follow-up — non-streaming works today.",
-        )
+        translator_holder: dict = {"t": None}
+
+        def _ensure():
+            if translator_holder["t"] is None:
+                model_name = getattr(request.state, "decision_model", payload.get("model", ""))
+                translator_holder["t"] = resp_fmt.ResponsesStreamTranslator(model=model_name)
+            return translator_holder["t"]
+
+        def _on_chunk(chunk: bytes) -> list[bytes]:
+            return _ensure().feed(chunk)
+
+        def _on_finish() -> list[bytes]:
+            # Build the translator even on empty upstream so terminator events fire.
+            return _ensure().finish()
+
+        stream_translator = _on_chunk
+        stream_translator_finish = _on_finish
 
     return await _process_chat_request(
         request,
         payload=payload,
         inbound_format="openai_responses",
         response_translator=resp_fmt.response_to_openai_responses,
+        stream_translator=stream_translator,
+        stream_translator_finish=stream_translator_finish,
     )
 
 

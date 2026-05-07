@@ -77,9 +77,7 @@ async def test_stats_respects_hours_query_param(stats_app):
     app, captured = stats_app
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
-        resp = await c.get(
-            "/v1/stats?hours=168", headers={"Authorization": "Bearer ng_test"}
-        )
+        resp = await c.get("/v1/stats?hours=168", headers={"Authorization": "Bearer ng_test"})
     assert resp.status_code == 200
     assert captured["hours"] == 168
 
@@ -90,7 +88,5 @@ async def test_stats_rejects_invalid_hours(stats_app, bad):
     app, _ = stats_app
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
-        resp = await c.get(
-            f"/v1/stats?hours={bad}", headers={"Authorization": "Bearer ng_test"}
-        )
+        resp = await c.get(f"/v1/stats?hours={bad}", headers={"Authorization": "Bearer ng_test"})
     assert resp.status_code == 400

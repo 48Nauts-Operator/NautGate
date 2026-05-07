@@ -219,15 +219,142 @@ async def test_responses_round_trip(responses_app):
 
 
 @pytest.mark.asyncio
-async def test_responses_streaming_returns_501(responses_app):
-    """Streaming for /v1/responses is a follow-up — should 501 with the marker."""
-    app, _ = responses_app
+async def test_responses_streaming_emits_responses_event_set(responses_app):
+    import json as _json
+
+    app, calls = responses_app
+
+    def _data(payload: dict) -> bytes:
+        return f"data: {_json.dumps(payload)}\n\n".encode()
+
+    upstream_chunks = [
+        _data({"choices": [{"index": 0, "delta": {"role": "assistant"}}]}),
+        _data({"choices": [{"index": 0, "delta": {"content": "Hi"}}]}),
+        _data({"choices": [{"index": 0, "delta": {"content": " there"}}]}),
+        _data(
+            {
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            }
+        ),
+        b"data: [DONE]\n\n",
+    ]
+
+    async def stream(_payload):
+        for ch in upstream_chunks:
+            yield ch
+
+    calls["mock"].chat_completions_stream = stream
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
-        resp = await c.post(
+        async with c.stream(
+            "POST",
             "/v1/responses",
             headers={"Authorization": "Bearer ng_test"},
             json={"model": "gpt-4o", "input": "hi", "stream": True},
+        ) as resp:
+            assert resp.status_code == 200
+            assert resp.headers["content-type"].startswith("text/event-stream")
+            received = b""
+            async for chunk in resp.aiter_raw():
+                received += chunk
+
+    blob = received.decode()
+    # Order check — every Responses event in the right sequence.
+    expected_events = [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    seen = [line.split(": ", 1)[1] for line in blob.split("\n") if line.startswith("event:")]
+    assert seen == expected_events, seen
+    assert "Hi" in blob and "there" in blob
+    # No raw OpenAI Chat shapes leaking through.
+    assert '"choices"' not in blob
+    # Final response.completed carries usage.
+    assert '"input_tokens":4' in blob
+    assert '"output_tokens":2' in blob
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_handles_empty_stream(responses_app):
+    """Empty upstream stream still emits well-formed terminators."""
+    app, calls = responses_app
+
+    async def stream(_payload):
+        return
+        yield  # pragma: no cover
+
+    calls["mock"].chat_completions_stream = stream
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        async with c.stream(
+            "POST",
+            "/v1/responses",
+            headers={"Authorization": "Bearer ng_test"},
+            json={"model": "gpt-4o", "input": "hi", "stream": True},
+        ) as resp:
+            received = b""
+            async for chunk in resp.aiter_raw():
+                received += chunk
+
+    blob = received.decode()
+    # No content events, but created + completed should still fire.
+    assert "response.created" in blob
+    assert "response.completed" in blob
+
+
+# Stand-alone translator tests (no HTTP)
+
+
+def test_translator_stand_alone_emits_full_sequence():
+    import json as _json
+
+    from app.formats.openai_responses import ResponsesStreamTranslator
+
+    def _data(d: dict) -> bytes:
+        return f"data: {_json.dumps(d)}\n\n".encode()
+
+    t = ResponsesStreamTranslator(model="gpt-4o")
+    out: list[bytes] = []
+    out += t.feed(_data({"choices": [{"index": 0, "delta": {"role": "assistant"}}]}))
+    out += t.feed(_data({"choices": [{"index": 0, "delta": {"content": "x"}}]}))
+    out += t.feed(_data({"choices": [{"index": 0, "delta": {"content": "y"}}]}))
+    out += t.feed(
+        _data(
+            {
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            }
         )
-    assert resp.status_code == 501
-    assert resp.headers["x-nautgate-coming-in"] == "week-1b-stream"
+    )
+    out += t.feed(b"data: [DONE]\n\n")
+    blob = b"".join(out).decode()
+    # Only count `event:` lines (the JSON `"type": ...` field also contains the string).
+    delta_events = [
+        line for line in blob.split("\n") if line == "event: response.output_text.delta"
+    ]
+    assert len(delta_events) == 2
+    assert "response.completed" in blob
+
+
+def test_translator_split_chunks():
+    import json as _json
+
+    from app.formats.openai_responses import ResponsesStreamTranslator
+
+    full = f"data: {_json.dumps({'choices': [{'delta': {'content': 'hi'}}]})}\n\n".encode()
+    t = ResponsesStreamTranslator(model="x")
+    a = t.feed(full[: len(full) // 2])
+    assert a == []
+    b = t.feed(full[len(full) // 2 :])
+    blob = b"".join(b).decode()
+    assert "hi" in blob
