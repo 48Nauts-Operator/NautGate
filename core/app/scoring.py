@@ -245,17 +245,24 @@ def resolve_healthy(
     tier: str,
     table: dict[str, dict],
     is_unhealthy_fn,
+    *,
+    banned_models: list[str] | tuple[str, ...] = (),
 ) -> ResolvedRoute:
-    """Like ``resolve`` but skips the primary if ``is_unhealthy_fn(provider, model)``
-    returns True. Falls back to the tier's secondary entry; if there is none, the
-    primary is returned unchanged so we don't strand a request.
+    """Like ``resolve`` but skips the primary if it's unhealthy OR banned.
+
+    Falls through to the fallback for the same reasons. If both primary and
+    fallback are unavailable, returns the primary anyway (don't strand the request).
     """
+    banned = set(banned_models or ())
     primary = resolve(tier, table)
-    if not is_unhealthy_fn(primary.provider, primary.model):
+    primary_blocked = primary.model in banned or is_unhealthy_fn(primary.provider, primary.model)
+    if not primary_blocked:
         return primary
     if primary.fallback is None:
         return primary
     fb_provider, fb_model = primary.fallback
+    if fb_model in banned:
+        return primary
     return ResolvedRoute(provider=fb_provider, model=fb_model, fallback=None)
 
 

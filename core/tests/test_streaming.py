@@ -178,10 +178,21 @@ async def streaming_app(monkeypatch):
     async def fake_upsert_health(pool, **kw):
         pass
 
+    async def fake_get_prefs(pool, *, agent_id):
+        return {
+            "agent_id": agent_id,
+            "preferred_tier_overrides": None,
+            "banned_models": [],
+            "preferred_models": [],
+            "notes": None,
+            "updated_at": None,
+        }
+
     monkeypatch.setattr("app.db.queries.precapture", fake_precapture)
     monkeypatch.setattr("app.db.queries.write_outcome", fake_write_outcome)
     monkeypatch.setattr("app.routes.v1.authenticate", fake_authenticate)
     monkeypatch.setattr("app.routes.v1.upsert_health", fake_upsert_health)
+    monkeypatch.setattr("app.routes.v1.queries.get_routing_preferences", fake_get_prefs)
 
     from app.main import create_app
 

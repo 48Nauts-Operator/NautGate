@@ -105,8 +105,11 @@ async def _process_chat_request(
     if model_requested == AUTO_MODEL_TOKEN:
         if routing_table is None:
             raise HTTPException(status_code=503, detail="routing_table_unavailable")
+        prefs = await queries.get_routing_preferences(pool, agent_id=agent_id)
         is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
-        route_pick = resolve_healthy(tier, routing_table, is_unhealthy)
+        route_pick = resolve_healthy(
+            tier, routing_table, is_unhealthy, banned_models=prefs["banned_models"]
+        )
         decision_provider = route_pick.provider
         decision_model = route_pick.model
         decision_reason = f"auto:{tier}->{route_pick.provider}/{route_pick.model}"
@@ -534,5 +537,58 @@ async def stats(request: Request) -> Response:
 
 
 @router.get("/profile")
-async def get_profile(request: Request) -> JSONResponse:
-    return _stub(coming_in="week-1", message="Profile endpoint lands later in Week 1.")
+async def get_profile(request: Request) -> Response:
+    """Return the authenticated agent's routing_preferences, or empty defaults."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    return JSONResponse(await queries.get_routing_preferences(pool, agent_id=agent_id))
+
+
+@router.put("/profile")
+async def put_profile(request: Request) -> Response:
+    """UPSERT the authenticated agent's routing_preferences.
+
+    Accepts any subset of:
+        preferred_tier_overrides (object), banned_models (string list),
+        preferred_models (string list), notes (string).
+    Unknown fields are ignored. agent_id is taken from the bearer token, never
+    the body, so callers can't update someone else's profile.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    def _list_or_none(v):
+        if v is None:
+            return None
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise HTTPException(status_code=400, detail="must be a list of strings")
+        return v
+
+    overrides = body.get("preferred_tier_overrides")
+    if overrides is not None and not isinstance(overrides, dict):
+        raise HTTPException(status_code=400, detail="preferred_tier_overrides must be an object")
+
+    notes = body.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        raise HTTPException(status_code=400, detail="notes must be a string")
+
+    result = await queries.upsert_routing_preferences(
+        pool,
+        agent_id=agent_id,
+        preferred_tier_overrides=overrides,
+        banned_models=_list_or_none(body.get("banned_models")),
+        preferred_models=_list_or_none(body.get("preferred_models")),
+        notes=notes,
+    )
+    return JSONResponse(result)

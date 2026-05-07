@@ -111,6 +111,74 @@ async def write_outcome(
         )
 
 
+async def get_routing_preferences(pool: asyncpg.Pool, *, agent_id: str) -> dict:
+    """Return the routing_preferences row for `agent_id`, or empty defaults."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT agent_id, preferred_tier_overrides, banned_models, preferred_models,
+                   notes, updated_at
+              FROM nautgate.routing_preferences
+             WHERE agent_id = $1
+            """,
+            agent_id,
+        )
+    if row is None:
+        return {
+            "agent_id": agent_id,
+            "preferred_tier_overrides": None,
+            "banned_models": [],
+            "preferred_models": [],
+            "notes": None,
+            "updated_at": None,
+        }
+    overrides = row["preferred_tier_overrides"]
+    if isinstance(overrides, str):
+        overrides = json.loads(overrides)
+    return {
+        "agent_id": row["agent_id"],
+        "preferred_tier_overrides": overrides,
+        "banned_models": list(row["banned_models"] or []),
+        "preferred_models": list(row["preferred_models"] or []),
+        "notes": row["notes"],
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+async def upsert_routing_preferences(
+    pool: asyncpg.Pool,
+    *,
+    agent_id: str,
+    preferred_tier_overrides: dict | None = None,
+    banned_models: list[str] | None = None,
+    preferred_models: list[str] | None = None,
+    notes: str | None = None,
+) -> dict:
+    """UPSERT a routing_preferences row. Returns the resulting row in get_*-shape."""
+    overrides_json = json.dumps(preferred_tier_overrides) if preferred_tier_overrides else None
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO nautgate.routing_preferences
+                (agent_id, preferred_tier_overrides, banned_models, preferred_models, notes,
+                 updated_at)
+            VALUES ($1, $2::jsonb, $3, $4, $5, NOW())
+            ON CONFLICT (agent_id) DO UPDATE SET
+                preferred_tier_overrides = EXCLUDED.preferred_tier_overrides,
+                banned_models = EXCLUDED.banned_models,
+                preferred_models = EXCLUDED.preferred_models,
+                notes = EXCLUDED.notes,
+                updated_at = NOW()
+            """,
+            agent_id,
+            overrides_json,
+            list(banned_models) if banned_models is not None else None,
+            list(preferred_models) if preferred_models is not None else None,
+            notes,
+        )
+    return await get_routing_preferences(pool, agent_id=agent_id)
+
+
 async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
     """Aggregate stats over recent route_decisions + route_outcomes for one agent.
 
