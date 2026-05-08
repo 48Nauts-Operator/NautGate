@@ -1,44 +1,79 @@
 """sb-capture — NautGate reference extension.
 
-Receives the three fire-and-forget hooks (on_request, on_response, on_outcome)
-and appends each payload as one NDJSON line to a configurable output file.
-This is the simplest extension that demonstrates the plugin contract end-to-end.
+Subscribes to on_request, on_response, on_outcome (and after_route) hooks and
+fans each payload out to one or more sinks:
 
-In production, sb-capture would write to a real sink (Postgres "memories" schema,
-S3, etc.). The NDJSON file is a stand-in that's trivially consumable by jq /
-DuckDB / pandas for analysis.
+  SB_CAPTURE_SINK=ndjson   (default) — append NDJSON lines to a file
+  SB_CAPTURE_SINK=postgres           — write to agents_memory.memories
+  SB_CAPTURE_SINK=both               — both of the above
+
+Postgres connection: SB_CAPTURE_DB_URL (asyncpg DSN). When the sink is
+"postgres" or "both" but the DSN is unset, we fall back to NDJSON only and log
+a warning at startup.
 """
 
 from __future__ import annotations
 
-import json
+import logging
 import os
-import time
-from pathlib import Path
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from sinks import NDJSONSink, PostgresSink
+
+logging.basicConfig(level=os.environ.get("SB_CAPTURE_LOG_LEVEL", "INFO"))
+log = logging.getLogger("sb-capture")
+
 DEFAULT_OUTPUT_PATH = "/var/lib/sb-capture/events.ndjson"
 
-app = FastAPI(title="sb-capture", version="0.1.0")
+
+def _build_sinks() -> list:
+    sink_name = os.environ.get("SB_CAPTURE_SINK", "ndjson").lower()
+    sinks: list = []
+
+    if sink_name in ("ndjson", "both"):
+        path = os.environ.get("SB_CAPTURE_OUTPUT_PATH", DEFAULT_OUTPUT_PATH)
+        sinks.append(NDJSONSink(path))
+        log.info("ndjson_sink_enabled path=%s", path)
+
+    if sink_name in ("postgres", "both"):
+        dsn = os.environ.get("SB_CAPTURE_DB_URL")
+        if dsn:
+            sinks.append(PostgresSink(dsn))
+            log.info("postgres_sink_enabled")
+        else:
+            log.warning(
+                "postgres_sink_requested_but_no_dsn — falling back to ndjson only"
+            )
+            if not sinks:
+                sinks.append(NDJSONSink(DEFAULT_OUTPUT_PATH))
+
+    if not sinks:
+        log.warning("no_sinks_configured — falling back to default ndjson")
+        sinks.append(NDJSONSink(DEFAULT_OUTPUT_PATH))
+
+    return sinks
 
 
-def _output_path() -> Path:
-    return Path(os.environ.get("SB_CAPTURE_OUTPUT_PATH", DEFAULT_OUTPUT_PATH))
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.sinks = _build_sinks()
+    try:
+        yield
+    finally:
+        for s in app.state.sinks:
+            await s.close()
 
 
-def _append(hook: str, body: dict) -> None:
-    path = _output_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {"hook": hook, "received_at": time.time(), "payload": body}
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, separators=(",", ":")) + "\n")
+app = FastAPI(title="sb-capture", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health() -> Response:
-    return JSONResponse({"status": "ok", "output_path": str(_output_path())})
+    sink_names = [type(s).__name__ for s in app.state.sinks]
+    return JSONResponse({"status": "ok", "sinks": sink_names})
 
 
 async def _read_json(request: Request) -> dict:
@@ -51,30 +86,33 @@ async def _read_json(request: Request) -> dict:
     return body
 
 
+async def _fanout(hook: str, body: dict) -> None:
+    for sink in app.state.sinks:
+        try:
+            await sink.write(hook, body)
+        except Exception as exc:  # belt-and-suspenders; sinks already swallow
+            log.warning("sink_write_failed sink=%s err=%s", type(sink).__name__, exc)
+
+
 @app.post("/v1/on_request")
 async def on_request(request: Request) -> Response:
-    body = await _read_json(request)
-    _append("on_request", body)
+    await _fanout("on_request", await _read_json(request))
     return JSONResponse({"ok": True})
 
 
 @app.post("/v1/on_response")
 async def on_response(request: Request) -> Response:
-    body = await _read_json(request)
-    _append("on_response", body)
+    await _fanout("on_response", await _read_json(request))
     return JSONResponse({"ok": True})
 
 
 @app.post("/v1/on_outcome")
 async def on_outcome(request: Request) -> Response:
-    body = await _read_json(request)
-    _append("on_outcome", body)
+    await _fanout("on_outcome", await _read_json(request))
     return JSONResponse({"ok": True})
 
 
-# Optional: support after_route too (useful for quick "request done" telemetry).
 @app.post("/v1/after_route")
 async def after_route(request: Request) -> Response:
-    body = await _read_json(request)
-    _append("after_route", body)
+    await _fanout("after_route", await _read_json(request))
     return JSONResponse({"ok": True})
