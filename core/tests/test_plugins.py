@@ -110,7 +110,14 @@ def test_from_config_handles_invalid_yaml(tmp_path):
 async def test_empty_registry_before_route_returns_default():
     reg = PluginRegistry([])
     out = await reg.call_before_route({})
-    assert out == {"brain_hints": {}, "banned_models": [], "preferred_tier": None}
+    assert out == {
+        "brain_hints": {},
+        "banned_models": [],
+        "preferred_tier": None,
+        "override_model": None,
+        "demoted_models": [],
+        "promoted_models": [],
+    }
     await reg.aclose()
 
 
@@ -184,7 +191,10 @@ async def test_before_route_swallows_extension_500():
     out = await reg.call_before_route({})
     await reg.aclose()
     # Default empty result; no exception.
-    assert out == {"brain_hints": {}, "banned_models": [], "preferred_tier": None}
+    assert out["preferred_tier"] is None
+    assert out["override_model"] is None
+    assert out["banned_models"] == []
+    assert out["brain_hints"] == {}
 
 
 @pytest.mark.asyncio

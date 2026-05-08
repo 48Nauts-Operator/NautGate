@@ -115,10 +115,12 @@ async def _process_chat_request(
 
     # PLUGINS: before_route — synchronous fan-out to extensions that subscribe.
     # On timeout (50ms default per ext) or error: skipped. Aggregated hints can
-    # extend banned_models or override the scored tier.
+    # override model entirely or extend banned_models / nudge tier.
     plugins = getattr(request.app.state, "plugins", None)
     brain_hints: dict | None = None
     plugin_banned: list[str] = []
+    plugin_demoted: list[str] = []
+    plugin_override_model: str | None = None
     if plugins is not None and not plugins.is_empty and plugins.subscribers("before_route"):
         agg = await plugins.call_before_route(
             {
@@ -135,18 +137,40 @@ async def _process_chat_request(
         if agg["brain_hints"]:
             brain_hints = agg["brain_hints"]
         plugin_banned = agg["banned_models"]
+        plugin_demoted = agg["demoted_models"]
+        plugin_override_model = agg["override_model"]
         if agg["preferred_tier"]:
             tier = agg["preferred_tier"]
 
-    # DECIDE
+    # DECIDE — precedence ladder per Tech Paper §2.5:
+    #   2: X-Naut-Model header (per-request hard override)
+    #   3: api_keys.override_model (per-key hard override)  — deferred for v1
+    #   4: routing_preferences.preferred_models (caller soft pref)  — deferred for v1
+    #   5: brain.override_model (brain hard override)
+    #   6: brain.demoted_models (extends banned_models)
+    #   7: brain.preferred_tier (tier nudge — already applied above)
+    #   8: score-based tier pick (default)
     routing_table = getattr(request.app.state, "routing_table", None)
     health_tracker = getattr(request.app.state, "health_tracker", None)
-    if model_requested == AUTO_MODEL_TOKEN:
+
+    header_override = request.headers.get("x-naut-model")
+    hard_override = header_override or plugin_override_model
+
+    if hard_override:
+        decision_provider = "override"
+        decision_model = hard_override
+        source = "header" if header_override else "brain"
+        decision_reason = f"override:{source}->{hard_override}"
+        payload["model"] = decision_model
+    elif model_requested == AUTO_MODEL_TOKEN:
         if routing_table is None:
             raise HTTPException(status_code=503, detail="routing_table_unavailable")
         prefs = await queries.get_routing_preferences(pool, agent_id=agent_id)
         is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
-        all_banned = list(dict.fromkeys([*prefs["banned_models"], *plugin_banned]))
+        # Banned: caller prefs + extension bans + brain demotions (level 6).
+        all_banned = list(
+            dict.fromkeys([*prefs["banned_models"], *plugin_banned, *plugin_demoted])
+        )
         route_pick = resolve_healthy(tier, routing_table, is_unhealthy, banned_models=all_banned)
         decision_provider = route_pick.provider
         decision_model = route_pick.model

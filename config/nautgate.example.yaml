@@ -11,22 +11,23 @@
 # overridable per-extension; before_route is synchronous (default 50ms),
 # all other hooks are fire-and-forget.
 
-extensions: {}
-#   sb-capture:
-#     base_url: http://sb-capture:8001
-#     hooks: [on_request, on_response, on_outcome, after_route]
-#     timeout_ms: 200
-#
-#   sb-brain:
-#     base_url: http://sb-brain:8002
-#     hooks: [before_route, on_outcome]
-#     timeout_ms_before_route: 50    # synchronous hop — must stay tight
-#     timeout_ms: 500                # fire-and-forget on_outcome
-#
-#   sb-privacy:
-#     base_url: http://sb-privacy:8003
-#     hooks: [before_route]
-#     timeout_ms_before_route: 50
+extensions:
+  sb-capture:
+    base_url: http://sb-capture:8001
+    hooks: [on_request, on_response, on_outcome, after_route]
+    timeout_ms: 200
+
+  sb-brain:
+    base_url: http://sb-brain:8002
+    hooks: [before_route, on_outcome]
+    timeout_ms_before_route: 50    # synchronous hop — must stay tight
+    timeout_ms: 200                # fire-and-forget on_outcome
+
+  # sb-privacy lands in Week 4
+  # sb-privacy:
+  #   base_url: http://sb-privacy:8003
+  #   hooks: [before_route]
+  #   timeout_ms_before_route: 50
 
 # --- Notes (env-var settings) ---------------------------------------------
 # Most other settings live in environment variables, not this file:

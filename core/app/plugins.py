@@ -127,12 +127,22 @@ class PluginRegistry:
 
         Returns:
             {
-                "brain_hints": dict,    # union of all hint dicts (later wins)
-                "banned_models": list,  # union of all extension bans
-                "preferred_tier": str | None,  # last-wins
+                "brain_hints": dict,         # union of all hint dicts (later wins)
+                "banned_models": list,       # union of all extension bans
+                "preferred_tier": str|None,  # last-wins
+                "override_model": str|None,  # last-wins (per Tech Paper §2.5 level 5)
+                "demoted_models": list,      # union (level 6)
+                "promoted_models": list,     # union (level 6)
             }
         """
-        agg: dict[str, Any] = {"brain_hints": {}, "banned_models": [], "preferred_tier": None}
+        agg: dict[str, Any] = {
+            "brain_hints": {},
+            "banned_models": [],
+            "preferred_tier": None,
+            "override_model": None,
+            "demoted_models": [],
+            "promoted_models": [],
+        }
         for ext in self.subscribers("before_route"):
             body = await self._call_with_timeout(
                 ext, "before_route", payload, timeout_ms=ext.timeout_ms_before_route
@@ -142,12 +152,16 @@ class PluginRegistry:
             hints = body.get("brain_hints")
             if isinstance(hints, dict):
                 agg["brain_hints"].update(hints)
-            banned = body.get("banned_models")
-            if isinstance(banned, list):
-                agg["banned_models"].extend(b for b in banned if isinstance(b, str))
+            for list_field in ("banned_models", "demoted_models", "promoted_models"):
+                value = body.get(list_field)
+                if isinstance(value, list):
+                    agg[list_field].extend(v for v in value if isinstance(v, str))
             preferred = body.get("preferred_tier")
             if isinstance(preferred, str) and preferred:
                 agg["preferred_tier"] = preferred
+            override = body.get("override_model")
+            if isinstance(override, str) and override:
+                agg["override_model"] = override
         return agg
 
     async def _call_with_timeout(

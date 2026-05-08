@@ -33,11 +33,37 @@ services:
       start_period: 3s
     restart: unless-stopped
 
+  sb-brain:
+    build:
+      context: ../extensions/sb-brain
+    container_name: sb-brain
+    depends_on:
+      nautgate-db:
+        condition: service_healthy
+    environment:
+      SB_BRAIN_DB_URL: postgres://nautgate:nautgate@nautgate-db:5432/nautgate
+      SB_BRAIN_TIMEOUT_MS: "50"
+    ports:
+      - "127.0.0.1:8002:8002"   # loopback only
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8002/health').read()"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
   # When running with extensions, the core needs to know about them.
   # Mount the example config (or your own) so PluginRegistry picks it up.
   nautgate-core:
     depends_on:
       sb-capture:
+        condition: service_healthy
+      sb-brain:
         condition: service_healthy
     environment:
       NAUTGATE_CONFIG_PATH: /etc/nautgate/nautgate.yaml
