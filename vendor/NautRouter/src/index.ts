@@ -120,6 +120,27 @@ const MODELS: Record<string, ModelDef> = {
     outputPrice: 0.60,
     contextWindow: 1_000_000,
   },
+  "openrouter/google/gemini-pro": {
+    id: "google/gemini-2.5-pro",
+    provider: "openrouter",
+    inputPrice: 1.25,
+    outputPrice: 5.00,
+    contextWindow: 1_000_000,
+  },
+  "openrouter/anthropic/claude-sonnet": {
+    id: "anthropic/claude-sonnet-4",
+    provider: "openrouter",
+    inputPrice: 3,
+    outputPrice: 15,
+    contextWindow: 200_000,
+  },
+  "openrouter/deepseek/deepseek-chat": {
+    id: "deepseek/deepseek-chat",
+    provider: "openrouter",
+    inputPrice: 0.14,
+    outputPrice: 0.28,
+    contextWindow: 64_000,
+  },
   "openrouter/openai/gpt-4o-mini": {
     id: "openai/gpt-4o-mini",
     provider: "openrouter",

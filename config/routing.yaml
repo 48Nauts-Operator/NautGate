@@ -1,22 +1,27 @@
 # NautGate tier → provider/model routing table.
 #
-# Pinned models on every tier (no `openrouter/auto`). The `auto` selector
-# adds OpenRouter's own classification + selection step on top of ours,
-# which roughly doubles the routing latency. Pinning keeps the call path
-# short: NautGate scores → tier → fixed model → OpenRouter passthrough →
-# provider. Audit log captures the upstream's response.model so you still
-# see the actual provider that served the call.
+# AIM: cheap by default, expensive only when the score genuinely demands it.
+# Most prompts score below 0.5 — those should never touch Sonnet/Opus.
+# Real cheap-model coverage:
+#   fast / balanced → Gemini Flash ($0.15/$0.60 per M, 1M context)
+#   deep            → Gemini Pro ($1.25/$5, 1M context — handles Pi's big workload)
+#   expert          → Sonnet direct (only on score ≥ 0.5)
+#
+# Pinned models so OpenRouter doesn't add its own auto-selection latency hop.
 
 tiers:
   fast:
     primary:  { provider: openrouter, model: openrouter/google/gemini-flash }
-    fallback: { provider: openrouter, model: openrouter/openai/gpt-4o-mini }
+    fallback: { provider: openrouter, model: openrouter/deepseek/deepseek-chat }
   balanced:
-    primary:  { provider: openrouter, model: openrouter/anthropic/claude-haiku }
-    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
+    # Same cheap model as fast — 99% of routine work doesn't need more.
+    primary:  { provider: openrouter, model: openrouter/google/gemini-flash }
+    fallback: { provider: openrouter, model: openrouter/openai/gpt-4o-mini }
   deep:
-    primary:  { provider: anthropic,  model: claude-sonnet-4 }
+    # 1M context for code-heavy / long-history workloads (Pi's typical shape).
+    primary:  { provider: openrouter, model: openrouter/google/gemini-pro }
     fallback: { provider: openrouter, model: openrouter/anthropic/claude-haiku }
   expert:
-    primary:  { provider: anthropic,  model: claude-opus-4 }
+    # Only when score ≥ 0.5 — real reasoning, not casual chatter.
+    primary:  { provider: openrouter, model: openrouter/anthropic/claude-sonnet }
     fallback: { provider: anthropic,  model: claude-sonnet-4 }

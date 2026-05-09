@@ -69,6 +69,15 @@ pricing:
   openrouter/openrouter/qwen/qwen-2.5-72b:
     input: 0.13
     output: 0.40
+  openrouter/openrouter/google/gemini-pro:
+    input: 1.25
+    output: 5.00
+  openrouter/openrouter/anthropic/claude-sonnet:
+    input: 3.00
+    output: 15.00
+  openrouter/openrouter/deepseek/deepseek-chat:
+    input: 0.14
+    output: 0.28
 
   # --- Local (free) ---
   lmstudio/local: { input: 0, output: 0 }
