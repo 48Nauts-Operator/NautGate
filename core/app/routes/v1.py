@@ -348,6 +348,8 @@ async def _process_chat_request(
         if isinstance(upstream_resp, dict)
         else None
     )
+    actual_model = upstream_resp.get("model") if isinstance(upstream_resp, dict) else None
+    actual_provider = upstream_resp.get("provider") if isinstance(upstream_resp, dict) else None
     cost_usd = (
         pricing.compute_cost(
             decision_provider,
@@ -372,6 +374,8 @@ async def _process_chat_request(
         response_body_truncated_at_byte=response_captured.truncated_at_byte,
         response_size_bytes=response_size_bytes,
         tool_calls_made=tool_calls_made,
+        actual_model=actual_model,
+        actual_provider=actual_provider,
     )
 
     if decision_provider != "passthrough":
@@ -524,6 +528,8 @@ def _streaming_response(
                     response_body_truncated_at_byte=response_captured.truncated_at_byte,
                     response_size_bytes=capture.bytes_seen,
                     tool_calls_made=stream_tool_calls,
+                    actual_model=parsed.get("actual_model"),
+                    actual_provider=parsed.get("actual_provider"),
                 )
             except Exception as exc:
                 log.error(

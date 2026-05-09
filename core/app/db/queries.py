@@ -101,6 +101,8 @@ async def write_outcome(
     response_body_truncated_at_byte: int | None = None,
     response_size_bytes: int | None = None,
     tool_calls_made: list[dict] | None = None,
+    actual_model: str | None = None,
+    actual_provider: str | None = None,
 ) -> None:
     tool_calls_json = json.dumps(tool_calls_made) if tool_calls_made else None
     async with pool.acquire() as conn:
@@ -112,9 +114,10 @@ async def write_outcome(
                  was_empty, used_fallback, fallback_count, client_disconnected,
                  was_truncated, truncated_at_byte,
                  response_body, response_body_truncated_at_byte,
-                 response_size_bytes, tool_calls_made)
+                 response_size_bytes, tool_calls_made,
+                 actual_model, actual_provider)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                    $18::jsonb)
+                    $18::jsonb, $19, $20)
             """,
             decision_id,
             status_code,
@@ -134,6 +137,8 @@ async def write_outcome(
             response_body_truncated_at_byte,
             response_size_bytes,
             tool_calls_json,
+            actual_model,
+            actual_provider,
         )
 
 
@@ -432,7 +437,9 @@ async def get_decision_detail(
                o.response_body                 AS response_body,
                o.response_body_truncated_at_byte AS response_body_truncated_at_byte,
                o.response_size_bytes           AS response_size_bytes,
-               o.tool_calls_made               AS tool_calls_made
+               o.tool_calls_made               AS tool_calls_made,
+               o.actual_model                  AS actual_model,
+               o.actual_provider               AS actual_provider
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.id::text = $1 AND d.agent_id = $2
@@ -541,7 +548,9 @@ async def get_recent_decisions(
                o.was_truncated      AS was_truncated,
                o.client_disconnected AS client_disconnected,
                o.response_size_bytes AS response_size_bytes,
-               o.tool_calls_made    AS tool_calls_made
+               o.tool_calls_made    AS tool_calls_made,
+               o.actual_model       AS actual_model,
+               o.actual_provider    AS actual_provider
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.agent_id = $1

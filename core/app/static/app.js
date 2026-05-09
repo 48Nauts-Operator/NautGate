@@ -515,11 +515,17 @@
         const latency = r.duration_ms != null ? r.duration_ms + "ms" : "—";
         const calls = (r.tool_calls_made || []).map((t) => `<span class="audit-tool-chip">${esc(t.name || "?")}</span>`).join("");
         const callsLine = calls ? `<div class="audit-tools-called">${calls}</div>` : "";
+        // Show "decision → actual" when they differ (e.g. openrouter/auto → google/gemini-2.5-flash).
+        const decided = r.model || r.model_requested || "—";
+        const actual = r.actual_model && r.actual_model !== decided ? r.actual_model : null;
+        const actualBit = actual
+          ? ` <span class="audit-source">→ ${esc(actual)}${r.actual_provider ? ' <span style="color:var(--text-dim)">(' + esc(r.actual_provider) + ')</span>' : ''}</span>`
+          : "";
         return `
           <div class="audit-row" data-decision="${esc(r.decision_id)}">
             <div class="audit-dot ${dot}"></div>
             <div>
-              <div class="audit-model">${esc(r.model || r.model_requested || "—")} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span></div>
+              <div class="audit-model">${esc(decided)}${actualBit} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span></div>
               ${callsLine}
             </div>
             <div>${bar}<div class="audit-source" style="margin-top:2px">${total} tokens · ${(r.request_size_bytes || 0) >= 1024 ? Math.round(r.request_size_bytes / 1024) + "KB" : (r.request_size_bytes || 0) + "B"} req</div></div>
@@ -599,7 +605,10 @@
     html += bar;
     html += '<div class="audit-grid">';
     html += grid("Endpoint", esc(inboundEndpoint(d.inbound_format)));
-    html += grid("Upstream", esc(d.decision_provider || "—") + " / " + esc(d.decision_model || "—"));
+    const actualLine = d.actual_model && d.actual_model !== d.decision_model
+      ? ` → <b>${esc(d.actual_model)}</b>${d.actual_provider ? ' (' + esc(d.actual_provider) + ')' : ''}`
+      : "";
+    html += grid("Upstream", esc(d.decision_provider || "—") + " / " + esc(d.decision_model || "—") + actualLine);
     html += grid("Source", esc(d.source_hostname || d.source_ip || "—"));
     html += grid("Messages", d.messages_count ?? "—");
     html += grid("Tools", d.tools_count ?? "—");

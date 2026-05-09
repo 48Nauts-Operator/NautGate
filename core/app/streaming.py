@@ -97,6 +97,8 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
     finish_reason: str | None = None
+    actual_model: str | None = None
+    actual_provider: str | None = None
     content_parts: list[str] = []
     # tool_calls accumulator — keyed by tool_call index for OpenAI Chat streaming;
     # for Anthropic, keyed by content_block index. Both stream incrementally.
@@ -111,6 +113,12 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
             payload = json.loads(data)
         except json.JSONDecodeError:
             continue
+
+        # OpenRouter / OpenAI: each chunk carries the actual model picked.
+        if isinstance(payload.get("model"), str) and not actual_model:
+            actual_model = payload["model"]
+        if isinstance(payload.get("provider"), str) and not actual_provider:
+            actual_provider = payload["provider"]
 
         # ---- OpenAI Chat shape ----
         choices = payload.get("choices")
@@ -204,4 +212,6 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         "assembled_content": assembled,
         "was_empty": was_empty,
         "tool_calls": tool_calls,
+        "actual_model": actual_model,
+        "actual_provider": actual_provider,
     }
