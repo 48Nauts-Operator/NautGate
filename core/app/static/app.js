@@ -632,8 +632,14 @@
         .join("");
     }
 
+    // Payload Anatomy — what *actually* gets shipped beyond the user's prompt
+    if (d.payload_anatomy) {
+      html += '<div class="section-title">Payload Anatomy — what shipped upstream</div>';
+      html += renderPayloadAnatomy(d.payload_anatomy);
+    }
+
     // Prompt body — block-style (one msg-block per message)
-    html += '<div class="section-title">Prompt — what got sent</div>';
+    html += '<div class="section-title">Prompt — raw message blocks</div>';
     if (d.prompt_body) {
       html += renderMessageBlocks(d.prompt_body);
       if (d.prompt_body_truncated_at_byte) {
@@ -650,6 +656,78 @@
     html += '<div class="section-title">Response — what came back</div>';
     html += renderResponseBlocks(d);
     return html;
+  }
+
+  function fmtBytes(n) {
+    if (n == null) return "—";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(2) + " MB";
+  }
+
+  function renderPayloadAnatomy(pa) {
+    if (!pa || !pa.totals) return '<p class="hint">no payload captured</p>';
+    const total = pa.totals.bytes || 1;
+    const userPct = (pa.totals.user_pct * 100).toFixed(2);
+
+    // Stacked bar — by bytes, the unit that actually matters for what gets shipped.
+    const bar = `
+      <div class="audit-bar" style="margin-bottom:8px">
+        ${segPct(pa.system.bytes, total, "system")}
+        ${segPct(pa.tools.bytes, total, "tools")}
+        ${segPct(pa.history.bytes, total, "history")}
+        ${segPct(pa.user.bytes, total, "user")}
+      </div>`;
+
+    const summary = `
+      <div class="anatomy-summary">
+        <div><b>${fmtBytes(pa.totals.bytes)}</b> shipped · ~${pa.totals.tokens} tokens</div>
+        <div class="hint">your typed bytes: <b>${userPct}%</b> of payload — the rest is system prompt, tool definitions, and conversation history</div>
+      </div>`;
+
+    const sections = [
+      renderAnatomySection("System prompt", "system", pa.system, "agent's hidden instructions"),
+      renderAnatomySection("Tool definitions", "tools", pa.tools, "schemas the model sees on every turn"),
+      renderAnatomySection("Conversation history", "history", pa.history, "previous turns re-shipped each request"),
+      renderAnatomySection("Current user turn", "user", pa.user, "what you actually typed"),
+    ].join("");
+
+    return bar + summary + '<div class="anatomy-sections">' + sections + "</div>";
+  }
+
+  function renderAnatomySection(label, key, section, sublabel) {
+    const pct = ((section.bytes / Math.max(1, section.bytes + 1)) * 100).toFixed(1);
+    const items = section.items || [];
+    const detail = items.length ? items.map((it, i) => renderAnatomyItem(key, it, i)).join("") : '<div class="hint" style="padding:8px">empty</div>';
+    return `
+      <details class="anatomy-section">
+        <summary>
+          <span class="anatomy-swatch audit-seg-${key}"></span>
+          <b>${esc(label)}</b>
+          <span class="anatomy-meta">${fmtBytes(section.bytes)} · ${section.tokens} tok · ${section.count} item${section.count === 1 ? "" : "s"}</span>
+          <span class="hint">${esc(sublabel)}</span>
+        </summary>
+        <div class="anatomy-items">${detail}</div>
+      </details>`;
+  }
+
+  function renderAnatomyItem(key, it, idx) {
+    if (key === "tools") {
+      const schema = it.schema ? '<pre class="anatomy-content">' + esc(JSON.stringify(it.schema, null, 2)) + '</pre>' : "";
+      return `
+        <details class="anatomy-item">
+          <summary><b>${esc(it.name)}</b> <span class="anatomy-meta">${fmtBytes(it.bytes)} · ${it.tokens} tok</span></summary>
+          ${it.description ? '<div class="anatomy-desc">' + esc(it.description) + '</div>' : ""}
+          ${schema}
+        </details>`;
+    }
+    // system / history / user — content is text
+    const role = it.role || "—";
+    return `
+      <details class="anatomy-item">
+        <summary><span class="msg-role ${esc(role)}">${esc(role)}</span> <span class="anatomy-meta">#${idx} · ${fmtBytes(it.bytes)} · ${it.tokens} tok</span></summary>
+        <pre class="anatomy-content">${esc(it.content || "")}</pre>
+      </details>`;
   }
 
   function renderMessageBlocks(prompt_body) {

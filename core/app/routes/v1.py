@@ -24,7 +24,7 @@ from app.audit import build_audit
 from app.audit_meta import extract as extract_meta
 from app.audit_meta import extract_source
 from app.auth import authenticate
-from app.capture import capture_prompt, capture_response
+from app.capture import capture_prompt, capture_response, capture_tools
 from app.classify import assemble_user_text, classify
 from app.classify_llm import maybe_upgrade_classification
 from app.db import queries
@@ -220,6 +220,7 @@ async def _process_chat_request(
         decision_reason = f"explicit:{model_requested}"
 
     captured = capture_prompt(messages, classification.sensitivity)
+    captured_tools = capture_tools(payload.get("tools"), classification.sensitivity)
 
     # PRECAPTURE
     await queries.precapture(
@@ -239,6 +240,8 @@ async def _process_chat_request(
         prompt_excerpt=prompt_excerpt,
         prompt_body=captured.body,
         prompt_body_truncated_at_byte=captured.truncated_at_byte,
+        tools_body=captured_tools.body,
+        tools_body_truncated_at_byte=captured_tools.truncated_at_byte,
         source_ip=source_ip,
         source_hostname=source_hostname,
         messages_count=audit_meta["messages_count"],

@@ -328,6 +328,96 @@ table.clickable tbody tr { cursor: pointer; }
 .audit-seg-history { background: #388bfd; }
 .audit-seg-user { background: #4caf50; }
 
+/* Payload Anatomy panel */
+.anatomy-summary {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 6px 0 12px 0;
+  line-height: 1.6;
+}
+.anatomy-sections { display: flex; flex-direction: column; gap: 6px; }
+.anatomy-section {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated, rgba(255,255,255,0.02));
+}
+.anatomy-section > summary {
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  list-style: none;
+}
+.anatomy-section > summary::-webkit-details-marker { display: none; }
+.anatomy-section > summary::before {
+  content: "▶";
+  font-size: 9px;
+  color: var(--text-dim);
+  transition: transform 0.15s;
+}
+.anatomy-section[open] > summary::before { transform: rotate(90deg); }
+.anatomy-swatch {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 2px;
+}
+.anatomy-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+.anatomy-section .hint { font-size: 11px; }
+.anatomy-items {
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(0,0,0,0.15);
+}
+.anatomy-item {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg, rgba(255,255,255,0.03));
+}
+.anatomy-item > summary {
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+.anatomy-item > summary::-webkit-details-marker { display: none; }
+.anatomy-item > summary::before {
+  content: "▶";
+  font-size: 8px;
+  color: var(--text-dim);
+}
+.anatomy-item[open] > summary::before { transform: rotate(90deg); }
+.anatomy-desc {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+.anatomy-content {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0,0,0,0.3);
+  border-top: 1px solid var(--border);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .audit-meta-right {
   font-family: var(--mono);
   font-size: 11px;

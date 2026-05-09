@@ -72,6 +72,27 @@ def capture_prompt(
     return CapturedBody(body=body, truncated_at_byte=trunc)
 
 
+def capture_tools(
+    tools: list[dict] | None,
+    sensitivity: str,
+    *,
+    cap_bytes: int = BODY_CAPTURE_CAP_BYTES_DEFAULT,
+) -> CapturedBody:
+    """Capture the tools array (function/tool definitions sent upstream).
+
+    Same policy as capture_prompt: ``secret`` → no capture; ``pii`` → redact.
+    Tool schemas typically don't carry user PII, but tool descriptions can
+    leak agent-identity / proprietary info, so we still apply the cap.
+    """
+    if sensitivity == "secret" or not tools:
+        return CapturedBody(body=None, truncated_at_byte=None)
+    serialized = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+    if sensitivity == "pii":
+        serialized = redact(serialized)
+    body, trunc = _truncate(serialized, cap_bytes)
+    return CapturedBody(body=body, truncated_at_byte=trunc)
+
+
 def capture_response(
     response: object | None,
     sensitivity: str,

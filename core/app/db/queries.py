@@ -29,6 +29,8 @@ async def precapture(
     classified_score: float | None = None,
     prompt_body: str | None = None,
     prompt_body_truncated_at_byte: int | None = None,
+    tools_body: str | None = None,
+    tools_body_truncated_at_byte: int | None = None,
     brain_hints: dict | None = None,
     source_ip: str | None = None,
     source_hostname: str | None = None,
@@ -49,11 +51,13 @@ async def precapture(
                  classified_sensitivity, classified_signals, brain_hints,
                  decision_provider, decision_model, decision_reason,
                  prompt_body, prompt_body_truncated_at_byte,
+                 tools_body, tools_body_truncated_at_byte,
                  source_ip, source_hostname, messages_count, tools_count,
                  stream_flag, request_size_bytes)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
                     $12, $13, $14, $15, $16,
-                    $17::inet, $18, $19, $20, $21, $22)
+                    $17, $18,
+                    $19::inet, $20, $21, $22, $23, $24)
             """,
             decision_id,
             agent_id,
@@ -71,6 +75,8 @@ async def precapture(
             decision_reason,
             prompt_body,
             prompt_body_truncated_at_byte,
+            tools_body,
+            tools_body_truncated_at_byte,
             source_ip,
             source_hostname,
             messages_count,
@@ -418,6 +424,8 @@ async def get_decision_detail(
                d.prompt_excerpt                AS prompt_excerpt,
                d.prompt_body                   AS prompt_body,
                d.prompt_body_truncated_at_byte AS prompt_body_truncated_at_byte,
+               d.tools_body                    AS tools_body,
+               d.tools_body_truncated_at_byte  AS tools_body_truncated_at_byte,
                d.source_ip::text               AS source_ip,
                d.source_hostname               AS source_hostname,
                d.messages_count                AS messages_count,
@@ -466,7 +474,140 @@ async def get_decision_detail(
                 pass
     # Token breakdown computed on read from prompt_body when body was captured.
     d["token_estimate"] = _token_breakdown_from_body(d.get("prompt_body"), _content_text, _estimate_tokens)
+    # Full payload anatomy — bytes/tokens per section + the raw content of each.
+    # This is what answers "when I type 4 words, what *actually* ships upstream?"
+    d["payload_anatomy"] = _payload_anatomy(
+        d.get("prompt_body"), d.get("tools_body"), _content_text, _estimate_tokens
+    )
     return d
+
+
+def _payload_anatomy(
+    prompt_body: str | None,
+    tools_body: str | None,
+    content_fn,
+    est_fn,
+) -> dict:
+    """Break the captured request body into the categories the provider sees.
+
+    Returns a dict with five keys: ``system``, ``tools``, ``history``, ``user``,
+    ``totals``. Each section carries:
+        bytes:    UTF-8 byte length of the serialized JSON for that section
+        tokens:   rough char/4 token estimate
+        items:    list of per-item dicts (so the UI can render expandable blocks)
+
+    Sections may be empty (``items: []``) but the keys are always present so
+    the frontend can render a stable layout.
+    """
+
+    def _utf8_len(text: str) -> int:
+        return len(text.encode("utf-8"))
+
+    def _section_bytes(items: list[dict]) -> int:
+        if not items:
+            return 0
+        return _utf8_len(json.dumps(items, ensure_ascii=False, separators=(",", ":")))
+
+    system_items: list[dict] = []
+    history_items: list[dict] = []
+    user_items: list[dict] = []
+    tool_items: list[dict] = []
+
+    # --- Parse prompt_body ---------------------------------------------
+    messages: list[dict] | None = None
+    if prompt_body:
+        try:
+            data = json.loads(prompt_body)
+            if isinstance(data, list):
+                messages = data
+            elif isinstance(data, dict):
+                m = data.get("messages")
+                if isinstance(m, list):
+                    messages = m
+        except (ValueError, TypeError):
+            messages = None
+
+    if messages:
+        last_user_idx = -1
+        for i, m in enumerate(messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_user_idx = i
+        for i, m in enumerate(messages):
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            text = content_fn(m.get("content"))
+            entry = {
+                "role": role,
+                "content": text,
+                "bytes": _utf8_len(text),
+                "tokens": est_fn(text),
+            }
+            if role == "system":
+                system_items.append(entry)
+            elif i == last_user_idx and role == "user":
+                user_items.append(entry)
+            else:
+                history_items.append(entry)
+
+    # --- Parse tools_body ----------------------------------------------
+    if tools_body:
+        try:
+            tools = json.loads(tools_body)
+        except (ValueError, TypeError):
+            tools = None
+        if isinstance(tools, list):
+            for t in tools:
+                if not isinstance(t, dict):
+                    continue
+                # OpenAI shape: {"type":"function","function":{"name":..., "description":..., "parameters":...}}
+                # Anthropic shape: {"name":..., "description":..., "input_schema":...}
+                fn = t.get("function") if isinstance(t.get("function"), dict) else t
+                name = fn.get("name") or t.get("name") or "(unnamed)"
+                desc = fn.get("description") or t.get("description") or ""
+                schema = fn.get("parameters") or t.get("input_schema") or {}
+                serialized = json.dumps(t, ensure_ascii=False, separators=(",", ":"))
+                tool_items.append(
+                    {
+                        "name": name,
+                        "description": desc,
+                        "schema": schema,
+                        "bytes": _utf8_len(serialized),
+                        "tokens": est_fn(serialized),
+                    }
+                )
+
+    def _section(items: list[dict]) -> dict:
+        return {
+            "bytes": _section_bytes(items),
+            "tokens": sum(i.get("tokens", 0) for i in items),
+            "count": len(items),
+            "items": items,
+        }
+
+    sys_section = _section(system_items)
+    tools_section = _section(tool_items)
+    history_section = _section(history_items)
+    user_section = _section(user_items)
+
+    total_bytes = (
+        sys_section["bytes"] + tools_section["bytes"] + history_section["bytes"] + user_section["bytes"]
+    )
+    total_tokens = (
+        sys_section["tokens"] + tools_section["tokens"] + history_section["tokens"] + user_section["tokens"]
+    )
+
+    return {
+        "system": sys_section,
+        "tools": tools_section,
+        "history": history_section,
+        "user": user_section,
+        "totals": {
+            "bytes": total_bytes,
+            "tokens": total_tokens,
+            "user_pct": (user_section["bytes"] / total_bytes) if total_bytes else 0.0,
+        },
+    }
 
 
 def _token_breakdown_from_body(body: str | None, content_fn, est_fn) -> dict | None:
