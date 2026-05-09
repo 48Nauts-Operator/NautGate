@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # override via NAUTGATE_ROUTING_CONFIG_PATH=/etc/nautgate/routing.yaml.
     nautgate_routing_config_path: str | None = None
 
+    # Provider/model pricing. Defaults to <repo>/config/pricing.yaml.
+    nautgate_pricing_config_path: str | None = None
+
     nautrouter_base_url: str = "http://localhost:8404"
 
     # CLASSIFY slow-path (Tech Paper §7.3). Off by default. When on, ambiguous

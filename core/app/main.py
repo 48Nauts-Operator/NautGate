@@ -11,6 +11,7 @@ from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
 from app.logging_config import configure_logging
 from app.plugins import PluginRegistry
+from app.pricing import PricingTable
 from app.provider_health import ProviderHealthTracker
 from app.routes import health, v1
 from app.scoring import load_routing_table
@@ -20,6 +21,7 @@ from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
 DEFAULT_ROUTING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "routing.yaml"
+DEFAULT_PRICING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "pricing.yaml"
 
 
 @asynccontextmanager
@@ -49,6 +51,11 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("routing_table_load_failed", path=str(routing_path), error=str(exc))
         app.state.routing_table = None
+
+    # Pricing config — feeds the per-outcome cost calculation.
+    pricing_path = Path(settings.nautgate_pricing_config_path or DEFAULT_PRICING_CONFIG)
+    app.state.pricing = PricingTable.from_yaml(pricing_path)
+    log.info("pricing_table_loaded", path=str(pricing_path), models=app.state.pricing.size)
 
     if settings.nautgate_db_url:
         try:

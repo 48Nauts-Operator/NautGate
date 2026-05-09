@@ -109,6 +109,7 @@
 
   function refreshActive() {
     if (activeTab === "overview") loadOverview();
+    else if (activeTab === "cost") loadCost();
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
@@ -175,6 +176,141 @@
   }
 
   document.getElementById("dec-reload").addEventListener("click", loadDecisions);
+
+  // --- Cost ---------------------------------------------------------------
+
+  let costChart = null;
+  let costWindow = { hours: 24, bucket: "hour" };
+
+  document.querySelectorAll(".window-buttons button").forEach((b) => {
+    b.addEventListener("click", () => {
+      costWindow = { hours: Number(b.dataset.window), bucket: b.dataset.bucket };
+      document
+        .querySelectorAll(".window-buttons button")
+        .forEach((x) => x.classList.toggle("active", x === b));
+      loadCost();
+    });
+  });
+
+  async function loadCost() {
+    if (!getToken()) return;
+    try {
+      const [summary, ts] = await Promise.all([
+        api(`/v1/cost/summary?hours=${costWindow.hours}`),
+        api(
+          `/v1/cost/timeseries?hours=${costWindow.hours}&bucket=${costWindow.bucket}`
+        ),
+      ]);
+      renderCostSummary(summary);
+      renderCostChart(ts);
+    } catch (e) {
+      /* swallow; auth chip explains */
+    }
+  }
+
+  function renderCostSummary(s) {
+    document.getElementById("c-total").textContent = usd(s.total_cost_usd);
+    document.getElementById("c-calls").textContent = s.total_calls ?? 0;
+    const avg =
+      s.total_cost_usd && s.total_calls
+        ? s.total_cost_usd / s.total_calls
+        : null;
+    document.getElementById("c-avg").textContent = usd(avg);
+    document.getElementById("c-tokens").textContent =
+      ((s.total_prompt_tokens || 0) + (s.total_completion_tokens || 0)).toLocaleString();
+
+    fillCostTable("cost-provider", s.by_provider, ["key", "cost_usd", "calls"]);
+    fillCostTable("cost-model", s.by_model, ["key", "cost_usd", "calls"]);
+    fillCostTierTable("cost-tier", s.by_tier);
+  }
+
+  function fillCostTable(id, rows, fields) {
+    const tbody = document.querySelector("#" + id + " tbody");
+    tbody.innerHTML = (rows || [])
+      .map(
+        (r) =>
+          `<tr><td>${esc(r[fields[0]] || "—")}</td><td>${usd(r[fields[1]])}</td><td>${r[fields[2]] || 0}</td></tr>`
+      )
+      .join("");
+  }
+
+  function fillCostTierTable(id, rows) {
+    const tbody = document.querySelector("#" + id + " tbody");
+    tbody.innerHTML = (rows || [])
+      .map(
+        (r) =>
+          `<tr><td><span class="tag tier">${esc(r.key || "—")}</span></td><td>${usd(r.cost_usd)}</td><td>${r.calls || 0}</td><td>${(r.prompt_tokens || 0).toLocaleString()} / ${(r.completion_tokens || 0).toLocaleString()}</td></tr>`
+      )
+      .join("");
+  }
+
+  function renderCostChart(ts) {
+    const canvas = document.getElementById("cost-chart");
+    if (!canvas || !window.Chart) return;
+
+    // Build a unified x-axis (all unique bucket timestamps, sorted).
+    const allTs = new Set();
+    ts.series.forEach((s) => s.points.forEach((p) => allTs.add(p.ts)));
+    const labels = Array.from(allTs).sort();
+
+    // Convert each series to a value array aligned to `labels`.
+    const palette = ["#6ea5ff", "#10b981", "#f59e0b", "#ef4444", "#a78bfa", "#22d3ee"];
+    const datasets = ts.series.map((s, i) => {
+      const byTs = Object.fromEntries(s.points.map((p) => [p.ts, p.cost_usd]));
+      return {
+        label: s.provider,
+        data: labels.map((t) => byTs[t] ?? 0),
+        borderColor: palette[i % palette.length],
+        backgroundColor: palette[i % palette.length] + "33",
+        tension: 0.3,
+        fill: false,
+      };
+    });
+
+    if (costChart) costChart.destroy();
+    costChart = new Chart(canvas, {
+      type: "line",
+      data: { labels: labels.map(shortLabel), datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: "#d8e0ec" } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.dataset.label}: ${usd(ctx.parsed.y)}`,
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { color: "#7a8595" }, grid: { color: "#1f2630" } },
+          y: {
+            ticks: {
+              color: "#7a8595",
+              callback: (v) => "$" + Number(v).toFixed(4),
+            },
+            grid: { color: "#1f2630" },
+          },
+        },
+      },
+    });
+  }
+
+  function shortLabel(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (costWindow.bucket === "day") {
+      return d.toISOString().substr(5, 5); // MM-DD
+    }
+    return d.toISOString().substr(11, 5); // HH:MM
+  }
+
+  function usd(n) {
+    if (n === null || n === undefined) return "—";
+    if (n < 0.01) return "$" + n.toFixed(6);
+    if (n < 1) return "$" + n.toFixed(4);
+    return "$" + n.toFixed(2);
+  }
 
   // --- Models / Provider health ------------------------------------------
 

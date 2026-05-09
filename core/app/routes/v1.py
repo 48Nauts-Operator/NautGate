@@ -293,6 +293,17 @@ async def _process_chat_request(
 
     response_captured = capture_response(upstream_resp, classification.sensitivity)
     spool = getattr(request.app.state, "outcome_spool", None)
+    pricing = getattr(request.app.state, "pricing", None)
+    cost_usd = (
+        pricing.compute_cost(
+            decision_provider,
+            decision_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        if pricing is not None
+        else None
+    )
     await persist_outcome(
         pool,
         spool,
@@ -301,6 +312,7 @@ async def _process_chat_request(
         duration_ms=duration_ms,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        cost_usd=cost_usd,
         was_empty=was_empty,
         response_body=response_captured.body,
         response_body_truncated_at_byte=response_captured.truncated_at_byte,
@@ -422,6 +434,17 @@ def _streaming_response(
                 parsed.get("assembled_content"), classification_sensitivity
             )
             spool = getattr(request.app.state, "outcome_spool", None)
+            stream_pricing = getattr(request.app.state, "pricing", None)
+            stream_cost_usd = (
+                stream_pricing.compute_cost(
+                    decision_provider,
+                    decision_model,
+                    prompt_tokens=parsed.get("prompt_tokens"),
+                    completion_tokens=parsed.get("completion_tokens"),
+                )
+                if stream_pricing is not None
+                else None
+            )
             try:
                 await persist_outcome(
                     pool,
@@ -433,6 +456,7 @@ def _streaming_response(
                     prompt_tokens=parsed.get("prompt_tokens"),
                     completion_tokens=parsed.get("completion_tokens"),
                     reasoning_tokens=parsed.get("reasoning_tokens"),
+                    cost_usd=stream_cost_usd,
                     was_empty=parsed.get("was_empty", False),
                     was_truncated=capture.was_truncated,
                     truncated_at_byte=capture.truncated_at_byte,
@@ -663,6 +687,55 @@ async def list_models(request: Request) -> Response:
         },
     )
     return JSONResponse({"object": "list", "data": data})
+
+
+@router.get("/cost/summary")
+async def cost_summary(request: Request) -> Response:
+    """Total cost + by-provider/model/tier breakdowns over the last `?hours=N`."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    try:
+        hours = int(request.query_params.get("hours", "24"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+
+    return JSONResponse(await queries.get_cost_summary(pool, agent_id=agent_id, hours=hours))
+
+
+@router.get("/cost/timeseries")
+async def cost_timeseries(request: Request) -> Response:
+    """Bucketed cost time-series for the line chart.
+
+    Query params:
+      bucket : "hour" (default) or "day"
+      hours  : 1..720 (default 168 = 7 days)
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    bucket = request.query_params.get("bucket", "hour")
+    if bucket not in ("hour", "day"):
+        raise HTTPException(status_code=400, detail="bucket must be 'hour' or 'day'")
+
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+
+    return JSONResponse(
+        await queries.get_cost_timeseries(
+            pool, agent_id=agent_id, bucket=bucket, hours=hours
+        )
+    )
 
 
 @router.get("/decisions/recent")

@@ -11,6 +11,7 @@
     <h1>NautGate <span class="version" id="version">v0.1</span></h1>
     <nav>
       <a href="#overview" data-tab="overview" class="active">Overview</a>
+      <a href="#cost" data-tab="cost">Cost</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
       <a href="#health" data-tab="health">Provider health</a>
       <a href="#models" data-tab="models">Models</a>
@@ -39,6 +40,41 @@
 
       <h3>By inbound format</h3>
       <div id="format-bars" class="bars"></div>
+    </section>
+
+    <!-- Cost ---------------------------------------------------------------->
+    <section id="tab-cost" class="tab">
+      <h2>Cost
+        <span class="window-buttons">
+          <button data-window="1" data-bucket="hour">1h</button>
+          <button data-window="24" data-bucket="hour" class="active">24h</button>
+          <button data-window="168" data-bucket="hour">7d</button>
+          <button data-window="720" data-bucket="day">30d</button>
+        </span>
+      </h2>
+      <div class="grid">
+        <div class="card"><div class="metric" id="c-total">$0.00</div><div class="label">total spend</div></div>
+        <div class="card"><div class="metric" id="c-calls">—</div><div class="label">calls</div></div>
+        <div class="card"><div class="metric" id="c-avg">—</div><div class="label">avg / call</div></div>
+        <div class="card"><div class="metric" id="c-tokens">—</div><div class="label">total tokens</div></div>
+      </div>
+
+      <h3>Spend over time, by provider</h3>
+      <div class="chart-wrap"><canvas id="cost-chart"></canvas></div>
+
+      <div class="grid-2">
+        <div>
+          <h3>By provider</h3>
+          <table id="cost-provider"><thead><tr><th>provider</th><th>cost</th><th>calls</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>By model</h3>
+          <table id="cost-model"><thead><tr><th>model</th><th>cost</th><th>calls</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+
+      <h3>By tier</h3>
+      <table id="cost-tier"><thead><tr><th>tier</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody></table>
     </section>
 
     <!-- Decisions ----------------------------------------------------------->
@@ -99,6 +135,7 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

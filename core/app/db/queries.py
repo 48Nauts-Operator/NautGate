@@ -183,6 +183,136 @@ async def upsert_routing_preferences(
     return await get_routing_preferences(pool, agent_id=agent_id)
 
 
+async def get_cost_summary(
+    pool: asyncpg.Pool,
+    *,
+    agent_id: str,
+    hours: int,
+) -> dict:
+    """Aggregate cost over the last N hours, broken down by provider/model/tier."""
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            """
+            SELECT COUNT(*)                          AS total_calls,
+                   SUM(o.cost_usd)::FLOAT            AS total_cost_usd,
+                   SUM(o.prompt_tokens)::BIGINT      AS total_prompt_tokens,
+                   SUM(o.completion_tokens)::BIGINT  AS total_completion_tokens
+              FROM nautgate.route_decisions d
+              LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+             WHERE d.agent_id = $1
+               AND d.ts > NOW() - make_interval(hours => $2)
+            """,
+            agent_id,
+            hours,
+        )
+
+        async def _by(field_sql: str):
+            rows = await conn.fetch(
+                f"""
+                SELECT {field_sql}                   AS k,
+                       SUM(o.cost_usd)::FLOAT        AS cost_usd,
+                       COUNT(*)                       AS calls,
+                       SUM(o.prompt_tokens)::BIGINT  AS prompt_tokens,
+                       SUM(o.completion_tokens)::BIGINT AS completion_tokens
+                  FROM nautgate.route_decisions d
+                  LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+                 WHERE d.agent_id = $1
+                   AND d.ts > NOW() - make_interval(hours => $2)
+                 GROUP BY {field_sql}
+                 ORDER BY cost_usd DESC NULLS LAST
+                """,
+                agent_id,
+                hours,
+            )
+            return [
+                {
+                    "key": r["k"],
+                    "cost_usd": r["cost_usd"],
+                    "calls": int(r["calls"]),
+                    "prompt_tokens": int(r["prompt_tokens"] or 0),
+                    "completion_tokens": int(r["completion_tokens"] or 0),
+                }
+                for r in rows
+            ]
+
+        by_provider = await _by("d.decision_provider")
+        by_model = await _by("d.decision_model")
+        by_tier = await _by("d.classified_tier")
+
+    return {
+        "agent_id": agent_id,
+        "window_hours": hours,
+        "total_calls": int((totals or {}).get("total_calls") or 0),
+        "total_cost_usd": (totals or {}).get("total_cost_usd"),
+        "total_prompt_tokens": int((totals or {}).get("total_prompt_tokens") or 0),
+        "total_completion_tokens": int((totals or {}).get("total_completion_tokens") or 0),
+        "by_provider": by_provider,
+        "by_model": by_model,
+        "by_tier": by_tier,
+    }
+
+
+async def get_cost_timeseries(
+    pool: asyncpg.Pool,
+    *,
+    agent_id: str,
+    bucket: str,
+    hours: int,
+) -> dict:
+    """Bucketed cost series suitable for a line chart.
+
+    Returns:
+        {
+            "agent_id": ...,
+            "bucket": "hour" | "day",
+            "window_hours": N,
+            "series": [
+                {"provider": "anthropic", "points": [{"ts": "...", "cost_usd": 0.01, "calls": 3}, ...]},
+                ...
+            ],
+        }
+
+    `bucket` MUST be one of {"hour", "day"} — caller validates and we trust it.
+    """
+    bucket = bucket if bucket in ("hour", "day") else "hour"
+    rows = await pool.fetch(
+        f"""
+        SELECT date_trunc('{bucket}', d.ts) AS bucket_ts,
+               d.decision_provider          AS provider,
+               SUM(o.cost_usd)::FLOAT       AS cost_usd,
+               COUNT(*)                      AS calls
+          FROM nautgate.route_decisions d
+          LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+         WHERE d.agent_id = $1
+           AND d.ts > NOW() - make_interval(hours => $2)
+         GROUP BY bucket_ts, provider
+         ORDER BY bucket_ts ASC
+        """,
+        agent_id,
+        hours,
+    )
+
+    series_map: dict[str, list[dict]] = {}
+    for r in rows:
+        provider = r["provider"] or "unknown"
+        series_map.setdefault(provider, []).append(
+            {
+                "ts": r["bucket_ts"].isoformat() if r["bucket_ts"] else None,
+                "cost_usd": r["cost_usd"],
+                "calls": int(r["calls"]),
+            }
+        )
+
+    return {
+        "agent_id": agent_id,
+        "bucket": bucket,
+        "window_hours": hours,
+        "series": [
+            {"provider": p, "points": points} for p, points in series_map.items()
+        ],
+    }
+
+
 async def get_recent_decisions(
     pool: asyncpg.Pool,
     *,

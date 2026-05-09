@@ -1,0 +1,55 @@
+# NautGate provider/model pricing — USD per MILLION tokens.
+#
+# Keys are "<provider>/<model>" matching what NautGate stores in
+# route_decisions.decision_provider / decision_model. When a request lands
+# at a (provider, model) not in this table, cost_usd is left NULL and a
+# warning is logged once per missing pair.
+#
+# Sources (verify monthly, prices change):
+#   Anthropic: https://docs.anthropic.com/en/docs/about-claude/pricing
+#   OpenAI:    https://openai.com/api/pricing/
+#   Google:    https://ai.google.dev/pricing
+#
+# `cache_read` / `cache_write` are reserved for future per-call cache
+# accounting; current cost calc uses only `input` × prompt_tokens +
+# `output` × completion_tokens.
+
+pricing:
+  # --- Anthropic (NautRouter's MODELS keys) ---
+  anthropic/claude-haiku-4.5:
+    input: 1.00
+    output: 5.00
+    cache_read: 0.10
+    cache_write: 1.25
+  anthropic/claude-sonnet-4:
+    input: 3.00
+    output: 15.00
+    cache_read: 0.30
+    cache_write: 3.75
+  anthropic/claude-opus-4:
+    input: 15.00
+    output: 75.00
+    cache_read: 1.50
+    cache_write: 18.75
+
+  # --- OpenAI ---
+  openai/gpt-4o-mini:
+    input: 0.15
+    output: 0.60
+    cache_read: 0.075
+  openai/gpt-4o:
+    input: 2.50
+    output: 10.00
+    cache_read: 1.25
+
+  # --- Google Gemini ---
+  gemini/gemini-2.5-flash:
+    input: 0.15
+    output: 0.60
+  gemini/gemini-2.5-pro:
+    input: 1.25
+    output: 10.00
+
+  # --- Local (free) ---
+  lmstudio/local: { input: 0, output: 0 }
+  anthropic/local: { input: 0, output: 0 }
