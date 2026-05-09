@@ -336,6 +336,97 @@ table.clickable tbody tr { cursor: pointer; }
 }
 .audit-meta-right .audit-cost { color: var(--text); font-weight: 500; }
 
+/* Tool-call chips on the audit row */
+.audit-tools-called {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.audit-tool-chip {
+  background: rgba(240, 136, 62, 0.12);
+  color: #f0883e;
+  border: 1px solid rgba(240, 136, 62, 0.4);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--mono);
+}
+
+/* Block-style message rendering */
+.msg-block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.msg-role {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.msg-role.system { color: #8957e5; }
+.msg-role.user { color: #4caf50; }
+.msg-role.assistant { color: #388bfd; }
+.msg-role.tool { color: #f0883e; }
+.msg-role.developer { color: #8957e5; }
+
+.msg-meta { color: var(--text-dim); font-size: 10px; }
+
+.block-text {
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.block-tool {
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(240, 136, 62, 0.06);
+  border-top: 1px dashed var(--border);
+}
+.block-tool .block-tool-head {
+  color: #f0883e;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.block-tool .block-tool-args {
+  color: var(--text-dim);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.block-image {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.block-tool-result {
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(56, 139, 253, 0.05);
+  border-top: 1px dashed var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+.block-tool-result .block-tool-head { color: #388bfd; font-weight: 600; margin-bottom: 4px; }
+
 .audit-detail {
   display: none;
   background: var(--bg-card);

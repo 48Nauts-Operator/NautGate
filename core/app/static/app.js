@@ -509,17 +509,18 @@
           ? "ok"
           : "dim";
         const total = r.prompt_tokens || 0;
-        // Server-side recent endpoint doesn't carry token_estimate; we just
-        // show the total as the "user" segment until detail is fetched.
         const bar = `<div class="audit-bar"><div class="audit-seg-user" style="width:100%"></div></div>`;
         const source = r.source_hostname || (r.source_ip ? r.source_ip : "—");
         const cost = r.cost_usd != null ? usd(r.cost_usd) : "—";
         const latency = r.duration_ms != null ? r.duration_ms + "ms" : "—";
+        const calls = (r.tool_calls_made || []).map((t) => `<span class="audit-tool-chip">${esc(t.name || "?")}</span>`).join("");
+        const callsLine = calls ? `<div class="audit-tools-called">${calls}</div>` : "";
         return `
           <div class="audit-row" data-decision="${esc(r.decision_id)}">
             <div class="audit-dot ${dot}"></div>
             <div>
               <div class="audit-model">${esc(r.model || r.model_requested || "—")} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span></div>
+              ${callsLine}
             </div>
             <div>${bar}<div class="audit-source" style="margin-top:2px">${total} tokens · ${(r.request_size_bytes || 0) >= 1024 ? Math.round(r.request_size_bytes / 1024) + "KB" : (r.request_size_bytes || 0) + "B"} req</div></div>
             <div class="audit-meta-right">
@@ -622,10 +623,10 @@
         .join("");
     }
 
-    // Prompt body (full visibility — this is the "what was sent" answer)
-    html += '<div class="section-title">Prompt body</div>';
+    // Prompt body — block-style (one msg-block per message)
+    html += '<div class="section-title">Prompt — what got sent</div>';
     if (d.prompt_body) {
-      html += '<pre class="body-block">' + esc(d.prompt_body) + "</pre>";
+      html += renderMessageBlocks(d.prompt_body);
       if (d.prompt_body_truncated_at_byte) {
         html += `<p class="hint">truncated at ${d.prompt_body_truncated_at_byte} bytes</p>`;
       }
@@ -636,14 +637,122 @@
       html += '<p class="hint">no body captured</p>';
     }
 
-    // Response body
-    html += '<div class="section-title">Response</div>';
-    if (d.response_body) {
-      html += '<pre class="body-block">' + esc(d.response_body) + "</pre>";
-    } else {
-      html += '<p class="hint">no response body</p>';
-    }
+    // Response — block-style with text + tool_use blocks
+    html += '<div class="section-title">Response — what came back</div>';
+    html += renderResponseBlocks(d);
     return html;
+  }
+
+  function renderMessageBlocks(prompt_body) {
+    let messages;
+    try {
+      const parsed = JSON.parse(prompt_body);
+      messages = Array.isArray(parsed) ? parsed : parsed.messages;
+    } catch (e) {
+      return '<pre class="body-block">' + esc(prompt_body) + "</pre>";
+    }
+    if (!Array.isArray(messages)) return '<pre class="body-block">' + esc(prompt_body) + "</pre>";
+    return messages.map(renderOneMessage).join("");
+  }
+
+  function renderOneMessage(msg, idx) {
+    const role = msg.role || "?";
+    const head = `<div class="msg-head"><span class="msg-role ${esc(role)}">${esc(role)}</span><span class="msg-meta">#${idx}</span></div>`;
+    const blocks = renderContentBlocks(msg.content, msg);
+    return `<div class="msg-block">${head}${blocks}</div>`;
+  }
+
+  function renderContentBlocks(content, msg) {
+    // String content → one text block.
+    if (typeof content === "string") {
+      const chunks = [`<div class="block-text">${esc(content)}</div>`];
+      // OpenAI Chat: assistant turns can also carry tool_calls separately.
+      if (msg && Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls) chunks.push(renderToolCallBlock(tc));
+      }
+      // OpenAI Chat: tool role messages have content + tool_call_id.
+      if (msg && msg.role === "tool" && msg.tool_call_id) {
+        return [renderToolResultBlock(msg.tool_call_id, content)].join("");
+      }
+      return chunks.join("");
+    }
+    if (!Array.isArray(content)) {
+      return `<div class="block-text">${esc(JSON.stringify(content))}</div>`;
+    }
+    return content.map((blk) => {
+      if (!blk || typeof blk !== "object") return "";
+      const t = blk.type;
+      if (t === "text" || t === "input_text" || t === "output_text") {
+        return `<div class="block-text">${esc(blk.text || "")}</div>`;
+      }
+      if (t === "tool_use") {
+        return renderToolCallBlock({ id: blk.id, function: { name: blk.name, arguments: JSON.stringify(blk.input || {}) } });
+      }
+      if (t === "tool_result") {
+        const tx = typeof blk.content === "string" ? blk.content : JSON.stringify(blk.content);
+        return renderToolResultBlock(blk.tool_use_id || blk.tool_call_id, tx);
+      }
+      if (t === "image" || t === "image_url" || t === "input_image") {
+        const src = (blk.source && blk.source.media_type) || "image";
+        return `<div class="block-image">[image · ${esc(src)}]</div>`;
+      }
+      return `<div class="block-text">${esc(JSON.stringify(blk))}</div>`;
+    }).join("");
+  }
+
+  function renderToolCallBlock(tc) {
+    const name = tc?.function?.name || tc?.name || "?";
+    const args = tc?.function?.arguments || tc?.arguments || "";
+    const id = tc?.id || "";
+    return `<div class="block-tool">
+      <div class="block-tool-head">→ tool_call · ${esc(name)}${id ? ' <span style="font-weight:400;color:var(--text-dim)">· ' + esc(id) + '</span>' : ''}</div>
+      <div class="block-tool-args">${esc(args)}</div>
+    </div>`;
+  }
+
+  function renderToolResultBlock(tool_id, content) {
+    return `<div class="block-tool-result">
+      <div class="block-tool-head">← tool_result${tool_id ? ' · <span style="font-weight:400;color:var(--text-dim)">' + esc(tool_id) + '</span>' : ''}</div>
+      ${esc(content || "")}
+    </div>`;
+  }
+
+  function renderResponseBlocks(d) {
+    // Streaming responses store the assembled text in response_body and the
+    // structured tool_calls separately. Non-streaming stores the full JSON
+    // response — we parse and render its message.content + tool_calls.
+    const calls = d.tool_calls_made || [];
+    const head = `<div class="msg-head"><span class="msg-role assistant">assistant</span><span class="msg-meta">${esc(d.decision_provider || "")} / ${esc(d.decision_model || "")}</span></div>`;
+    const inner = [];
+
+    let textContent = "";
+    if (d.response_body) {
+      // Try to parse as JSON (non-streaming). If that yields a chat completion,
+      // pull the message. Otherwise treat as plain text (streaming case).
+      try {
+        const parsed = JSON.parse(d.response_body);
+        if (parsed && Array.isArray(parsed.choices) && parsed.choices[0]?.message) {
+          const m = parsed.choices[0].message;
+          textContent = typeof m.content === "string" ? m.content : "";
+          if (Array.isArray(m.tool_calls) && !calls.length) {
+            for (const tc of m.tool_calls) inner.push(renderToolCallBlock(tc));
+          }
+        } else {
+          textContent = d.response_body;
+        }
+      } catch (e) {
+        textContent = d.response_body;
+      }
+    }
+    if (textContent) inner.unshift(`<div class="block-text">${esc(textContent)}</div>`);
+    for (const tc of calls) {
+      inner.push(renderToolCallBlock({
+        id: tc.id,
+        function: { name: tc.name, arguments: tc.arguments || "" },
+      }));
+    }
+    if (!inner.length) return '<p class="hint">no response body captured</p>';
+    return `<div class="msg-block">${head}${inner.join("")}</div>`;
   }
 
   function segPct(value, total, kind) {

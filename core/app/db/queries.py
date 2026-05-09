@@ -100,7 +100,9 @@ async def write_outcome(
     response_body: str | None = None,
     response_body_truncated_at_byte: int | None = None,
     response_size_bytes: int | None = None,
+    tool_calls_made: list[dict] | None = None,
 ) -> None:
+    tool_calls_json = json.dumps(tool_calls_made) if tool_calls_made else None
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -110,8 +112,9 @@ async def write_outcome(
                  was_empty, used_fallback, fallback_count, client_disconnected,
                  was_truncated, truncated_at_byte,
                  response_body, response_body_truncated_at_byte,
-                 response_size_bytes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                 response_size_bytes, tool_calls_made)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                    $18::jsonb)
             """,
             decision_id,
             status_code,
@@ -130,6 +133,7 @@ async def write_outcome(
             response_body,
             response_body_truncated_at_byte,
             response_size_bytes,
+            tool_calls_json,
         )
 
 
@@ -427,7 +431,8 @@ async def get_decision_detail(
                o.client_disconnected           AS client_disconnected,
                o.response_body                 AS response_body,
                o.response_body_truncated_at_byte AS response_body_truncated_at_byte,
-               o.response_size_bytes           AS response_size_bytes
+               o.response_size_bytes           AS response_size_bytes,
+               o.tool_calls_made               AS tool_calls_made
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.id::text = $1 AND d.agent_id = $2
@@ -445,7 +450,7 @@ async def get_decision_detail(
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
     # JSONB fields come back as strings from asyncpg without a codec — try to parse.
-    for k in ("classified_signals", "brain_hints"):
+    for k in ("classified_signals", "brain_hints", "tool_calls_made"):
         v = d.get(k)
         if isinstance(v, str):
             try:
@@ -535,7 +540,8 @@ async def get_recent_decisions(
                o.was_empty          AS was_empty,
                o.was_truncated      AS was_truncated,
                o.client_disconnected AS client_disconnected,
-               o.response_size_bytes AS response_size_bytes
+               o.response_size_bytes AS response_size_bytes,
+               o.tool_calls_made    AS tool_calls_made
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.agent_id = $1
@@ -554,6 +560,11 @@ async def get_recent_decisions(
             d["score"] = float(d["score"])
         if d.get("cost_usd") is not None:
             d["cost_usd"] = float(d["cost_usd"])
+        if isinstance(d.get("tool_calls_made"), str):
+            try:
+                d["tool_calls_made"] = json.loads(d["tool_calls_made"])
+            except (ValueError, TypeError):
+                d["tool_calls_made"] = None
         out.append(d)
     return out
 

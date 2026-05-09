@@ -98,6 +98,11 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     reasoning_tokens: int | None = None
     finish_reason: str | None = None
     content_parts: list[str] = []
+    # tool_calls accumulator — keyed by tool_call index for OpenAI Chat streaming;
+    # for Anthropic, keyed by content_block index. Both stream incrementally.
+    tool_calls_acc: dict[int, dict] = {}
+    # Anthropic content-block index → tool name/id captured at block start.
+    anthropic_blocks: dict[int, dict] = {}
 
     for _event_type, data in _iter_sse_events(buf):
         if data == "[DONE]":
@@ -108,7 +113,6 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
             continue
 
         # ---- OpenAI Chat shape ----
-        # {"choices":[{"delta":{"content":"..."},"finish_reason":...}],"usage":{...}}
         choices = payload.get("choices")
         if isinstance(choices, list) and choices:
             ch = choices[0]
@@ -118,6 +122,20 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
                 content_parts.append(piece)
             if ch.get("finish_reason"):
                 finish_reason = ch["finish_reason"]
+            for tc in delta.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                idx = tc.get("index", 0)
+                slot = tool_calls_acc.setdefault(
+                    idx, {"id": None, "name": None, "arguments": ""}
+                )
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = fn["name"]
+                if isinstance(fn.get("arguments"), str):
+                    slot["arguments"] += fn["arguments"]
 
         usage = payload.get("usage")
         if isinstance(usage, dict):
@@ -128,17 +146,29 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
                 reasoning_tokens = details.get("reasoning_tokens", reasoning_tokens)
 
         # ---- Anthropic Messages shape ----
-        # message_start carries usage.input_tokens; content_block_delta(text_delta) carries text;
-        # message_delta carries stop_reason and usage.output_tokens.
         ptype = payload.get("type")
         if ptype == "message_start":
             msg = payload.get("message") or {}
             u = msg.get("usage") or {}
             prompt_tokens = u.get("input_tokens", prompt_tokens)
+        elif ptype == "content_block_start":
+            cb = payload.get("content_block") or {}
+            if cb.get("type") == "tool_use":
+                idx = payload.get("index", 0)
+                anthropic_blocks[idx] = {
+                    "id": cb.get("id"),
+                    "name": cb.get("name"),
+                    "arguments": "",
+                }
         elif ptype == "content_block_delta":
             d = payload.get("delta") or {}
             if d.get("type") == "text_delta" and isinstance(d.get("text"), str):
                 content_parts.append(d["text"])
+            elif d.get("type") == "input_json_delta":
+                idx = payload.get("index", 0)
+                slot = anthropic_blocks.get(idx)
+                if slot is not None and isinstance(d.get("partial_json"), str):
+                    slot["arguments"] += d["partial_json"]
         elif ptype == "message_delta":
             d = payload.get("delta") or {}
             if d.get("stop_reason"):
@@ -150,6 +180,22 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     assembled = "".join(content_parts)
     was_empty = bool((completion_tokens or 0) > 0 and not assembled)
 
+    # Combine OpenAI-streamed and Anthropic-streamed tool calls — only one of
+    # the two will actually be populated per request.
+    tool_calls: list[dict] = []
+    for idx in sorted(tool_calls_acc.keys()):
+        s = tool_calls_acc[idx]
+        if s.get("name"):
+            tool_calls.append(
+                {"id": s.get("id"), "name": s["name"], "arguments": s.get("arguments") or ""}
+            )
+    for idx in sorted(anthropic_blocks.keys()):
+        s = anthropic_blocks[idx]
+        if s.get("name"):
+            tool_calls.append(
+                {"id": s.get("id"), "name": s["name"], "arguments": s.get("arguments") or ""}
+            )
+
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -157,4 +203,5 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         "finish_reason": finish_reason,
         "assembled_content": assembled,
         "was_empty": was_empty,
+        "tool_calls": tool_calls,
     }

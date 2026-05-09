@@ -36,6 +36,37 @@ from app.scoring import resolve_healthy, score, to_tier
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 
 AUTO_MODEL_TOKEN = "auto"
+TOOL_CALL_ARG_EXCERPT_BYTES = 200
+
+
+def _normalize_tool_calls(raw: list, sensitivity: str) -> list[dict] | None:
+    """Coerce a list of {id, name, arguments} dicts into a JSONB-safe shape.
+
+    Truncates each call's arguments to TOOL_CALL_ARG_EXCERPT_BYTES so storage
+    stays bounded — the full body is already in response_body when policy
+    permits. When sensitivity is "secret", arguments are dropped entirely;
+    we keep the names so the audit can still answer "which tools fired".
+    """
+    if not raw:
+        return None
+    out: list[dict] = []
+    for tc in raw:
+        if not isinstance(tc, dict):
+            continue
+        # OpenAI Chat shape from non-streaming has nested .function.{name,arguments};
+        # streaming-parsed shape from streaming.py is already flattened.
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+        name = (fn or tc).get("name") if fn is not None else tc.get("name")
+        args = (fn or tc).get("arguments") if fn is not None else tc.get("arguments")
+        if not name:
+            continue
+        entry = {"id": tc.get("id"), "name": name}
+        if sensitivity != "secret" and isinstance(args, str) and args:
+            entry["arguments"] = args[:TOOL_CALL_ARG_EXCERPT_BYTES]
+            if len(args) > TOOL_CALL_ARG_EXCERPT_BYTES:
+                entry["arguments_truncated"] = True
+        out.append(entry)
+    return out or None
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 log = structlog.get_logger()
@@ -294,15 +325,20 @@ async def _process_chat_request(
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     was_empty = False
+    tool_calls_made: list[dict] | None = None
     if upstream_resp:
         usage = upstream_resp.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
         try:
-            content = upstream_resp["choices"][0]["message"].get("content", "") or ""
+            msg = upstream_resp["choices"][0]["message"]
+            content = msg.get("content", "") or ""
+            raw_calls = msg.get("tool_calls") or []
         except (KeyError, IndexError, TypeError):
             content = ""
-        was_empty = bool((completion_tokens or 0) > 0 and not content)
+            raw_calls = []
+        was_empty = bool((completion_tokens or 0) > 0 and not content and not raw_calls)
+        tool_calls_made = _normalize_tool_calls(raw_calls, classification.sensitivity)
 
     response_captured = capture_response(upstream_resp, classification.sensitivity)
     spool = getattr(request.app.state, "outcome_spool", None)
@@ -335,6 +371,7 @@ async def _process_chat_request(
         response_body=response_captured.body,
         response_body_truncated_at_byte=response_captured.truncated_at_byte,
         response_size_bytes=response_size_bytes,
+        tool_calls_made=tool_calls_made,
     )
 
     if decision_provider != "passthrough":
@@ -465,6 +502,9 @@ def _streaming_response(
                 else None
             )
             try:
+                stream_tool_calls = _normalize_tool_calls(
+                    parsed.get("tool_calls") or [], classification_sensitivity
+                )
                 await persist_outcome(
                     pool,
                     spool,
@@ -483,6 +523,7 @@ def _streaming_response(
                     response_body=response_captured.body,
                     response_body_truncated_at_byte=response_captured.truncated_at_byte,
                     response_size_bytes=capture.bytes_seen,
+                    tool_calls_made=stream_tool_calls,
                 )
             except Exception as exc:
                 log.error(
