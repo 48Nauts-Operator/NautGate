@@ -16,7 +16,11 @@
   const authState = document.getElementById("auth-state");
 
   function getToken() {
-    return localStorage.getItem(TOKEN_KEY) || "";
+    // Order: explicit user-saved token in localStorage > server-injected meta token.
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (stored) return stored;
+    const meta = document.querySelector('meta[name="nautgate-token"]');
+    return meta ? meta.getAttribute("content") || "" : "";
   }
   function setToken(t) {
     if (t) localStorage.setItem(TOKEN_KEY, t);
@@ -25,8 +29,11 @@
   }
   function renderAuth() {
     const t = getToken();
+    const fromMeta =
+      !localStorage.getItem(TOKEN_KEY) &&
+      !!document.querySelector('meta[name="nautgate-token"]');
     if (t) {
-      authState.textContent = "saved";
+      authState.textContent = fromMeta ? "auto" : "saved";
       authState.classList.add("ok");
       authState.classList.remove("bad");
       tokenInput.value = t.slice(0, 12) + "…";

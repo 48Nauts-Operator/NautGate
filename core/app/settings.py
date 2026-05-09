@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     nautgate_classify_llm_confirm_model: str = "claude-haiku-4-5"
     nautgate_classify_llm_confirm_timeout_s: float = 0.5
 
+    # Dashboard auto-auth: when set, the /dashboard HTML embeds this token in a
+    # <meta> tag so the JS skips the manual entry. Single-operator local use only;
+    # never set on a multi-tenant or internet-exposed deploy.
+    nautgate_local_admin_token: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import queries
@@ -109,10 +109,25 @@ def create_app() -> FastAPI:
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        index_html = (static_dir / "index.html").read_text(encoding="utf-8")
 
         @app.get("/dashboard")
-        async def dashboard_index() -> FileResponse:
-            return FileResponse(str(static_dir / "index.html"))
+        async def dashboard_index() -> HTMLResponse:
+            # If a local admin token is configured, inject it into a <meta> tag
+            # so the JS skips manual entry. Token is server-rendered into the
+            # HTML body — never travels via URL or cookie.
+            settings = get_settings()
+            token_meta = ""
+            if settings.nautgate_local_admin_token:
+                # Single-quote attribute escape: tokens are urlsafe-base64 + hex,
+                # never contain quotes, but be defensive.
+                t = settings.nautgate_local_admin_token.replace('"', "&quot;")
+                token_meta = f'\n  <meta name="nautgate-token" content="{t}">'
+            html = index_html.replace(
+                "<title>NautGate</title>",
+                f"<title>NautGate</title>{token_meta}",
+            )
+            return HTMLResponse(html)
 
         @app.get("/")
         async def root_redirect() -> RedirectResponse:
