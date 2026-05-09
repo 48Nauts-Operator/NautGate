@@ -64,16 +64,44 @@ _RE_MEDICAL = re.compile(
     r"acute|hypertension|diabet\w+|anesthe\w+|carcinoma)\b",
     re.IGNORECASE,
 )
+# Programming-domain prose markers — caught even without fenced code.
+# Triggers a `deep`-tier floor so iOS / Android / framework questions don't
+# land on chitchat-tier models (e.g. claude-haiku for SwiftUI = wrong fit).
+_RE_PROGRAMMING_DOMAIN = re.compile(
+    r"\b(?:"
+    # Mobile / native
+    r"ios|android|swift\w*|swiftui|uikit|xcode|kotlin|jetpack compose|objective-?c|"
+    # Web frameworks / langs
+    r"typescript|javascript|react(?:\.js)?|next\.js|vue|angular|svelte|nuxt|"
+    r"python|django|fastapi|flask|node\.?js|deno|bun|"
+    # Backend / systems
+    r"rust|golang|\bgo lang\b|c\+\+|java(?!script)|scala|elixir|"
+    # Data / infra
+    r"postgres\w*|mysql|mongodb|redis|kafka|kubernetes|k8s|docker|terraform|"
+    # Concepts that strongly imply real engineering work
+    r"refactor|implement|debug|architecture|microservice|api endpoint|"
+    r"authentication|authorization|migration|deployment|ci/cd|unit test"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
 class ScoreVector:
     dimensions: dict[str, float]
     weights: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_WEIGHTS))
+    # Auxiliary signals — used by tier-floor rules but not in the aggregate.
+    aux: dict[str, float] = field(default_factory=dict)
 
     @property
     def aggregate(self) -> float:
         return sum(self.dimensions.get(k, 0.0) * w for k, w in self.weights.items())
+
+    def signal(self, name: str) -> float:
+        """Lookup a signal by name, checking dims first then aux."""
+        if name in self.dimensions:
+            return self.dimensions[name]
+        return self.aux.get(name, 0.0)
 
 
 def _saturate(x: float, scale: float) -> float:
@@ -162,7 +190,10 @@ def score(payload: dict) -> ScoreVector:
         # 0..0.5 fraction maps to 0..1; anything beyond half non-ASCII is "heavily non-English".
         "language_non_english": _saturate(_non_ascii_ratio(combined), 0.5),
     }
-    return ScoreVector(dimensions=dims)
+    aux: dict[str, float] = {
+        "domain_programming": _saturate(len(_RE_PROGRAMMING_DOMAIN.findall(combined)), 3),
+    }
+    return ScoreVector(dimensions=dims, aux=aux)
 
 
 # --- Tier mapping ----------------------------------------------------------
@@ -184,13 +215,48 @@ _TIER_THRESHOLDS = {
 
 def to_tier(v: ScoreVector) -> str:
     a = v.aggregate
-    if a < _TIER_THRESHOLDS["fast"]:
-        return "fast"
-    if a < _TIER_THRESHOLDS["balanced"]:
-        return "balanced"
-    if a < _TIER_THRESHOLDS["deep"]:
-        return "deep"
-    return "expert"
+    base = (
+        "fast"
+        if a < _TIER_THRESHOLDS["fast"]
+        else "balanced"
+        if a < _TIER_THRESHOLDS["balanced"]
+        else "deep"
+        if a < _TIER_THRESHOLDS["deep"]
+        else "expert"
+    )
+
+    # Specialty floors — averaging dilutes important signals. If the prompt has
+    # *any* code or many tools, chitchat-tier models will produce wrong answers
+    # regardless of how short the rest of the prompt is.
+    code = v.dimensions.get("code_blocks", 0)
+    code_inline = v.dimensions.get("code_inline", 0)
+    tools = v.dimensions.get("tool_calls", 0)
+    domain_legal = v.dimensions.get("domain_legal", 0)
+    domain_medical = v.dimensions.get("domain_medical", 0)
+    domain_programming = v.aux.get("domain_programming", 0)
+
+    # Heavy code (multiple blocks) or tools-with-multi-turn → expert.
+    if code >= 0.40 or (tools >= 1.0 and v.dimensions.get("multi_turn", 0) >= 0.30):
+        return _max_tier(base, "expert")
+    # Any code, rich inline code, any tools, sensitive domain, or programming
+    # prose (e.g. "how do I add SwiftUI navigation?") → deep min.
+    if (
+        code > 0
+        or code_inline >= 0.40
+        or tools >= 1.0
+        or domain_legal > 0
+        or domain_medical > 0
+        or domain_programming >= 0.34  # 1+ programming markers
+    ):
+        return _max_tier(base, "deep")
+    return base
+
+
+_TIER_RANK = {"fast": 0, "balanced": 1, "deep": 2, "expert": 3}
+
+
+def _max_tier(a: str, b: str) -> str:
+    return a if _TIER_RANK.get(a, 0) >= _TIER_RANK.get(b, 0) else b
 
 
 # --- Provider/model resolution from config ---------------------------------

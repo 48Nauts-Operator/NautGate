@@ -162,18 +162,80 @@ def test_complex_request_is_deep_or_expert():
 
 
 def test_to_tier_uses_thresholds():
-    # Manually craft aggregate values clearly inside each interval.
+    """Threshold-only test — every floor-trigger dimension explicitly zeroed."""
     weights = dict.fromkeys(DIMENSIONS, 1.0 / 14)
+    floor_zero = ("code_blocks", "code_inline", "tool_calls", "domain_legal", "domain_medical")
 
-    def vec(val: float) -> ScoreVector:
-        return ScoreVector(dimensions=dict.fromkeys(DIMENSIONS, val), weights=weights)
+    def vec_target_aggregate(target: float) -> ScoreVector:
+        # 5 of 14 dims are floor-triggers and zeroed; spread `target` across the
+        # remaining 9 so v.aggregate == target.
+        per = target * 14 / 9
+        dims = dict.fromkeys(DIMENSIONS, per)
+        for k in floor_zero:
+            dims[k] = 0.0
+        return ScoreVector(dimensions=dims, weights=weights)
 
-    assert to_tier(vec(0.0)) == "fast"  # [0, 0.15)
-    assert to_tier(vec(0.05)) == "fast"
-    assert to_tier(vec(0.20)) == "balanced"  # [0.15, 0.30)
-    assert to_tier(vec(0.40)) == "deep"  # [0.30, 0.50)
-    assert to_tier(vec(0.70)) == "expert"  # [0.50, ∞)
-    assert to_tier(vec(0.95)) == "expert"
+    assert to_tier(vec_target_aggregate(0.0)) == "fast"
+    assert to_tier(vec_target_aggregate(0.05)) == "fast"
+    assert to_tier(vec_target_aggregate(0.20)) == "balanced"  # [0.15, 0.30)
+    assert to_tier(vec_target_aggregate(0.40)) == "deep"  # [0.30, 0.50)
+    assert to_tier(vec_target_aggregate(0.70)) == "expert"  # [0.50, ∞)
+
+
+def test_to_tier_floors_on_code():
+    """Even a tiny code presence should not route to chitchat-tier model."""
+    weights = dict.fromkeys(DIMENSIONS, 1.0 / 14)
+    dims = dict.fromkeys(DIMENSIONS, 0.0)
+    dims["code_blocks"] = 0.20  # one fenced code block
+    assert to_tier(ScoreVector(dims, weights)) == "deep"
+
+
+def test_to_tier_floors_on_tools():
+    """Tools present + multi-turn → expert; tools alone → deep."""
+    weights = dict.fromkeys(DIMENSIONS, 1.0 / 14)
+    dims = dict.fromkeys(DIMENSIONS, 0.0)
+    dims["tool_calls"] = 1.0
+    assert to_tier(ScoreVector(dims, weights)) == "deep"
+    dims["multi_turn"] = 0.50
+    assert to_tier(ScoreVector(dims, weights)) == "expert"
+
+
+def test_to_tier_heavy_code_is_expert():
+    weights = dict.fromkeys(DIMENSIONS, 1.0 / 14)
+    dims = dict.fromkeys(DIMENSIONS, 0.0)
+    dims["code_blocks"] = 0.60  # 3+ code fences
+    assert to_tier(ScoreVector(dims, weights)) == "expert"
+
+
+def test_to_tier_floors_on_programming_prose():
+    """Pure-prose iOS / framework questions must escalate to deep min."""
+    # No code, no tools, just a natural-language iOS question.
+    v = score(_user_msg("How do I add SwiftUI navigation in iOS?"))
+    assert to_tier(v) == "deep", (
+        f"iOS prose got {to_tier(v)} (aggregate={v.aggregate}, aux={v.aux})"
+    )
+
+    # And a Python question with no code blocks.
+    v = score(_user_msg("Best way to refactor this Django view for an API endpoint?"))
+    assert to_tier(v) == "deep"
+
+    # Casual chat (no programming markers) stays fast.
+    v = score(_user_msg("What's the weather like?"))
+    assert to_tier(v) == "fast"
+
+
+def test_score_emits_programming_aux_signal():
+    """The programming-prose signal lives on aux, not dimensions."""
+    v = score(_user_msg("Help me with my Swift / SwiftUI / iOS app"))
+    assert v.aux.get("domain_programming", 0) > 0
+    assert "domain_programming" not in v.dimensions  # aux only
+
+
+def test_to_tier_floor_does_not_demote():
+    """Floor must only escalate, never bring an expert-scored prompt down."""
+    weights = dict.fromkeys(DIMENSIONS, 1.0 / 14)
+    dims = dict.fromkeys(DIMENSIONS, 0.95)
+    assert to_tier(ScoreVector(dims, weights)) == "expert"
 
 
 # --- Routing table loading -------------------------------------------------
