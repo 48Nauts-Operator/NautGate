@@ -3,6 +3,8 @@ from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.db import queries
 from app.db.migrate import apply_migrations
@@ -103,6 +105,19 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(v1.router)
+
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+        @app.get("/dashboard")
+        async def dashboard_index() -> FileResponse:
+            return FileResponse(str(static_dir / "index.html"))
+
+        @app.get("/")
+        async def root_redirect() -> RedirectResponse:
+            return RedirectResponse(url="/dashboard", status_code=302)
+
     return app
 
 

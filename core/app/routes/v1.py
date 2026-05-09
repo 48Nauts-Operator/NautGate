@@ -665,6 +665,28 @@ async def list_models(request: Request) -> Response:
     return JSONResponse({"object": "list", "data": data})
 
 
+@router.get("/decisions/recent")
+async def decisions_recent(request: Request) -> Response:
+    """Recent route_decisions joined with outcomes for the authenticated agent.
+
+    Default ?limit=50, max 200. Used by the dashboard's live decision stream.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    try:
+        limit = int(request.query_params.get("limit", "50"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit must be an integer") from None
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be in 1..200")
+
+    rows = await queries.get_recent_decisions(pool, agent_id=agent_id, limit=limit)
+    return JSONResponse({"agent_id": agent_id, "limit": limit, "data": rows})
+
+
 @router.get("/stats")
 async def stats(request: Request) -> Response:
     """Aggregate stats for the authenticated agent over the last `hours` (default 24).

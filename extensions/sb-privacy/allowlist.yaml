@@ -1,0 +1,19 @@
+# sb-privacy allowlist — providers/models considered "privacy-safe" for prompts
+# classified as PII or secret.
+#
+# Providers/models on this list are PROMOTED in the routing decision when the
+# inbound classification trips the gate. Anything NOT on this list still goes
+# through the normal routing pipeline if the user pinned an explicit model;
+# sb-privacy never overrides explicit model choices, only nudges auto.
+#
+# Edit to match your trust boundaries. Local LM Studio is the safest default
+# because the data never leaves the host.
+
+providers:
+  - lmstudio
+  - anthropic-no-train  # Anthropic with the no-training header set
+
+models:
+  - lmstudio/qwen3-30b
+  - lmstudio/llama-3-70b
+  - claude-haiku-4-5  # via the no-training Anthropic profile

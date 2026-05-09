@@ -183,6 +183,57 @@ async def upsert_routing_preferences(
     return await get_routing_preferences(pool, agent_id=agent_id)
 
 
+async def get_recent_decisions(
+    pool: asyncpg.Pool,
+    *,
+    agent_id: str,
+    limit: int,
+) -> list[dict]:
+    """Last N route_decisions for the agent, joined with their outcome row.
+
+    Returns one dict per decision, ts-DESC ordered. Outcome fields are NULL
+    when the request errored before persist_outcome ran (rare).
+    """
+    rows = await pool.fetch(
+        """
+        SELECT d.id::text          AS decision_id,
+               d.ts                 AS ts,
+               d.inbound_format     AS inbound_format,
+               d.model_requested    AS model_requested,
+               d.classified_tier    AS tier,
+               d.classified_score   AS score,
+               d.classified_sensitivity AS sensitivity,
+               d.decision_provider  AS provider,
+               d.decision_model     AS model,
+               d.decision_reason    AS reason,
+               o.status_code        AS status_code,
+               o.duration_ms        AS duration_ms,
+               o.first_byte_ms      AS first_byte_ms,
+               o.prompt_tokens      AS prompt_tokens,
+               o.completion_tokens  AS completion_tokens,
+               o.was_empty          AS was_empty,
+               o.was_truncated      AS was_truncated,
+               o.client_disconnected AS client_disconnected
+          FROM nautgate.route_decisions d
+          LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+         WHERE d.agent_id = $1
+         ORDER BY d.ts DESC
+         LIMIT $2
+        """,
+        agent_id,
+        limit,
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("ts"):
+            d["ts"] = d["ts"].isoformat()
+        if d.get("score") is not None:
+            d["score"] = float(d["score"])
+        out.append(d)
+    return out
+
+
 async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
     """Aggregate stats over recent route_decisions + route_outcomes for one agent.
 

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NautGate</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>NautGate <span class="version" id="version">v0.1</span></h1>
+    <nav>
+      <a href="#overview" data-tab="overview" class="active">Overview</a>
+      <a href="#decisions" data-tab="decisions">Decisions</a>
+      <a href="#health" data-tab="health">Provider health</a>
+      <a href="#models" data-tab="models">Models</a>
+      <a href="#settings" data-tab="settings">Settings</a>
+    </nav>
+    <div class="auth">
+      <input id="token-input" type="password" placeholder="Bearer token (ng_…)" />
+      <button id="token-save">Save</button>
+      <span id="auth-state" class="auth-state">no token</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Overview ------------------------------------------------------------>
+    <section id="tab-overview" class="tab active">
+      <h2>Last 24h</h2>
+      <div class="grid">
+        <div class="card"><div class="metric" id="m-total">—</div><div class="label">requests</div></div>
+        <div class="card"><div class="metric" id="m-empty">—</div><div class="label">empty rate</div></div>
+        <div class="card"><div class="metric" id="m-p50">—</div><div class="label">p50 latency</div></div>
+        <div class="card"><div class="metric" id="m-p95">—</div><div class="label">p95 latency</div></div>
+      </div>
+
+      <h3>By tier</h3>
+      <div id="tier-bars" class="bars"></div>
+
+      <h3>By inbound format</h3>
+      <div id="format-bars" class="bars"></div>
+    </section>
+
+    <!-- Decisions ----------------------------------------------------------->
+    <section id="tab-decisions" class="tab">
+      <h2>Recent decisions <button class="reload" id="dec-reload">↻</button></h2>
+      <p class="hint">Auto-refresh every 5s while this tab is open.</p>
+      <table id="dec-table">
+        <thead>
+          <tr>
+            <th>ts</th><th>fmt</th><th>tier</th><th>score</th>
+            <th>sens</th><th>provider</th><th>model</th>
+            <th>status</th><th>ms</th><th>tok</th><th>empty</th>
+          </tr>
+        </thead>
+        <tbody id="dec-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Provider health ----------------------------------------------------->
+    <section id="tab-health" class="tab">
+      <h2>Provider health</h2>
+      <p class="hint">Computed from <code>/v1/models</code> + the in-process health tracker. Models flagged unhealthy here are auto-skipped on the next routing decision.</p>
+      <table id="health-table">
+        <thead>
+          <tr><th>provider</th><th>model</th><th>tiers</th><th>status</th></tr>
+        </thead>
+        <tbody id="health-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Models -------------------------------------------------------------->
+    <section id="tab-models" class="tab">
+      <h2>Models</h2>
+      <p class="hint">Routes from <code>config/routing.yaml</code>. Edit that file + restart to change.</p>
+      <pre id="models-json" class="code"></pre>
+    </section>
+
+    <!-- Settings ------------------------------------------------------------>
+    <section id="tab-settings" class="tab">
+      <h2>Profile</h2>
+      <p class="hint">These settings are stored on <code>nautgate.routing_preferences</code> for the agent your bearer token belongs to.</p>
+
+      <label>Banned models (comma-separated)
+        <input id="banned-models" type="text" placeholder="gpt-4o-mini, openrouter/free" />
+      </label>
+      <label>Preferred models (comma-separated)
+        <input id="preferred-models" type="text" placeholder="claude-haiku-4-5" />
+      </label>
+      <label>Notes
+        <textarea id="notes" rows="3" placeholder="Free-text notes for the agent"></textarea>
+      </label>
+      <button id="prefs-save">Save profile</button>
+      <span id="prefs-state" class="prefs-state"></span>
+
+      <h2>Provider keys</h2>
+      <p class="hint">Provider API keys (Anthropic, OpenAI, Gemini, …) live as environment variables on the gateway and require a container restart to rotate. Editing keys from the UI is on the v2 roadmap.</p>
+      <pre id="keys-status" class="code">checking…</pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
