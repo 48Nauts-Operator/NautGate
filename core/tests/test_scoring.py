@@ -191,13 +191,14 @@ def test_to_tier_floors_on_code():
 
 
 def test_to_tier_floors_on_tools():
-    """Tools present + multi-turn → expert; tools alone → deep."""
+    """Tools present → deep min, even with multi-turn (agentic CLIs are normal)."""
     weights = dict.fromkeys(DIMENSIONS, 1.0 / 14)
     dims = dict.fromkeys(DIMENSIONS, 0.0)
     dims["tool_calls"] = 1.0
     assert to_tier(ScoreVector(dims, weights)) == "deep"
+    # Multi-turn alone shouldn't push to expert — that's just a long chat.
     dims["multi_turn"] = 0.50
-    assert to_tier(ScoreVector(dims, weights)) == "expert"
+    assert to_tier(ScoreVector(dims, weights)) == "deep"
 
 
 def test_to_tier_heavy_code_is_expert():

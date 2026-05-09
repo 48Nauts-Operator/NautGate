@@ -235,8 +235,10 @@ def to_tier(v: ScoreVector) -> str:
     domain_medical = v.dimensions.get("domain_medical", 0)
     domain_programming = v.aux.get("domain_programming", 0)
 
-    # Heavy code (multiple blocks) or tools-with-multi-turn → expert.
-    if code >= 0.40 or (tools >= 1.0 and v.dimensions.get("multi_turn", 0) >= 0.30):
+    # Heavy code (3+ fenced blocks ≈ deep architectural work) → expert.
+    # NOTE: tools+multi-turn alone is the *normal* state for any agentic CLI
+    # (Pi, Claude Code, Aider) — it's not "expert" work. Don't promote on it.
+    if code >= 0.40:
         return _max_tier(base, "expert")
     # Any code, rich inline code, any tools, sensitive domain, or programming
     # prose (e.g. "how do I add SwiftUI navigation?") → deep min.
@@ -246,7 +248,7 @@ def to_tier(v: ScoreVector) -> str:
         or tools >= 1.0
         or domain_legal > 0
         or domain_medical > 0
-        or domain_programming >= 0.34  # 1+ programming markers
+        or domain_programming > 0  # any programming-domain marker
     ):
         return _max_tier(base, "deep")
     return base

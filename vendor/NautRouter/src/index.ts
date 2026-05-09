@@ -137,9 +137,37 @@ const MODELS: Record<string, ModelDef> = {
   "openrouter/deepseek/deepseek-chat": {
     id: "deepseek/deepseek-chat",
     provider: "openrouter",
+    inputPrice: 0.32,
+    outputPrice: 0.89,
+    contextWindow: 163_840,
+  },
+  "openrouter/deepseek/deepseek-v4-flash": {
+    id: "deepseek/deepseek-v4-flash",
+    provider: "openrouter",
     inputPrice: 0.14,
     outputPrice: 0.28,
-    contextWindow: 64_000,
+    contextWindow: 1_048_576,
+  },
+  "openrouter/deepseek/deepseek-v4-pro": {
+    id: "deepseek/deepseek-v4-pro",
+    provider: "openrouter",
+    inputPrice: 0.43,
+    outputPrice: 0.87,
+    contextWindow: 1_048_576,
+  },
+  "openrouter/moonshotai/kimi-k2-thinking": {
+    id: "moonshotai/kimi-k2-thinking",
+    provider: "openrouter",
+    inputPrice: 0.60,
+    outputPrice: 2.50,
+    contextWindow: 262_144,
+  },
+  "openrouter/moonshotai/kimi-k2.6": {
+    id: "moonshotai/kimi-k2.6",
+    provider: "openrouter",
+    inputPrice: 0.75,
+    outputPrice: 3.50,
+    contextWindow: 262_144,
   },
   "openrouter/openai/gpt-4o-mini": {
     id: "openai/gpt-4o-mini",

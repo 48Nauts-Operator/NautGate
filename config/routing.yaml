@@ -1,27 +1,37 @@
 # NautGate tier → provider/model routing table.
 #
-# AIM: cheap by default, expensive only when the score genuinely demands it.
-# Most prompts score below 0.5 — those should never touch Sonnet/Opus.
-# Real cheap-model coverage:
-#   fast / balanced → Gemini Flash ($0.15/$0.60 per M, 1M context)
-#   deep            → Gemini Pro ($1.25/$5, 1M context — handles Pi's big workload)
-#   expert          → Sonnet direct (only on score ≥ 0.5)
+# AIM: try the cheap/capable open models first, escalate to Claude only when
+# the request genuinely warrants it.
 #
-# Pinned models so OpenRouter doesn't add its own auto-selection latency hop.
+# Cost reference (per million tokens, in/out):
+#   deepseek-v4-flash   $0.14 / $0.28   (1M ctx)
+#   deepseek-v4-pro     $0.43 / $0.87   (1M ctx)
+#   kimi-k2-thinking    $0.60 / $2.50   (262k ctx, strong reasoning)
+#   kimi-k2.6           $0.75 / $3.50   (262k ctx, strong agentic + code)
+#   gemini-flash        $0.15 / $0.60   (1M ctx)
+#   gpt-4o-mini         $0.15 / $0.60   (128k ctx)
+#   claude-sonnet       $3.00 / $15.00  (only as last-resort fallback)
+#
+# Pinned models — no openrouter/auto hop, no surprise cost.
 
 tiers:
   fast:
-    primary:  { provider: openrouter, model: openrouter/google/gemini-flash }
-    fallback: { provider: openrouter, model: openrouter/deepseek/deepseek-chat }
+    # Chitchat / one-liners. DeepSeek V4 Flash beats Gemini Flash on code at
+    # the same price, with 1M context. Gemini stays as fallback.
+    primary:  { provider: openrouter, model: openrouter/deepseek/deepseek-v4-flash }
+    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
   balanced:
-    # Same cheap model as fast — 99% of routine work doesn't need more.
-    primary:  { provider: openrouter, model: openrouter/google/gemini-flash }
+    # Pi's typical "list these files / read this / write that" lands here.
+    # DeepSeek V4 Pro: cheap, capable on code, 1M context for long histories.
+    primary:  { provider: openrouter, model: openrouter/deepseek/deepseek-v4-pro }
     fallback: { provider: openrouter, model: openrouter/openai/gpt-4o-mini }
   deep:
-    # 1M context for code-heavy / long-history workloads (Pi's typical shape).
-    primary:  { provider: openrouter, model: openrouter/google/gemini-pro }
-    fallback: { provider: openrouter, model: openrouter/anthropic/claude-haiku }
+    # Code-heavy or programming-domain prose (iOS, frameworks, etc.).
+    # Kimi K2 Thinking is the cheapest strong-reasoning model on the market.
+    primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2-thinking }
+    fallback: { provider: openrouter, model: openrouter/deepseek/deepseek-v4-pro }
   expert:
-    # Only when score ≥ 0.5 — real reasoning, not casual chatter.
-    primary:  { provider: openrouter, model: openrouter/anthropic/claude-sonnet }
-    fallback: { provider: anthropic,  model: claude-sonnet-4 }
+    # Only when score ≥ 0.5 OR ≥3 fenced code blocks. Try Kimi K2.6 first;
+    # Sonnet is the *fallback*, not the default.
+    primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2.6 }
+    fallback: { provider: openrouter, model: openrouter/anthropic/claude-sonnet }

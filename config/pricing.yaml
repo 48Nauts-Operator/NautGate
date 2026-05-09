@@ -76,8 +76,20 @@ pricing:
     input: 3.00
     output: 15.00
   openrouter/openrouter/deepseek/deepseek-chat:
+    input: 0.32
+    output: 0.89
+  openrouter/openrouter/deepseek/deepseek-v4-flash:
     input: 0.14
     output: 0.28
+  openrouter/openrouter/deepseek/deepseek-v4-pro:
+    input: 0.43
+    output: 0.87
+  openrouter/openrouter/moonshotai/kimi-k2-thinking:
+    input: 0.60
+    output: 2.50
+  openrouter/openrouter/moonshotai/kimi-k2.6:
+    input: 0.75
+    output: 3.50
 
   # --- Local (free) ---
   lmstudio/local: { input: 0, output: 0 }
