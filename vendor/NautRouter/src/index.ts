@@ -422,7 +422,33 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
 
   for (const msg of messages) {
     if (msg.role === "system") {
-      system = (system ? system + "\n" : "") + msg.content;
+      system = (system ? system + "\n" : "") + (typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content));
+    } else if (msg.role === "tool") {
+      // OpenAI tool-result message → Anthropic user message with tool_result block.
+      anthropicMessages.push({
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: msg.tool_call_id,
+          content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? ""),
+        }],
+      });
+    } else if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      // Assistant turn that called tools → Anthropic content blocks: text (if any) then tool_use[].
+      const blocks: any[] = [];
+      if (typeof msg.content === "string" && msg.content) {
+        blocks.push({ type: "text", text: msg.content });
+      } else if (Array.isArray(msg.content)) {
+        for (const c of msg.content) {
+          if (c && c.type === "text" && c.text) blocks.push({ type: "text", text: c.text });
+        }
+      }
+      for (const tc of msg.tool_calls) {
+        let input: any = {};
+        try { input = JSON.parse(tc?.function?.arguments ?? "{}"); } catch { /* keep empty */ }
+        blocks.push({ type: "tool_use", id: tc.id, name: tc.function?.name, input });
+      }
+      anthropicMessages.push({ role: "assistant", content: blocks });
     } else {
       anthropicMessages.push({ role: msg.role === "assistant" ? "assistant" : "user", content: msg.content });
     }
@@ -437,6 +463,31 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
   if (body.temperature != null) anthropicBody.temperature = body.temperature;
   if (stream) anthropicBody.stream = true;
 
+  // Translate OpenAI Chat `tools` → Anthropic `tools`. Same intent, different shape:
+  //   OpenAI:    {type: "function", function: {name, description, parameters}}
+  //   Anthropic: {name, description, input_schema}
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    anthropicBody.tools = body.tools
+      .map((t: any) => {
+        const fn = t?.function ?? t;
+        if (!fn?.name) return null;
+        return {
+          name: fn.name,
+          description: fn.description ?? "",
+          input_schema: fn.parameters ?? fn.input_schema ?? { type: "object", properties: {} },
+        };
+      })
+      .filter(Boolean);
+  }
+  if (body.tool_choice) {
+    // "auto" / "any" pass through; specific tool by name → {type: "tool", name}.
+    if (typeof body.tool_choice === "string") {
+      anthropicBody.tool_choice = { type: body.tool_choice === "required" ? "any" : body.tool_choice };
+    } else if (body.tool_choice?.function?.name) {
+      anthropicBody.tool_choice = { type: "tool", name: body.tool_choice.function.name };
+    }
+  }
+
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -450,13 +501,35 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
   if (!stream) {
     // Convert Anthropic response → OpenAI format
     const data = await resp.json() as any;
-    const content = data.content?.map((b: any) => b.text).join("") ?? "";
+    const content = (data.content ?? [])
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("");
+    // Surface tool_use blocks as OpenAI Chat tool_calls.
+    const toolCalls = (data.content ?? [])
+      .filter((b: any) => b.type === "tool_use")
+      .map((b: any, i: number) => ({
+        index: i,
+        id: b.id,
+        type: "function",
+        function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) },
+      }));
+    const finishReason =
+      data.stop_reason === "tool_use"
+        ? "tool_calls"
+        : data.stop_reason === "end_turn"
+        ? "stop"
+        : data.stop_reason === "max_tokens"
+        ? "length"
+        : (data.stop_reason ?? "stop");
+    const message: any = { role: "assistant", content };
+    if (toolCalls.length > 0) message.tool_calls = toolCalls;
     const openaiResp = {
       id: data.id ?? `chatcmpl-${Date.now()}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: modelDef.id,
-      choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: data.stop_reason === "end_turn" ? "stop" : (data.stop_reason ?? "stop") }],
+      choices: [{ index: 0, message, finish_reason: finishReason }],
       usage: { prompt_tokens: data.usage?.input_tokens ?? 0, completion_tokens: data.usage?.output_tokens ?? 0, total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0) },
     };
     return new Response(JSON.stringify(openaiResp), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -470,9 +543,24 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
   const decoder = new TextDecoder();
   let streamInputTokens = 0;
   let streamOutputTokens = 0;
+  let stopReason: string | null = null;
+  // Anthropic content-block index → OpenAI Chat tool_calls index. Text blocks
+  // are not in tool_calls; tool_use blocks consume sequential tool_calls indices.
+  const toolCallIdxByBlock: Record<number, number> = {};
+  let nextToolCallIdx = 0;
   const readable = new ReadableStream({
     async pull(controller) {
       let buffer = "";
+      const emit = (chunk: any) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+      const baseChunk = (delta: any, finish_reason: string | null = null) => ({
+        id: `chatcmpl-${Date.now()}`,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: modelDef.id,
+        choices: [{ index: 0, delta, finish_reason }],
+      });
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
@@ -491,32 +579,59 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
             const evt = JSON.parse(payload);
             if (evt.type === "message_start" && evt.message?.usage?.input_tokens != null) {
               streamInputTokens = evt.message.usage.input_tokens;
+            } else if (evt.type === "content_block_start" && evt.content_block?.type === "tool_use") {
+              // Open a new tool_call entry. Anthropic gives id + name up-front;
+              // arguments arrive as input_json_delta chunks.
+              const blockIdx = evt.index ?? 0;
+              const tcIdx = nextToolCallIdx++;
+              toolCallIdxByBlock[blockIdx] = tcIdx;
+              emit(baseChunk({
+                tool_calls: [{
+                  index: tcIdx,
+                  id: evt.content_block.id,
+                  type: "function",
+                  function: { name: evt.content_block.name, arguments: "" },
+                }],
+              }));
+            } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta" && evt.delta?.text) {
+              emit(baseChunk({ content: evt.delta.text }));
+            } else if (evt.type === "content_block_delta" && evt.delta?.type === "input_json_delta") {
+              const blockIdx = evt.index ?? 0;
+              const tcIdx = toolCallIdxByBlock[blockIdx];
+              if (tcIdx != null) {
+                emit(baseChunk({
+                  tool_calls: [{
+                    index: tcIdx,
+                    function: { arguments: evt.delta.partial_json ?? "" },
+                  }],
+                }));
+              }
             } else if (evt.type === "content_block_delta" && evt.delta?.text) {
-              const chunk = {
-                id: `chatcmpl-${Date.now()}`,
-                object: "chat.completion.chunk",
-                created: Math.floor(Date.now() / 1000),
-                model: modelDef.id,
-                choices: [{ index: 0, delta: { content: evt.delta.text }, finish_reason: null }],
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-            } else if (evt.type === "message_delta" && evt.usage?.output_tokens != null) {
-              streamOutputTokens = evt.usage.output_tokens;
+              // Fallback for older Anthropic shape where text deltas lack a `type` field.
+              emit(baseChunk({ content: evt.delta.text }));
+            } else if (evt.type === "message_delta") {
+              if (evt.usage?.output_tokens != null) streamOutputTokens = evt.usage.output_tokens;
+              if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
             } else if (evt.type === "message_stop") {
-              // Emit a final chunk that carries usage so NautGate can compute cost.
-              const chunk = {
+              // Map Anthropic stop_reason → OpenAI finish_reason. tool_use → tool_calls.
+              const finish =
+                stopReason === "tool_use"
+                  ? "tool_calls"
+                  : stopReason === "max_tokens"
+                  ? "length"
+                  : "stop";
+              emit({
                 id: `chatcmpl-${Date.now()}`,
                 object: "chat.completion.chunk",
                 created: Math.floor(Date.now() / 1000),
                 model: modelDef.id,
-                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                choices: [{ index: 0, delta: {}, finish_reason: finish }],
                 usage: {
                   prompt_tokens: streamInputTokens,
                   completion_tokens: streamOutputTokens,
                   total_tokens: streamInputTokens + streamOutputTokens,
                 },
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+              });
             }
           } catch { /* skip malformed */ }
         }
