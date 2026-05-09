@@ -30,6 +30,12 @@ async def precapture(
     prompt_body: str | None = None,
     prompt_body_truncated_at_byte: int | None = None,
     brain_hints: dict | None = None,
+    source_ip: str | None = None,
+    source_hostname: str | None = None,
+    messages_count: int | None = None,
+    tools_count: int | None = None,
+    stream_flag: bool | None = None,
+    request_size_bytes: int | None = None,
 ) -> None:
     """Insert the audit row before forwarding upstream. Synchronous by design."""
     signals_json = json.dumps(classified_signals) if classified_signals else None
@@ -42,9 +48,12 @@ async def precapture(
                  prompt_tokens, classified_tier, classified_score,
                  classified_sensitivity, classified_signals, brain_hints,
                  decision_provider, decision_model, decision_reason,
-                 prompt_body, prompt_body_truncated_at_byte)
+                 prompt_body, prompt_body_truncated_at_byte,
+                 source_ip, source_hostname, messages_count, tools_count,
+                 stream_flag, request_size_bytes)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
-                    $12, $13, $14, $15, $16)
+                    $12, $13, $14, $15, $16,
+                    $17::inet, $18, $19, $20, $21, $22)
             """,
             decision_id,
             agent_id,
@@ -62,6 +71,12 @@ async def precapture(
             decision_reason,
             prompt_body,
             prompt_body_truncated_at_byte,
+            source_ip,
+            source_hostname,
+            messages_count,
+            tools_count,
+            stream_flag,
+            request_size_bytes,
         )
 
 
@@ -84,6 +99,7 @@ async def write_outcome(
     truncated_at_byte: int | None = None,
     response_body: str | None = None,
     response_body_truncated_at_byte: int | None = None,
+    response_size_bytes: int | None = None,
 ) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
@@ -93,8 +109,9 @@ async def write_outcome(
                  prompt_tokens, completion_tokens, reasoning_tokens, cost_usd,
                  was_empty, used_fallback, fallback_count, client_disconnected,
                  was_truncated, truncated_at_byte,
-                 response_body, response_body_truncated_at_byte)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                 response_body, response_body_truncated_at_byte,
+                 response_size_bytes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             """,
             decision_id,
             status_code,
@@ -112,6 +129,7 @@ async def write_outcome(
             truncated_at_byte,
             response_body,
             response_body_truncated_at_byte,
+            response_size_bytes,
         )
 
 
@@ -370,6 +388,9 @@ async def get_decision_detail(
     decisions. Returns None if the decision_id doesn't exist or belongs to
     another agent.
     """
+    # Local import — keep audit_meta light for tests that don't need it.
+    from app.audit_meta import _content_text, _estimate_tokens  # noqa: PLC0415
+
     row = await pool.fetchrow(
         """
         SELECT d.id::text                     AS decision_id,
@@ -388,6 +409,12 @@ async def get_decision_detail(
                d.prompt_excerpt                AS prompt_excerpt,
                d.prompt_body                   AS prompt_body,
                d.prompt_body_truncated_at_byte AS prompt_body_truncated_at_byte,
+               d.source_ip::text               AS source_ip,
+               d.source_hostname               AS source_hostname,
+               d.messages_count                AS messages_count,
+               d.tools_count                   AS tools_count,
+               d.stream_flag                   AS stream_flag,
+               d.request_size_bytes            AS request_size_bytes,
                o.status_code                   AS status_code,
                o.duration_ms                   AS duration_ms,
                o.first_byte_ms                 AS first_byte_ms,
@@ -399,7 +426,8 @@ async def get_decision_detail(
                o.was_truncated                 AS was_truncated,
                o.client_disconnected           AS client_disconnected,
                o.response_body                 AS response_body,
-               o.response_body_truncated_at_byte AS response_body_truncated_at_byte
+               o.response_body_truncated_at_byte AS response_body_truncated_at_byte,
+               o.response_size_bytes           AS response_size_bytes
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.id::text = $1 AND d.agent_id = $2
@@ -424,7 +452,49 @@ async def get_decision_detail(
                 d[k] = json.loads(v)
             except (ValueError, TypeError):
                 pass
+    # Token breakdown computed on read from prompt_body when body was captured.
+    d["token_estimate"] = _token_breakdown_from_body(d.get("prompt_body"), _content_text, _estimate_tokens)
     return d
+
+
+def _token_breakdown_from_body(body: str | None, content_fn, est_fn) -> dict | None:
+    """Parse a JSON-serialized messages array into a system/tools/history/user
+    token estimate. Returns None when body was suppressed by capture policy.
+    """
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    # Body may be just messages list (the shape capture_prompt stores) — handle both.
+    messages = data if isinstance(data, list) else data.get("messages") if isinstance(data, dict) else None
+    if not isinstance(messages, list):
+        return None
+    last_user = -1
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and m.get("role") == "user":
+            last_user = i
+    sys_text: list[str] = []
+    hist_text: list[str] = []
+    user_text = ""
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        text = content_fn(m.get("content"))
+        if role == "system":
+            sys_text.append(text)
+        elif i == last_user and role == "user":
+            user_text = text
+        else:
+            hist_text.append(text)
+    return {
+        "system": est_fn("\n".join(sys_text)),
+        "tools": 0,  # tools aren't in prompt_body (they're top-level on the request); show 0 when reading from body alone
+        "history": est_fn("\n".join(hist_text)),
+        "user": est_fn(user_text),
+    }
 
 
 async def get_recent_decisions(
@@ -450,14 +520,22 @@ async def get_recent_decisions(
                d.decision_provider  AS provider,
                d.decision_model     AS model,
                d.decision_reason    AS reason,
+               d.source_hostname    AS source_hostname,
+               d.source_ip::text    AS source_ip,
+               d.messages_count     AS messages_count,
+               d.tools_count        AS tools_count,
+               d.stream_flag        AS stream_flag,
+               d.request_size_bytes AS request_size_bytes,
                o.status_code        AS status_code,
                o.duration_ms        AS duration_ms,
                o.first_byte_ms      AS first_byte_ms,
                o.prompt_tokens      AS prompt_tokens,
                o.completion_tokens  AS completion_tokens,
+               o.cost_usd           AS cost_usd,
                o.was_empty          AS was_empty,
                o.was_truncated      AS was_truncated,
-               o.client_disconnected AS client_disconnected
+               o.client_disconnected AS client_disconnected,
+               o.response_size_bytes AS response_size_bytes
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.agent_id = $1
@@ -474,6 +552,8 @@ async def get_recent_decisions(
             d["ts"] = d["ts"].isoformat()
         if d.get("score") is not None:
             d["score"] = float(d["score"])
+        if d.get("cost_usd") is not None:
+            d["cost_usd"] = float(d["cost_usd"])
         out.append(d)
     return out
 

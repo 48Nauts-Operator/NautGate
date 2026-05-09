@@ -11,6 +11,7 @@
     <h1>NautGate <span class="version" id="version">v0.1</span></h1>
     <nav>
       <a href="#overview" data-tab="overview" class="active">Overview</a>
+      <a href="#audit" data-tab="audit">Audit Log</a>
       <a href="#cost" data-tab="cost">Cost</a>
       <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
@@ -76,6 +77,13 @@
 
       <h3>By tier</h3>
       <table id="cost-tier"><thead><tr><th>tier</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Audit Log (per-call live feed) -------------------------------------->
+    <section id="tab-audit" class="tab">
+      <h2>Audit log <button class="reload" id="audit-reload">↻</button></h2>
+      <p class="hint">Every LLM call as it happens. The token bar shows where the tokens *go* — system / tools / history / current user — so you can spot CLI bloat (a "hi" prompt shouldn't ship 30 KB of system + 12 tool defs). Click any row for full metadata.</p>
+      <div id="audit-list"></div>
     </section>
 
     <!-- Privacy (Lighthouse audit) ------------------------------------------>

@@ -100,15 +100,18 @@
       s.classList.toggle("active", s.id === "tab-" + name)
     );
     refreshActive();
-    // Restart auto-refresh only on the decisions tab (the live one).
+    // Auto-refresh on the live tabs.
     clearInterval(refreshTimer);
     if (name === "decisions") {
       refreshTimer = setInterval(loadDecisions, REFRESH_MS);
+    } else if (name === "audit") {
+      refreshTimer = setInterval(loadAudit, REFRESH_MS);
     }
   }
 
   function refreshActive() {
     if (activeTab === "overview") loadOverview();
+    else if (activeTab === "audit") loadAudit();
     else if (activeTab === "cost") loadCost();
     else if (activeTab === "privacy") loadPrivacy();
     else if (activeTab === "decisions") loadDecisions();
@@ -471,6 +474,189 @@
     if (score >= 70) return "#6ea5ff";
     if (score >= 50) return "#f59e0b";
     return "#ef4444";
+  }
+
+  // --- Audit log live feed ------------------------------------------------
+
+  document.getElementById("audit-reload").addEventListener("click", () => loadAudit());
+
+  let auditExpandedId = null;
+  const auditDetailCache = new Map();
+
+  async function loadAudit() {
+    if (!getToken()) return;
+    try {
+      const r = await api("/v1/decisions/recent?limit=50");
+      renderAudit(r.data || []);
+    } catch (e) {
+      /* swallow */
+    }
+  }
+
+  function renderAudit(rows) {
+    const list = document.getElementById("audit-list");
+    if (!rows.length) {
+      list.innerHTML = '<p class="hint">No requests yet. Send one and it\'ll appear here within 5s.</p>';
+      return;
+    }
+    list.innerHTML = rows
+      .map((r) => {
+        const dot = r.was_empty || r.client_disconnected
+          ? "warn"
+          : r.status_code && r.status_code >= 400
+          ? "bad"
+          : r.status_code === 200
+          ? "ok"
+          : "dim";
+        const total = r.prompt_tokens || 0;
+        // Server-side recent endpoint doesn't carry token_estimate; we just
+        // show the total as the "user" segment until detail is fetched.
+        const bar = `<div class="audit-bar"><div class="audit-seg-user" style="width:100%"></div></div>`;
+        const source = r.source_hostname || (r.source_ip ? r.source_ip : "—");
+        const cost = r.cost_usd != null ? usd(r.cost_usd) : "—";
+        const latency = r.duration_ms != null ? r.duration_ms + "ms" : "—";
+        return `
+          <div class="audit-row" data-decision="${esc(r.decision_id)}">
+            <div class="audit-dot ${dot}"></div>
+            <div>
+              <div class="audit-model">${esc(r.model || r.model_requested || "—")} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span></div>
+            </div>
+            <div>${bar}<div class="audit-source" style="margin-top:2px">${total} tokens · ${(r.request_size_bytes || 0) >= 1024 ? Math.round(r.request_size_bytes / 1024) + "KB" : (r.request_size_bytes || 0) + "B"} req</div></div>
+            <div class="audit-meta-right">
+              <div class="audit-cost">${cost}</div>
+              <div>${latency} · ${tsShort(r.ts)}</div>
+            </div>
+          </div>
+          <div class="audit-detail" id="audit-detail-${esc(r.decision_id)}"></div>`;
+      })
+      .join("");
+
+    document.querySelectorAll(".audit-row").forEach((row) => {
+      row.addEventListener("click", () => toggleAuditDetail(row.dataset.decision));
+    });
+    if (auditExpandedId) {
+      const el = document.getElementById("audit-detail-" + auditExpandedId);
+      if (el) {
+        el.classList.add("open");
+        if (auditDetailCache.has(auditExpandedId)) {
+          el.innerHTML = renderAuditDetail(auditDetailCache.get(auditExpandedId));
+        }
+      }
+    }
+  }
+
+  async function toggleAuditDetail(decisionId) {
+    if (auditExpandedId === decisionId) {
+      const el = document.getElementById("audit-detail-" + decisionId);
+      if (el) el.classList.remove("open");
+      auditExpandedId = null;
+      return;
+    }
+    if (auditExpandedId) {
+      const prev = document.getElementById("audit-detail-" + auditExpandedId);
+      if (prev) prev.classList.remove("open");
+    }
+    auditExpandedId = decisionId;
+    const el = document.getElementById("audit-detail-" + decisionId);
+    if (!el) return;
+    el.classList.add("open");
+    el.innerHTML = '<p class="hint">loading…</p>';
+    try {
+      const d = await api("/v1/decisions/" + encodeURIComponent(decisionId));
+      auditDetailCache.set(decisionId, d);
+      el.innerHTML = renderAuditDetail(d);
+    } catch (e) {
+      el.innerHTML = '<p class="hint">failed to load</p>';
+    }
+  }
+
+  function renderAuditDetail(d) {
+    const grid = (k, v) =>
+      `<div><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`;
+
+    const t = d.token_estimate || { system: 0, tools: 0, history: 0, user: 0 };
+    const total = (t.system + t.tools + t.history + t.user) || 1;
+    const bar = `
+      <div class="audit-bar" style="margin-bottom:8px">
+        ${segPct(t.system, total, "system")}
+        ${segPct(t.tools, total, "tools")}
+        ${segPct(t.history, total, "history")}
+        ${segPct(t.user, total, "user")}
+      </div>
+      <div class="audit-legend">
+        <span><span class="swatch audit-seg-system"></span>System ${t.system}</span>
+        <span><span class="swatch audit-seg-tools"></span>Tools ${t.tools}</span>
+        <span><span class="swatch audit-seg-history"></span>History ${t.history}</span>
+        <span><span class="swatch audit-seg-user"></span>User ${t.user}</span>
+      </div>`;
+
+    const reqKB = d.request_size_bytes != null ? (d.request_size_bytes / 1024).toFixed(1) + " KB" : "—";
+    const respKB = d.response_size_bytes != null ? (d.response_size_bytes / 1024).toFixed(1) + " KB" : "—";
+
+    let html = "";
+    html += '<div class="section-title">What got sent</div>';
+    html += bar;
+    html += '<div class="audit-grid">';
+    html += grid("Endpoint", esc(inboundEndpoint(d.inbound_format)));
+    html += grid("Upstream", esc(d.decision_provider || "—") + " / " + esc(d.decision_model || "—"));
+    html += grid("Source", esc(d.source_hostname || d.source_ip || "—"));
+    html += grid("Messages", d.messages_count ?? "—");
+    html += grid("Tools", d.tools_count ?? "—");
+    html += grid("Stream", d.stream_flag ? "Yes" : "No");
+    html += grid("Input tokens", d.prompt_tokens ?? "—");
+    html += grid("Output tokens", d.completion_tokens ?? "—");
+    html += grid("Request size", reqKB);
+    html += grid("Response size", respKB);
+    html += grid("Status", `<span class="${statusClass(d.status_code)}">${d.status_code ?? "—"}</span>`);
+    html += grid("Latency", (d.duration_ms ?? "—") + "ms");
+    html += grid("Cost", d.cost_usd != null ? usd(d.cost_usd) : "—");
+    html += grid("Tier · Score", `${esc(d.classified_tier || "—")} · ${(d.classified_score ?? 0).toFixed(2)}`);
+    html += grid("Sensitivity", sensTag(d.classified_sensitivity) || "none");
+    html += "</div>";
+
+    // Findings inline
+    if (d.classified_signals && d.classified_signals.length) {
+      html += '<div class="section-title">Findings</div>';
+      html += d.classified_signals
+        .map((s) => `<div class="lh-sample">${esc(s.rule_id)} · ${esc(s.severity || s.sensitivity || "")} · ×${s.count || 1}</div>`)
+        .join("");
+    }
+
+    // Prompt body (full visibility — this is the "what was sent" answer)
+    html += '<div class="section-title">Prompt body</div>';
+    if (d.prompt_body) {
+      html += '<pre class="body-block">' + esc(d.prompt_body) + "</pre>";
+      if (d.prompt_body_truncated_at_byte) {
+        html += `<p class="hint">truncated at ${d.prompt_body_truncated_at_byte} bytes</p>`;
+      }
+    } else if (d.prompt_excerpt) {
+      html += '<pre class="body-block">' + esc(d.prompt_excerpt) + "</pre>";
+      html += '<p class="hint">excerpt only — sensitivity gate suppressed full body</p>';
+    } else {
+      html += '<p class="hint">no body captured</p>';
+    }
+
+    // Response body
+    html += '<div class="section-title">Response</div>';
+    if (d.response_body) {
+      html += '<pre class="body-block">' + esc(d.response_body) + "</pre>";
+    } else {
+      html += '<p class="hint">no response body</p>';
+    }
+    return html;
+  }
+
+  function segPct(value, total, kind) {
+    if (!value) return "";
+    const pct = Math.max(2, (value / total) * 100);
+    return `<div class="audit-seg-${kind}" style="width:${pct}%" title="${kind}: ${value}"></div>`;
+  }
+
+  function inboundEndpoint(fmt) {
+    if (fmt === "openai_chat") return "POST /v1/chat/completions";
+    if (fmt === "anthropic") return "POST /v1/messages";
+    if (fmt === "openai_responses") return "POST /v1/responses";
+    return fmt || "—";
   }
 
   // --- Cost ---------------------------------------------------------------

@@ -291,6 +291,98 @@ table.clickable tbody tr { cursor: pointer; }
   color: var(--text-dim);
 }
 
+/* --- Audit log live feed ----------------------------------------------- */
+.audit-row {
+  display: grid;
+  grid-template-columns: 18px 1fr 200px 160px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.audit-row:hover { border-color: var(--accent); }
+.audit-dot { width: 8px; height: 8px; border-radius: 50%; }
+.audit-dot.ok { background: var(--good); }
+.audit-dot.warn { background: var(--warn); }
+.audit-dot.bad { background: var(--bad); }
+.audit-dot.dim { background: var(--text-dim); }
+
+.audit-model { font-weight: 500; }
+.audit-source { color: var(--text-dim); font-size: 11px; font-family: var(--mono); }
+.audit-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+  width: 200px;
+}
+.audit-bar > div { height: 100%; }
+.audit-seg-system { background: #8957e5; }
+.audit-seg-tools { background: #f0883e; }
+.audit-seg-history { background: #388bfd; }
+.audit-seg-user { background: #4caf50; }
+
+.audit-meta-right {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--text-dim);
+}
+.audit-meta-right .audit-cost { color: var(--text); font-weight: 500; }
+
+.audit-detail {
+  display: none;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  padding: 16px;
+  margin-top: -5px;
+  margin-bottom: 4px;
+}
+.audit-detail.open { display: block; }
+.audit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+.audit-grid .k {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+.audit-grid .v {
+  font-family: var(--mono);
+  word-break: break-all;
+}
+.audit-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  margin-bottom: 12px;
+}
+.audit-legend .swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
 /* --- Lighthouse / Privacy ----------------------------------------------- */
 .lh-hero {
   display: flex;

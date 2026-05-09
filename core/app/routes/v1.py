@@ -10,6 +10,7 @@ shape before forwarding to NautRouter, then translate the response back as neede
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -20,6 +21,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.audit import build_audit
+from app.audit_meta import extract as extract_meta
+from app.audit_meta import extract_source
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
@@ -93,6 +96,11 @@ async def _process_chat_request(
     started = time.monotonic()
     messages = payload.get("messages")
     prompt_excerpt = queries.excerpt_last_user_message(messages)
+
+    # Audit metadata — what's actually shipping over the wire.
+    audit_meta = extract_meta(payload)
+    source_ip, source_hostname = extract_source(request)
+    request.state.audit_meta = audit_meta
 
     # CLASSIFY — fast path
     user_text = assemble_user_text(messages)
@@ -200,6 +208,12 @@ async def _process_chat_request(
         prompt_excerpt=prompt_excerpt,
         prompt_body=captured.body,
         prompt_body_truncated_at_byte=captured.truncated_at_byte,
+        source_ip=source_ip,
+        source_hostname=source_hostname,
+        messages_count=audit_meta["messages_count"],
+        tools_count=audit_meta["tools_count"],
+        stream_flag=audit_meta["stream_flag"],
+        request_size_bytes=audit_meta["request_size_bytes"],
     )
 
     # PLUGINS: on_request — fire-and-forget after PRECAPTURE.
@@ -293,6 +307,11 @@ async def _process_chat_request(
     response_captured = capture_response(upstream_resp, classification.sensitivity)
     spool = getattr(request.app.state, "outcome_spool", None)
     pricing = getattr(request.app.state, "pricing", None)
+    response_size_bytes = (
+        len(json.dumps(upstream_resp, ensure_ascii=False).encode("utf-8"))
+        if isinstance(upstream_resp, dict)
+        else None
+    )
     cost_usd = (
         pricing.compute_cost(
             decision_provider,
@@ -315,6 +334,7 @@ async def _process_chat_request(
         was_empty=was_empty,
         response_body=response_captured.body,
         response_body_truncated_at_byte=response_captured.truncated_at_byte,
+        response_size_bytes=response_size_bytes,
     )
 
     if decision_provider != "passthrough":
@@ -462,6 +482,7 @@ def _streaming_response(
                     client_disconnected=state["client_disconnected"],
                     response_body=response_captured.body,
                     response_body_truncated_at_byte=response_captured.truncated_at_byte,
+                    response_size_bytes=capture.bytes_seen,
                 )
             except Exception as exc:
                 log.error(
