@@ -48,6 +48,20 @@ def _parse_bearer(authorization: str) -> str:
     return authorization.split(" ", 1)[1].strip()
 
 
+def _extract_token_from_request(request: Request) -> str:
+    """Accept any of the standard auth header shapes:
+      - Authorization: Bearer ng_...    (OpenAI Chat / OpenAI SDK / curl)
+      - x-api-key: ng_...               (Anthropic Messages / Claude Code)
+    """
+    auth_header = request.headers.get("authorization", "")
+    if auth_header:
+        return _parse_bearer(auth_header)
+    api_key = request.headers.get("x-api-key", "").strip()
+    if api_key:
+        return api_key
+    raise _BAD_TOKEN
+
+
 def _split_token(raw: str) -> tuple[uuid.UUID, str]:
     if not raw.startswith("ng_"):
         raise _BAD_TOKEN
@@ -84,13 +98,16 @@ def cache_clear() -> None:
 
 
 async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
-    """Verify the Authorization header and return the caller's agent_id.
+    """Verify the request's auth header and return the caller's agent_id.
+
+    Accepts either ``Authorization: Bearer ng_...`` (OpenAI shape) or
+    ``x-api-key: ng_...`` (Anthropic shape) so Claude Code, the Anthropic SDK,
+    Codex, and the OpenAI SDK all work without translation.
 
     Cache hit: returns immediately without touching the DB or argon2id.
     Cache miss: looks up api_keys by id, verifies argon2id, caches the result.
     """
-    auth_header = request.headers.get("authorization", "")
-    raw = _parse_bearer(auth_header)
+    raw = _extract_token_from_request(request)
 
     now = time.monotonic()
     cached = _cache_get(raw, now=now)

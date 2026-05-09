@@ -204,6 +204,20 @@ async def test_route_accepts_valid_argon2_token(app_with_real_auth):
 
 
 @pytest.mark.asyncio
+async def test_route_accepts_x_api_key_header(app_with_real_auth):
+    """Claude Code / Anthropic SDK send `x-api-key:`, not `Authorization:`."""
+    app = app_with_real_auth
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"x-api-key": app.state._test_token},
+            json={"model": "x", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_route_rejects_garbage_bearer(app_with_real_auth):
     app = app_with_real_auth
     transport = httpx.ASGITransport(app=app)

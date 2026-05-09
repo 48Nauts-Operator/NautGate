@@ -1,24 +1,27 @@
-# NautGate tier → provider/model routing table (Day 5a).
+# NautGate tier → provider/model routing table.
 #
 # Used when the caller passes model: "auto". The 14-dimension scorer
 # (app/scoring.py) maps the request to a tier; this table maps tier → route.
+# `primary` is tried first; `fallback` when primary is unhealthy or banned.
 #
-# `primary` is tried first. `fallback` is used when the primary provider is
-# unhealthy (Day 5c) or the call fails.
+# IMPORTANT: model IDs here must match keys in NautRouter's MODELS map
+# (vendor/NautRouter/src/index.ts) — NautRouter only honors a forwarded
+# model when it recognizes the ID; otherwise it ignores us and auto-routes.
 #
-# All concrete model names below are best-of-breed picks as of 2026-Q2.
-# Update as the menu changes — keep this file the single source of truth.
+# Current NautRouter MODELS keys (2026-05-09):
+#   claude-opus-4, claude-sonnet-4, claude-haiku-4.5,
+#   gemini-2.5-flash, gemini-2.5-pro, local
 
 tiers:
   fast:
-    primary: { provider: openai, model: gpt-4o-mini }
-    fallback: { provider: anthropic, model: claude-haiku-4-5 }
+    primary:  { provider: anthropic, model: claude-haiku-4.5 }
+    fallback: { provider: anthropic, model: claude-haiku-4.5 }
   balanced:
-    primary: { provider: anthropic, model: claude-haiku-4-5 }
-    fallback: { provider: openai, model: gpt-4o }
+    primary:  { provider: anthropic, model: claude-haiku-4.5 }
+    fallback: { provider: anthropic, model: claude-sonnet-4 }
   deep:
-    primary: { provider: anthropic, model: claude-sonnet-4-6 }
-    fallback: { provider: openai, model: gpt-4-turbo }
+    primary:  { provider: anthropic, model: claude-sonnet-4 }
+    fallback: { provider: anthropic, model: claude-haiku-4.5 }
   expert:
-    primary: { provider: anthropic, model: claude-opus-4-7 }
-    fallback: { provider: openai, model: o1-preview }
+    primary:  { provider: anthropic, model: claude-opus-4 }
+    fallback: { provider: anthropic, model: claude-sonnet-4 }

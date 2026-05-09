@@ -60,21 +60,21 @@ type ModelDef = {
 const MODELS: Record<string, ModelDef> = {
   // Anthropic
   "claude-opus-4": {
-    id: "claude-opus-4-20250514",
+    id: "claude-opus-4-7",
     provider: "anthropic",
     inputPrice: 15,
     outputPrice: 75,
     contextWindow: 200_000,
   },
   "claude-sonnet-4": {
-    id: "claude-sonnet-4-20250514",
+    id: "claude-sonnet-4-6",
     provider: "anthropic",
     inputPrice: 3,
     outputPrice: 15,
     contextWindow: 200_000,
   },
   "claude-haiku-4.5": {
-    id: "claude-haiku-4-20250414",
+    id: "claude-haiku-4-5",
     provider: "anthropic",
     inputPrice: 1,
     outputPrice: 5,
@@ -82,14 +82,14 @@ const MODELS: Record<string, ModelDef> = {
   },
   // Google Gemini
   "gemini-2.5-flash": {
-    id: "gemini-2.5-flash-preview-05-20",
+    id: "gemini-2.5-flash",
     provider: "gemini",
     inputPrice: 0.15,
     outputPrice: 0.6,
     contextWindow: 1_000_000,
   },
   "gemini-2.5-pro": {
-    id: "gemini-2.5-pro-preview-06-05",
+    id: "gemini-2.5-pro",
     provider: "gemini",
     inputPrice: 1.25,
     outputPrice: 10,
