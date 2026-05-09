@@ -23,6 +23,8 @@ const PORT = parseInt(process.env.NAUT_PORT ?? "8402", 10);
 const WS_PORT = parseInt(process.env.NAUT_WS_PORT ?? "8403", 10);
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const LMSTUDIO_URL = process.env.LMSTUDIO_URL ?? "http://192.168.74.243:1238";
 const MEMORY_API = process.env.MEMORY_API ?? "http://100.71.163.122:8085/memories";
 const DEFAULT_PROFILE = (process.env.NAUT_PROFILE ?? "auto") as Profile;
@@ -94,6 +96,50 @@ const MODELS: Record<string, ModelDef> = {
     inputPrice: 1.25,
     outputPrice: 10,
     contextWindow: 1_000_000,
+  },
+  // OpenRouter — meta-provider with hundreds of models. `openrouter/auto`
+  // is OpenRouter's own auto-selector; it picks based on prompt + price.
+  "openrouter/auto": {
+    id: "openrouter/auto",
+    provider: "openrouter",
+    inputPrice: 0,   // varies — actual model recorded in response.model
+    outputPrice: 0,
+    contextWindow: 200_000,
+  },
+  "openrouter/anthropic/claude-haiku": {
+    id: "anthropic/claude-haiku-4.5",
+    provider: "openrouter",
+    inputPrice: 1,
+    outputPrice: 5,
+    contextWindow: 200_000,
+  },
+  "openrouter/google/gemini-flash": {
+    id: "google/gemini-2.5-flash",
+    provider: "openrouter",
+    inputPrice: 0.15,
+    outputPrice: 0.60,
+    contextWindow: 1_000_000,
+  },
+  "openrouter/openai/gpt-4o-mini": {
+    id: "openai/gpt-4o-mini",
+    provider: "openrouter",
+    inputPrice: 0.15,
+    outputPrice: 0.60,
+    contextWindow: 128_000,
+  },
+  "openrouter/meta-llama/llama-3.3-70b": {
+    id: "meta-llama/llama-3.3-70b-instruct",
+    provider: "openrouter",
+    inputPrice: 0.13,
+    outputPrice: 0.40,
+    contextWindow: 128_000,
+  },
+  "openrouter/qwen/qwen-2.5-72b": {
+    id: "qwen/qwen-2.5-72b-instruct",
+    provider: "openrouter",
+    inputPrice: 0.13,
+    outputPrice: 0.40,
+    contextWindow: 32_000,
   },
   // LM Studio local (free)
   "local": {
@@ -400,9 +446,38 @@ async function forwardToProvider(modelKey: string, body: any, stream: boolean): 
     return forwardAnthropic(modelDef, body, stream);
   } else if (modelDef.provider === "gemini") {
     return forwardGemini(modelDef, body, stream);
+  } else if (modelDef.provider === "openrouter") {
+    return forwardOpenRouter(modelDef, body, stream);
+  } else if (modelDef.provider === "openai") {
+    return forwardOpenAI(modelDef, body, stream);
   } else {
     return forwardLMStudio(modelDef, body, stream);
   }
+}
+
+async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+  // OpenRouter speaks OpenAI Chat Completions natively. Pass through with key.
+  return fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      "HTTP-Referer": "https://github.com/48Nauts-Operator/NautGate",
+      "X-Title": "NautGate",
+    },
+    body: JSON.stringify({ ...body, model: modelDef.id, stream }),
+  });
+}
+
+async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+  return fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({ ...body, model: modelDef.id, stream }),
+  });
 }
 
 async function forwardLMStudio(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {

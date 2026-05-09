@@ -1,27 +1,27 @@
 # NautGate tier → provider/model routing table.
 #
-# Used when the caller passes model: "auto". The 14-dimension scorer
-# (app/scoring.py) maps the request to a tier; this table maps tier → route.
-# `primary` is tried first; `fallback` when primary is unhealthy or banned.
+# Goal: route through OpenRouter by default so we get cheap multi-provider
+# routing + observability into what gets picked. Direct-Anthropic only at the
+# top of the stack where we explicitly want Opus/Sonnet quality.
 #
-# IMPORTANT: model IDs here must match keys in NautRouter's MODELS map
-# (vendor/NautRouter/src/index.ts) — NautRouter only honors a forwarded
-# model when it recognizes the ID; otherwise it ignores us and auto-routes.
-#
-# Current NautRouter MODELS keys (2026-05-09):
-#   claude-opus-4, claude-sonnet-4, claude-haiku-4.5,
-#   gemini-2.5-flash, gemini-2.5-pro, local
+# OpenRouter's `openrouter/auto` lets OpenRouter pick the model dynamically
+# based on the prompt — our audit log captures the *actually-used* model in
+# the response body's `model` field so we can see what it chose.
 
 tiers:
   fast:
-    primary:  { provider: anthropic, model: claude-haiku-4.5 }
-    fallback: { provider: anthropic, model: claude-haiku-4.5 }
+    # Cheap-by-default: Gemini Flash via OpenRouter (~$0.15/M, ~7× cheaper than Haiku).
+    primary:  { provider: openrouter, model: openrouter/google/gemini-flash }
+    fallback: { provider: openrouter, model: openrouter/openai/gpt-4o-mini }
   balanced:
-    primary:  { provider: anthropic, model: claude-haiku-4.5 }
-    fallback: { provider: anthropic, model: claude-sonnet-4 }
+    # Let OpenRouter auto-select for the medium-complexity middle ground.
+    primary:  { provider: openrouter, model: openrouter/auto }
+    fallback: { provider: openrouter, model: openrouter/anthropic/claude-haiku }
   deep:
-    primary:  { provider: anthropic, model: claude-sonnet-4 }
-    fallback: { provider: anthropic, model: claude-haiku-4.5 }
+    # Heavy reasoning — still let OpenRouter pick, fall through to direct Anthropic.
+    primary:  { provider: openrouter, model: openrouter/auto }
+    fallback: { provider: anthropic,  model: claude-sonnet-4 }
   expert:
-    primary:  { provider: anthropic, model: claude-opus-4 }
-    fallback: { provider: anthropic, model: claude-sonnet-4 }
+    # Top-of-stack — direct to Anthropic for Opus, OpenRouter for Sonnet fallback.
+    primary:  { provider: anthropic,  model: claude-opus-4 }
+    fallback: { provider: openrouter, model: openrouter/auto }

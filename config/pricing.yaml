@@ -50,6 +50,26 @@ pricing:
     input: 1.25
     output: 10.00
 
+  # --- OpenRouter (meta-provider) ---
+  # openrouter/auto: pricing varies — fall back to NULL cost; the actual model
+  # used is recorded in response_body.model and can be priced retroactively.
+  openrouter/openrouter/auto: { input: 0, output: 0 }
+  openrouter/openrouter/google/gemini-flash:
+    input: 0.15
+    output: 0.60
+  openrouter/openrouter/openai/gpt-4o-mini:
+    input: 0.15
+    output: 0.60
+  openrouter/openrouter/anthropic/claude-haiku:
+    input: 1.00
+    output: 5.00
+  openrouter/openrouter/meta-llama/llama-3.3-70b:
+    input: 0.13
+    output: 0.40
+  openrouter/openrouter/qwen/qwen-2.5-72b:
+    input: 0.13
+    output: 0.40
+
   # --- Local (free) ---
   lmstudio/local: { input: 0, output: 0 }
   anthropic/local: { input: 0, output: 0 }
