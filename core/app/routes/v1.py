@@ -760,6 +760,30 @@ async def decisions_recent(request: Request) -> Response:
     return JSONResponse({"agent_id": agent_id, "limit": limit, "data": rows})
 
 
+@router.get("/decisions/{decision_id}")
+async def decision_detail(decision_id: str, request: Request) -> Response:
+    """Full metadata for a single decision: classification, score, signals,
+    brain hints, prompt + response bodies (subject to capture policy),
+    outcome metrics, cost.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+
+    row = await queries.get_decision_detail(
+        pool, agent_id=agent_id, decision_id=decision_id
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse(row)
+
+
 @router.get("/stats")
 async def stats(request: Request) -> Response:
     """Aggregate stats for the authenticated agent over the last `hours` (default 24).

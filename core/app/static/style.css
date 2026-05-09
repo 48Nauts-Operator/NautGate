@@ -222,3 +222,71 @@ label input, label textarea {
   height: 320px;
   margin-bottom: 12px;
 }
+
+table.clickable tbody tr { cursor: pointer; }
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 540px;
+  max-width: 95vw;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 16px 20px;
+  z-index: 1000;
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.6);
+}
+.drawer.hidden { display: none; }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.drawer-head code {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+.drawer-head button {
+  background: var(--bg-card);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; margin-bottom: 16px; font-size: 12px; }
+.kv .k { color: var(--text-dim); font-family: var(--mono); }
+.kv .v { color: var(--text); font-family: var(--mono); word-break: break-word; }
+.kv .v.dim { color: var(--text-dim); }
+
+.section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 16px 0 6px;
+}
+
+.body-block {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--text-dim);
+}

@@ -155,7 +155,7 @@
       tbody.innerHTML = r.data
         .map(
           (d) => `
-        <tr>
+        <tr data-decision="${esc(d.decision_id)}">
           <td>${tsShort(d.ts)}</td>
           <td>${esc(d.inbound_format)}</td>
           <td><span class="tag tier">${esc(d.tier || "-")}</span></td>
@@ -166,16 +166,148 @@
           <td class="${statusClass(d.status_code)}">${d.status_code ?? "-"}</td>
           <td>${d.duration_ms ?? "-"}</td>
           <td>${tokens(d)}</td>
-          <td>${d.was_empty ? "✓" : ""}</td>
+          <td>${costShort(d)}</td>
         </tr>`
         )
         .join("");
+      tbody.querySelectorAll("tr").forEach((row) => {
+        row.addEventListener("click", () => openDetail(row.dataset.decision));
+      });
     } catch (e) {
       /* swallow; auth state explains */
     }
   }
 
   document.getElementById("dec-reload").addEventListener("click", loadDecisions);
+
+  // --- Decision detail drawer --------------------------------------------
+
+  const drawer = document.getElementById("detail-drawer");
+  document.getElementById("detail-close").addEventListener("click", () =>
+    drawer.classList.add("hidden")
+  );
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") drawer.classList.add("hidden");
+  });
+
+  async function openDetail(decisionId) {
+    if (!decisionId) return;
+    drawer.classList.remove("hidden");
+    document.getElementById("detail-id").textContent = decisionId;
+    document.getElementById("detail-body").innerHTML =
+      '<p class="hint">loading…</p>';
+    try {
+      const d = await api("/v1/decisions/" + encodeURIComponent(decisionId));
+      document.getElementById("detail-body").innerHTML = renderDetail(d);
+    } catch (e) {
+      document.getElementById("detail-body").innerHTML =
+        '<p class="hint">failed to load</p>';
+    }
+  }
+
+  function renderDetail(d) {
+    const kv = (k, v) => `<div class="k">${esc(k)}</div><div class="v">${v}</div>`;
+    const kvDim = (k, v) =>
+      `<div class="k">${esc(k)}</div><div class="v dim">${v}</div>`;
+
+    let html = "";
+
+    // Identity / routing
+    html += '<div class="section-title">Routing</div>';
+    html += '<div class="kv">';
+    html += kv("ts", esc(d.ts));
+    html += kv("agent", esc(d.agent_id));
+    html += kv("inbound", esc(d.inbound_format));
+    html += kv("model_requested", esc(d.model_requested));
+    html += kv(
+      "decision",
+      `${esc(d.decision_provider)} / ${esc(d.decision_model)}`
+    );
+    if (d.decision_reason) html += kv("reason", esc(d.decision_reason));
+    html += "</div>";
+
+    // Classification
+    html += '<div class="section-title">Classification</div>';
+    html += '<div class="kv">';
+    html += kv(
+      "tier",
+      `<span class="tag tier">${esc(d.classified_tier || "-")}</span>`
+    );
+    html += kv(
+      "score",
+      d.classified_score != null ? d.classified_score.toFixed(4) : "—"
+    );
+    html += kv("sensitivity", sensTag(d.classified_sensitivity) || "none");
+    html += "</div>";
+    if (d.classified_signals && d.classified_signals.length) {
+      html += '<div class="section-title">Sensitivity signals</div>';
+      html +=
+        '<pre class="body-block">' +
+        esc(JSON.stringify(d.classified_signals, null, 2)) +
+        "</pre>";
+    }
+    if (d.brain_hints) {
+      html += '<div class="section-title">Brain hints</div>';
+      html +=
+        '<pre class="body-block">' +
+        esc(JSON.stringify(d.brain_hints, null, 2)) +
+        "</pre>";
+    }
+
+    // Outcome / cost
+    html += '<div class="section-title">Outcome</div>';
+    html += '<div class="kv">';
+    html += kv(
+      "status",
+      `<span class="${statusClass(d.status_code)}">${d.status_code ?? "—"}</span>`
+    );
+    html += kv("duration_ms", d.duration_ms ?? "—");
+    if (d.first_byte_ms != null) html += kv("first_byte_ms", d.first_byte_ms);
+    html += kv(
+      "tokens",
+      `${d.prompt_tokens ?? "?"} → ${d.completion_tokens ?? "?"}` +
+        (d.reasoning_tokens ? ` (+${d.reasoning_tokens} reasoning)` : "")
+    );
+    html += kv("cost_usd", d.cost_usd != null ? usd(d.cost_usd) : "—");
+    if (d.was_empty) html += kv("was_empty", "true");
+    if (d.was_truncated) html += kv("was_truncated", "true");
+    if (d.client_disconnected)
+      html += kv("client_disconnected", "true");
+    html += "</div>";
+
+    // Prompt body (capture-policy gated server-side)
+    html += '<div class="section-title">Prompt</div>';
+    if (d.prompt_body) {
+      html += '<pre class="body-block">' + esc(d.prompt_body) + "</pre>";
+      if (d.prompt_body_truncated_at_byte) {
+        html += `<p class="hint">truncated at ${d.prompt_body_truncated_at_byte} bytes</p>`;
+      }
+    } else if (d.prompt_excerpt) {
+      html += '<pre class="body-block">' + esc(d.prompt_excerpt) + "</pre>";
+      html +=
+        '<p class="hint">excerpt only (sensitivity gate suppressed full body)</p>';
+    } else {
+      html += '<p class="hint">no body captured</p>';
+    }
+
+    // Response body
+    html += '<div class="section-title">Response</div>';
+    if (d.response_body) {
+      html += '<pre class="body-block">' + esc(d.response_body) + "</pre>";
+      if (d.response_body_truncated_at_byte) {
+        html += `<p class="hint">truncated at ${d.response_body_truncated_at_byte} bytes</p>`;
+      }
+    } else {
+      html += '<p class="hint">no response body captured</p>';
+    }
+
+    return html;
+  }
+
+  function costShort(d) {
+    if (d.cost_usd == null) return "—";
+    return usd(d.cost_usd);
+  }
 
   // --- Cost ---------------------------------------------------------------
 

@@ -313,6 +313,75 @@ async def get_cost_timeseries(
     }
 
 
+async def get_decision_detail(
+    pool: asyncpg.Pool,
+    *,
+    agent_id: str,
+    decision_id: str,
+) -> dict | None:
+    """Full row from route_decisions + matching outcome for one decision.
+
+    Scoped to ``agent_id`` so an authenticated agent can only see its own
+    decisions. Returns None if the decision_id doesn't exist or belongs to
+    another agent.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT d.id::text                     AS decision_id,
+               d.ts                            AS ts,
+               d.agent_id                      AS agent_id,
+               d.inbound_format                AS inbound_format,
+               d.model_requested               AS model_requested,
+               d.classified_tier               AS classified_tier,
+               d.classified_score              AS classified_score,
+               d.classified_sensitivity        AS classified_sensitivity,
+               d.classified_signals            AS classified_signals,
+               d.brain_hints                   AS brain_hints,
+               d.decision_provider             AS decision_provider,
+               d.decision_model                AS decision_model,
+               d.decision_reason               AS decision_reason,
+               d.prompt_excerpt                AS prompt_excerpt,
+               d.prompt_body                   AS prompt_body,
+               d.prompt_body_truncated_at_byte AS prompt_body_truncated_at_byte,
+               o.status_code                   AS status_code,
+               o.duration_ms                   AS duration_ms,
+               o.first_byte_ms                 AS first_byte_ms,
+               o.prompt_tokens                 AS prompt_tokens,
+               o.completion_tokens             AS completion_tokens,
+               o.reasoning_tokens              AS reasoning_tokens,
+               o.cost_usd                      AS cost_usd,
+               o.was_empty                     AS was_empty,
+               o.was_truncated                 AS was_truncated,
+               o.client_disconnected           AS client_disconnected,
+               o.response_body                 AS response_body,
+               o.response_body_truncated_at_byte AS response_body_truncated_at_byte
+          FROM nautgate.route_decisions d
+          LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+         WHERE d.id::text = $1 AND d.agent_id = $2
+        """,
+        decision_id,
+        agent_id,
+    )
+    if row is None:
+        return None
+    d = dict(row)
+    if d.get("ts"):
+        d["ts"] = d["ts"].isoformat()
+    if d.get("classified_score") is not None:
+        d["classified_score"] = float(d["classified_score"])
+    if d.get("cost_usd") is not None:
+        d["cost_usd"] = float(d["cost_usd"])
+    # JSONB fields come back as strings from asyncpg without a codec — try to parse.
+    for k in ("classified_signals", "brain_hints"):
+        v = d.get(k)
+        if isinstance(v, str):
+            try:
+                d[k] = json.loads(v)
+            except (ValueError, TypeError):
+                pass
+    return d
+
+
 async def get_recent_decisions(
     pool: asyncpg.Pool,
     *,

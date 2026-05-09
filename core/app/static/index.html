@@ -80,18 +80,28 @@
     <!-- Decisions ----------------------------------------------------------->
     <section id="tab-decisions" class="tab">
       <h2>Recent decisions <button class="reload" id="dec-reload">↻</button></h2>
-      <p class="hint">Auto-refresh every 5s while this tab is open.</p>
-      <table id="dec-table">
+      <p class="hint">Auto-refresh every 5s while this tab is open. Click any row for full metadata.</p>
+      <table id="dec-table" class="clickable">
         <thead>
           <tr>
             <th>ts</th><th>fmt</th><th>tier</th><th>score</th>
             <th>sens</th><th>provider</th><th>model</th>
-            <th>status</th><th>ms</th><th>tok</th><th>empty</th>
+            <th>status</th><th>ms</th><th>tok</th><th>cost</th>
           </tr>
         </thead>
         <tbody id="dec-tbody"></tbody>
       </table>
     </section>
+
+    <!-- Decision detail drawer (hidden until row clicked) ------------------->
+    <aside id="detail-drawer" class="drawer hidden">
+      <header class="drawer-head">
+        <strong>Decision</strong>
+        <code id="detail-id"></code>
+        <button id="detail-close">×</button>
+      </header>
+      <div id="detail-body"></div>
+    </aside>
 
     <!-- Provider health ----------------------------------------------------->
     <section id="tab-health" class="tab">

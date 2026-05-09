@@ -468,6 +468,8 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  let streamInputTokens = 0;
+  let streamOutputTokens = 0;
   const readable = new ReadableStream({
     async pull(controller) {
       let buffer = "";
@@ -487,7 +489,9 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
           if (!payload || payload === "[DONE]") continue;
           try {
             const evt = JSON.parse(payload);
-            if (evt.type === "content_block_delta" && evt.delta?.text) {
+            if (evt.type === "message_start" && evt.message?.usage?.input_tokens != null) {
+              streamInputTokens = evt.message.usage.input_tokens;
+            } else if (evt.type === "content_block_delta" && evt.delta?.text) {
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
                 object: "chat.completion.chunk",
@@ -496,13 +500,21 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
                 choices: [{ index: 0, delta: { content: evt.delta.text }, finish_reason: null }],
               };
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            } else if (evt.type === "message_delta" && evt.usage?.output_tokens != null) {
+              streamOutputTokens = evt.usage.output_tokens;
             } else if (evt.type === "message_stop") {
+              // Emit a final chunk that carries usage so NautGate can compute cost.
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
                 object: "chat.completion.chunk",
                 created: Math.floor(Date.now() / 1000),
                 model: modelDef.id,
                 choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                usage: {
+                  prompt_tokens: streamInputTokens,
+                  completion_tokens: streamOutputTokens,
+                  total_tokens: streamInputTokens + streamOutputTokens,
+                },
               };
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
             }
