@@ -19,6 +19,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from app.audit import build_audit
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response
 from app.classify import assemble_user_text, classify
@@ -168,9 +169,7 @@ async def _process_chat_request(
         prefs = await queries.get_routing_preferences(pool, agent_id=agent_id)
         is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
         # Banned: caller prefs + extension bans + brain demotions (level 6).
-        all_banned = list(
-            dict.fromkeys([*prefs["banned_models"], *plugin_banned, *plugin_demoted])
-        )
+        all_banned = list(dict.fromkeys([*prefs["banned_models"], *plugin_banned, *plugin_demoted]))
         route_pick = resolve_healthy(tier, routing_table, is_unhealthy, banned_models=all_banned)
         decision_provider = route_pick.provider
         decision_model = route_pick.model
@@ -689,6 +688,40 @@ async def list_models(request: Request) -> Response:
     return JSONResponse({"object": "list", "data": data})
 
 
+@router.get("/findings/summary")
+async def findings_summary(request: Request) -> Response:
+    """Lighthouse-style privacy audit aggregation for the authenticated agent.
+
+    Query params:
+      hours       : 1..720 (default 168 = 7 days)
+      scan_limit  : 1..2000 (default 500) — max recent decisions to scan
+
+    Returns: {overall, verdict, verdict_explain, cat_scores, cat_counts,
+              host_matrix, type_matrix, scanned_count}
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+        scan_limit = int(request.query_params.get("scan_limit", "500"))
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="hours and scan_limit must be integers"
+        ) from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if scan_limit < 1 or scan_limit > 2000:
+        raise HTTPException(status_code=400, detail="scan_limit must be in 1..2000")
+
+    decisions = await queries.get_decisions_for_findings_scan(
+        pool, agent_id=agent_id, hours=hours, limit=scan_limit
+    )
+    return JSONResponse(build_audit(decisions))
+
+
 @router.get("/cost/summary")
 async def cost_summary(request: Request) -> Response:
     """Total cost + by-provider/model/tier breakdowns over the last `?hours=N`."""
@@ -732,9 +765,7 @@ async def cost_timeseries(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="hours must be in 1..720")
 
     return JSONResponse(
-        await queries.get_cost_timeseries(
-            pool, agent_id=agent_id, bucket=bucket, hours=hours
-        )
+        await queries.get_cost_timeseries(pool, agent_id=agent_id, bucket=bucket, hours=hours)
     )
 
 
@@ -776,9 +807,7 @@ async def decision_detail(decision_id: str, request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="bad decision_id") from None
 
-    row = await queries.get_decision_detail(
-        pool, agent_id=agent_id, decision_id=decision_id
-    )
+    row = await queries.get_decision_detail(pool, agent_id=agent_id, decision_id=decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
     return JSONResponse(row)

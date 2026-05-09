@@ -13,6 +13,8 @@ Tech Paper §7.3 also describes lands later when we have a budget for an extra h
 import re
 from dataclasses import dataclass
 
+from app.findings import SEVERITY as _SEV
+
 # Rules are baked in for v1; move to config/sensitivity_rules.yaml when ops needs to tweak.
 # Each entry: (rule_id, sensitivity, compiled_regex). Order doesn't affect correctness —
 # precedence is purely max(sensitivity over all matches).
@@ -24,16 +26,83 @@ _PII_RULES: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 _SECRET_RULES: list[tuple[str, re.Pattern[str]]] = [
+    # Provider API keys (extended via ClawProxy parity).
     ("openai_api_key", re.compile(r"\bsk-(?!ant-)[A-Za-z0-9_\-]{16,}\b")),
     ("anthropic_api_key", re.compile(r"\bsk-ant-api[0-9]{2}-[A-Za-z0-9_\-]{32,}\b")),
     ("github_pat", re.compile(r"\bgh[psroua]_[A-Za-z0-9]{36,}\b")),
+    ("github_personal_token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
     ("aws_access_key_id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    # AWS secret keys are 40 char base64; require an "aws" / "secret" context word
+    # to keep false-positive rate sane.
+    (
+        "aws_secret_key",
+        re.compile(
+            r"\b(?:aws[_\- ]?secret[_\- ]?(?:access[_\- ]?)?key|secret[_\- ]?access[_\- ]?key)\b[\s:=\"']+([A-Za-z0-9/+]{40})\b",
+            re.IGNORECASE,
+        ),
+    ),
     ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b")),
     ("stripe_key", re.compile(r"\b(?:sk|pk)_(?:live|test)_[0-9a-zA-Z]{24,}\b")),
+    ("sendgrid_api_key", re.compile(r"\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b")),
+    ("twilio_auth_token", re.compile(r"\b(?:SK|AC)[a-f0-9]{32}\b")),
+    (
+        "azure_connection_string",
+        re.compile(
+            r"\bDefaultEndpointsProtocol=[^\s'\"]+;AccountKey=[A-Za-z0-9+/=]{20,}", re.IGNORECASE
+        ),
+    ),
+    # Other credentials & secrets.
     ("private_key_block", re.compile(r"-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b")),
     ("nautgate_token", re.compile(r"\bng_[a-f0-9]{32}_[A-Za-z0-9_\-]{40,}\b")),
+    (
+        "bearer_token",
+        re.compile(r"\b[Bb]earer\s+[A-Za-z0-9_\-.]{20,}\b"),
+    ),
+    (
+        "http_basic_auth_url",
+        re.compile(r"\bhttps?://[A-Za-z0-9_.\-]+:[^@\s/]{4,}@[A-Za-z0-9_.\-]+"),
+    ),
+    (
+        "database_url",
+        re.compile(
+            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s'\"]{10,}",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "env_file_content",
+        re.compile(
+            r"^[A-Z][A-Z0-9_]{2,}=(?!\s|$)['\"]?[^\s'\"]{6,}",
+            re.MULTILINE,
+        ),
+    ),
+    (
+        "generic_secret",
+        re.compile(
+            r"(?:secret|password|passwd|pwd)\s*[:=]\s*['\"]?([^\s'\"]{8,})['\"]?",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "generic_api_key",
+        re.compile(
+            r"\b(?:api[_\- ]?key|apikey)\b[\s:=\"']+([A-Za-z0-9_\-]{20,})",
+            re.IGNORECASE,
+        ),
+    ),
+    # Infrastructure.
+    (
+        "ip_address_private",
+        re.compile(
+            r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b"
+        ),
+    ),
+    (
+        "ssh_key_reference",
+        re.compile(r"\b(?:id_(?:rsa|ed25519|ecdsa|dsa)(?:\.pub)?|authorized_keys)\b"),
+    ),
 ]
 
 _RANK = {"none": 0, "pii": 1, "secret": 2}
@@ -53,6 +122,16 @@ class Classification:
         }
 
 
+def _signal(rule_id: str, sensitivity: str, count: int) -> dict:
+    """Standard signal shape — includes Lighthouse-audit severity from findings.SEVERITY."""
+    return {
+        "rule_id": rule_id,
+        "sensitivity": sensitivity,
+        "severity": _SEV.get(rule_id, "info"),
+        "count": count,
+    }
+
+
 def classify(text: str | None) -> Classification:
     """Run the fast-path regex rules against `text`. Empty/None text → none."""
     if not text:
@@ -64,14 +143,14 @@ def classify(text: str | None) -> Classification:
     for rule_id, pattern in _SECRET_RULES:
         matches = pattern.findall(text)
         if matches:
-            signals.append({"rule_id": rule_id, "sensitivity": "secret", "count": len(matches)})
+            signals.append(_signal(rule_id, "secret", len(matches)))
             worst = "secret"
 
     if worst != "secret":
         for rule_id, pattern in _PII_RULES:
             matches = pattern.findall(text)
             if matches:
-                signals.append({"rule_id": rule_id, "sensitivity": "pii", "count": len(matches)})
+                signals.append(_signal(rule_id, "pii", len(matches)))
                 if _RANK["pii"] > _RANK[worst]:
                     worst = "pii"
 
@@ -82,10 +161,42 @@ def classify(text: str | None) -> Classification:
                 continue
             matches = pattern.findall(text)
             if matches:
-                signals.append({"rule_id": rule_id, "sensitivity": "pii", "count": len(matches)})
+                signals.append(_signal(rule_id, "pii", len(matches)))
 
     reason = ",".join(s["rule_id"] for s in signals) if signals else None
     return Classification(sensitivity=worst, reason=reason, signals=signals)
+
+
+def scan_for_findings(text: str | None) -> list[dict]:
+    """Re-scan a text body for all rules, returning sample-bearing findings.
+
+    Used by the privacy audit endpoint to extract matched_text. Distinct from
+    classify() which only returns aggregated counts. Skips PII inside text that
+    also contains secrets, since the audit treats them as separate categories.
+    """
+    if not text:
+        return []
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for rule_list, sensitivity in ((_SECRET_RULES, "secret"), (_PII_RULES, "pii")):
+        for rule_id, pattern in rule_list:
+            for m in pattern.finditer(text):
+                # If the rule has a capture group (e.g. generic_secret), prefer it
+                # so we don't store the surrounding label.
+                sample = m.group(1) if m.groups() else m.group(0)
+                key = (rule_id, sample[:20])
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(
+                    {
+                        "rule_id": rule_id,
+                        "sensitivity": sensitivity,
+                        "severity": _SEV.get(rule_id, "info"),
+                        "matched_text": sample[:80],
+                    }
+                )
+    return out
 
 
 def assemble_user_text(messages: list[dict] | None) -> str:

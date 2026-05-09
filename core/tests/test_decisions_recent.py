@@ -45,9 +45,7 @@ async def app_with_decisions(monkeypatch):
         ]
 
     monkeypatch.setattr("app.routes.v1.authenticate", fake_authenticate)
-    monkeypatch.setattr(
-        "app.routes.v1.queries.get_recent_decisions", fake_get_recent_decisions
-    )
+    monkeypatch.setattr("app.routes.v1.queries.get_recent_decisions", fake_get_recent_decisions)
 
     from app.main import create_app
 
@@ -71,9 +69,7 @@ async def test_returns_data_with_default_limit(app_with_decisions):
     app, captured = app_with_decisions
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
-        resp = await c.get(
-            "/v1/decisions/recent", headers={"Authorization": "Bearer ng_test"}
-        )
+        resp = await c.get("/v1/decisions/recent", headers={"Authorization": "Bearer ng_test"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["agent_id"] == "alice"

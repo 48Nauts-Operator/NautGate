@@ -110,6 +110,7 @@
   function refreshActive() {
     if (activeTab === "overview") loadOverview();
     else if (activeTab === "cost") loadCost();
+    else if (activeTab === "privacy") loadPrivacy();
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
@@ -307,6 +308,169 @@
   function costShort(d) {
     if (d.cost_usd == null) return "—";
     return usd(d.cost_usd);
+  }
+
+  // --- Privacy / Lighthouse audit ----------------------------------------
+
+  let privacyWindow = 168;
+
+  document.querySelectorAll('#tab-privacy .window-buttons button').forEach((b) => {
+    b.addEventListener('click', () => {
+      privacyWindow = Number(b.dataset.window);
+      document
+        .querySelectorAll('#tab-privacy .window-buttons button')
+        .forEach((x) => x.classList.toggle('active', x === b));
+      loadPrivacy();
+    });
+  });
+
+  async function loadPrivacy() {
+    if (!getToken()) return;
+    try {
+      const r = await api(`/v1/findings/summary?hours=${privacyWindow}&scan_limit=500`);
+      renderPrivacy(r);
+    } catch (e) {
+      /* swallow */
+    }
+  }
+
+  const LH_CAT_ORDER = ["credentials", "secrets", "pii", "infrastructure"];
+  const LH_CAT_META = {
+    credentials: { icon: "🔑", label: "Credentials" },
+    secrets: { icon: "🔒", label: "Secrets" },
+    pii: { icon: "👤", label: "PII" },
+    infrastructure: { icon: "🖥", label: "Infrastructure" },
+  };
+
+  function renderPrivacy(r) {
+    drawLhScore(r.overall);
+    document.getElementById("lh-verdict").textContent = r.verdict || "—";
+    document.getElementById("lh-verdict").style.color = lhScoreColor(r.overall);
+    document.getElementById("lh-explain").textContent = r.verdict_explain || "";
+    document.getElementById("lh-scanned").textContent = `Scanned ${r.scanned_count} recent decisions.`;
+
+    // Category cards.
+    const cats = document.getElementById("lh-categories");
+    cats.innerHTML = LH_CAT_ORDER.map((cat) => {
+      const score = r.cat_scores?.[cat] ?? 100;
+      const counts = r.cat_counts?.[cat] || { critical: 0, warning: 0, info: 0 };
+      const total = counts.critical + counts.warning + counts.info;
+      return `
+        <div class="lh-cat">
+          <span class="lh-cat-icon">${LH_CAT_META[cat].icon}</span>
+          <div style="flex:1">
+            <div class="lh-cat-label">${LH_CAT_META[cat].label}</div>
+            <div class="lh-cat-score" style="color:${lhScoreColor(score)}">${score}</div>
+            <div class="lh-cat-detail">${total} finding${total === 1 ? "" : "s"} · ${counts.critical}c / ${counts.warning}w / ${counts.info}i</div>
+          </div>
+        </div>`;
+    }).join("");
+
+    // Hosts table.
+    const hostsBody = document.querySelector("#lh-hosts tbody");
+    if ((r.host_matrix || []).length === 0) {
+      hostsBody.innerHTML = `<tr><td colspan="7" class="hint">No findings.</td></tr>`;
+    } else {
+      hostsBody.innerHTML = r.host_matrix
+        .map(
+          (h) => `
+          <tr>
+            <td>${esc(h.agent_id)}</td>
+            <td class="${h.credentials > 0 ? "lh-cell-crit" : ""}">${h.credentials}</td>
+            <td class="${h.secrets > 0 ? "lh-cell-crit" : ""}">${h.secrets}</td>
+            <td class="${h.pii > 0 ? "lh-cell-warn" : ""}">${h.pii}</td>
+            <td class="${h.infrastructure > 0 ? "lh-cell-warn" : ""}">${h.infrastructure}</td>
+            <td><b>${h.total}</b></td>
+            <td>${tsShort(h.lastSeen)}</td>
+          </tr>`
+        )
+        .join("");
+    }
+
+    // Types table with expandable detail.
+    const typesBody = document.querySelector("#lh-types tbody");
+    if ((r.type_matrix || []).length === 0) {
+      typesBody.innerHTML = `<tr><td colspan="6" class="hint">No findings.</td></tr>`;
+    } else {
+      typesBody.innerHTML = r.type_matrix
+        .map((t, i) => {
+          const sev = `<span class="lh-sev-${esc(t.severity)}">${esc(t.severity)}</span>`;
+          const sample = (t.samples && t.samples[0]) || "—";
+          return `
+            <tr data-lh-row="${i}">
+              <td>${esc(t.display)}</td>
+              <td>${sev}</td>
+              <td><b>${t.count}</b></td>
+              <td>${esc((t.agents || []).join(", "))}</td>
+              <td>${tsShort(t.lastSeen)}</td>
+              <td><code>${esc(sample)}</code></td>
+            </tr>
+            <tr class="lh-detail-row" data-lh-detail="${i}" style="display:none">
+              <td colspan="6">
+                <div class="lh-block">
+                  <div class="lh-block-title">What happened</div>
+                  <div>${esc(t.description || "")}</div>
+                </div>
+                <div class="lh-block">
+                  <div class="lh-block-title">How to prevent it</div>
+                  <div>${esc(t.remediation || "")}</div>
+                </div>
+                <div class="lh-block">
+                  <div class="lh-block-title">All matched samples (${(t.samples || []).length})</div>
+                  ${(t.samples || []).map((s) => `<div class="lh-sample">${esc(s)}</div>`).join("") || '<div class="hint">No samples captured (body suppressed by sensitivity gate).</div>'}
+                </div>
+              </td>
+            </tr>`;
+        })
+        .join("");
+      typesBody.querySelectorAll("tr[data-lh-row]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const i = row.dataset.lhRow;
+          const detail = typesBody.querySelector(`tr[data-lh-detail="${i}"]`);
+          if (detail) detail.style.display = detail.style.display === "none" ? "table-row" : "none";
+        });
+      });
+    }
+  }
+
+  function drawLhScore(score) {
+    const canvas = document.getElementById("lh-score");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = 160 * dpr;
+    canvas.height = 160 * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, 160, 160);
+
+    const cx = 80, cy = 80, r = 64, lw = 12;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = lw;
+    ctx.stroke();
+
+    const color = lhScoreColor(score);
+    const end = -Math.PI / 2 + ((score || 0) / 100) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI / 2, end);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.font = "bold 36px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(score ?? 0), cx, cy);
+  }
+
+  function lhScoreColor(score) {
+    if (score >= 90) return "#10b981";
+    if (score >= 70) return "#6ea5ff";
+    if (score >= 50) return "#f59e0b";
+    return "#ef4444";
   }
 
   // --- Cost ---------------------------------------------------------------

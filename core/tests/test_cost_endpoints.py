@@ -27,9 +27,25 @@ async def app_with_cost(monkeypatch):
             "total_cost_usd": 0.0345,
             "total_prompt_tokens": 1500,
             "total_completion_tokens": 800,
-            "by_provider": [{"key": "anthropic", "cost_usd": 0.03, "calls": 8, "prompt_tokens": 1000, "completion_tokens": 600}],
+            "by_provider": [
+                {
+                    "key": "anthropic",
+                    "cost_usd": 0.03,
+                    "calls": 8,
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 600,
+                }
+            ],
             "by_model": [],
-            "by_tier": [{"key": "fast", "cost_usd": 0.005, "calls": 4, "prompt_tokens": 500, "completion_tokens": 200}],
+            "by_tier": [
+                {
+                    "key": "fast",
+                    "cost_usd": 0.005,
+                    "calls": 4,
+                    "prompt_tokens": 500,
+                    "completion_tokens": 200,
+                }
+            ],
         }
 
     async def fake_timeseries(pool, *, agent_id, bucket, hours):
@@ -39,10 +55,13 @@ async def app_with_cost(monkeypatch):
             "bucket": bucket,
             "window_hours": hours,
             "series": [
-                {"provider": "anthropic", "points": [
-                    {"ts": "2026-05-09T10:00:00+00:00", "cost_usd": 0.01, "calls": 3},
-                    {"ts": "2026-05-09T11:00:00+00:00", "cost_usd": 0.02, "calls": 5},
-                ]},
+                {
+                    "provider": "anthropic",
+                    "points": [
+                        {"ts": "2026-05-09T10:00:00+00:00", "cost_usd": 0.01, "calls": 3},
+                        {"ts": "2026-05-09T11:00:00+00:00", "cost_usd": 0.02, "calls": 5},
+                    ],
+                },
             ],
         }
 
@@ -115,9 +134,7 @@ async def test_timeseries_default_bucket_hour(app_with_cost):
     app, captured = app_with_cost
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
-        resp = await c.get(
-            "/v1/cost/timeseries", headers={"Authorization": "Bearer ng_test"}
-        )
+        resp = await c.get("/v1/cost/timeseries", headers={"Authorization": "Bearer ng_test"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["bucket"] == "hour"

@@ -50,8 +50,8 @@ def _parse_bearer(authorization: str) -> str:
 
 def _extract_token_from_request(request: Request) -> str:
     """Accept any of the standard auth header shapes:
-      - Authorization: Bearer ng_...    (OpenAI Chat / OpenAI SDK / curl)
-      - x-api-key: ng_...               (Anthropic Messages / Claude Code)
+    - Authorization: Bearer ng_...    (OpenAI Chat / OpenAI SDK / curl)
+    - x-api-key: ng_...               (Anthropic Messages / Claude Code)
     """
     auth_header = request.headers.get("authorization", "")
     if auth_header:

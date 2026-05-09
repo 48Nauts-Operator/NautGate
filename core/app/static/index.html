@@ -12,6 +12,7 @@
     <nav>
       <a href="#overview" data-tab="overview" class="active">Overview</a>
       <a href="#cost" data-tab="cost">Cost</a>
+      <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
       <a href="#health" data-tab="health">Provider health</a>
       <a href="#models" data-tab="models">Models</a>
@@ -75,6 +76,41 @@
 
       <h3>By tier</h3>
       <table id="cost-tier"><thead><tr><th>tier</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- Privacy (Lighthouse audit) ------------------------------------------>
+    <section id="tab-privacy" class="tab">
+      <h2>Privacy audit
+        <span class="window-buttons">
+          <button data-window="24" data-bucket="hour">24h</button>
+          <button data-window="168" data-bucket="hour" class="active">7d</button>
+          <button data-window="720" data-bucket="day">30d</button>
+        </span>
+      </h2>
+      <p class="hint">Lighthouse-style audit of recent prompts. Severity-weighted score across credentials, secrets, PII, and infrastructure findings.</p>
+
+      <div class="lh-hero">
+        <canvas id="lh-score" width="160" height="160"></canvas>
+        <div class="lh-hero-text">
+          <div class="lh-verdict" id="lh-verdict">—</div>
+          <div class="lh-explain" id="lh-explain"></div>
+          <div class="hint" id="lh-scanned"></div>
+        </div>
+      </div>
+
+      <div class="lh-categories" id="lh-categories"></div>
+
+      <h3>Exposure by agent</h3>
+      <table id="lh-hosts">
+        <thead><tr><th>agent</th><th>credentials</th><th>secrets</th><th>PII</th><th>infra</th><th>total</th><th>last seen</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Exposure by type</h3>
+      <table id="lh-types" class="clickable">
+        <thead><tr><th>finding</th><th>severity</th><th>count</th><th>agents</th><th>last seen</th><th>sample</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <!-- Decisions ----------------------------------------------------------->

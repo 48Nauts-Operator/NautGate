@@ -290,3 +290,73 @@ table.clickable tbody tr { cursor: pointer; }
   overflow: auto;
   color: var(--text-dim);
 }
+
+/* --- Lighthouse / Privacy ----------------------------------------------- */
+.lh-hero {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.lh-hero-text { flex: 1; }
+.lh-verdict {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.lh-explain {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-bottom: 6px;
+  max-width: 720px;
+}
+
+.lh-categories {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+@media (max-width: 800px) { .lh-categories { grid-template-columns: 1fr 1fr; } }
+.lh-cat {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.lh-cat-icon { font-size: 22px; }
+.lh-cat-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.lh-cat-score { font-size: 22px; font-weight: 600; font-family: var(--mono); }
+.lh-cat-detail { font-size: 11px; color: var(--text-dim); }
+
+.lh-sev-critical { color: var(--bad); }
+.lh-sev-warning { color: var(--warn); }
+.lh-sev-info { color: var(--accent); }
+
+.lh-cell-crit { color: var(--bad); font-weight: 600; }
+.lh-cell-warn { color: var(--warn); font-weight: 600; }
+
+.lh-detail-row td { background: rgba(110, 165, 255, 0.06); padding: 12px; }
+.lh-detail-row .lh-block { margin-bottom: 8px; }
+.lh-detail-row .lh-block-title {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+.lh-sample {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  word-break: break-all;
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--border);
+}

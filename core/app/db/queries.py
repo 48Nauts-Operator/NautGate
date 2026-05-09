@@ -307,10 +307,55 @@ async def get_cost_timeseries(
         "agent_id": agent_id,
         "bucket": bucket,
         "window_hours": hours,
-        "series": [
-            {"provider": p, "points": points} for p, points in series_map.items()
-        ],
+        "series": [{"provider": p, "points": points} for p, points in series_map.items()],
     }
+
+
+async def get_decisions_for_findings_scan(
+    pool: asyncpg.Pool,
+    *,
+    agent_id: str,
+    hours: int,
+    limit: int,
+) -> list[dict]:
+    """Pull recent rows for the Lighthouse-style privacy audit.
+
+    Returns prompt_body when capture policy permitted (sensitivity != secret),
+    plus the stored classified_signals JSONB for rows that had body suppressed.
+    Also pulls ts so the audit can compute "last seen" per finding type.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT d.id::text                AS decision_id,
+               d.ts                       AS ts,
+               d.agent_id                 AS agent_id,
+               d.classified_sensitivity   AS classified_sensitivity,
+               d.classified_signals       AS classified_signals,
+               d.decision_model           AS decision_model,
+               d.prompt_body              AS prompt_body
+          FROM nautgate.route_decisions d
+         WHERE d.agent_id = $1
+           AND d.ts > NOW() - make_interval(hours => $2)
+         ORDER BY d.ts DESC
+         LIMIT $3
+        """,
+        agent_id,
+        hours,
+        limit,
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("ts"):
+            d["ts"] = d["ts"].isoformat()
+        signals = d.get("classified_signals")
+        if isinstance(signals, str):
+            try:
+                d["classified_signals"] = json.loads(signals)
+            except (ValueError, TypeError):
+                d["classified_signals"] = None
+        out.append(d)
+    return out
 
 
 async def get_decision_detail(

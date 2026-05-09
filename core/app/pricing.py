@@ -20,8 +20,8 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ModelPrice:
-    input: float       # USD per million prompt tokens
-    output: float      # USD per million completion tokens
+    input: float  # USD per million prompt tokens
+    output: float  # USD per million completion tokens
     cache_read: float | None = None
     cache_write: float | None = None
 
@@ -53,12 +53,8 @@ class PricingTable:
                 prices[str(key)] = ModelPrice(
                     input=float(body.get("input", 0)),
                     output=float(body.get("output", 0)),
-                    cache_read=(
-                        float(body["cache_read"]) if "cache_read" in body else None
-                    ),
-                    cache_write=(
-                        float(body["cache_write"]) if "cache_write" in body else None
-                    ),
+                    cache_read=(float(body["cache_read"]) if "cache_read" in body else None),
+                    cache_write=(float(body["cache_write"]) if "cache_write" in body else None),
                 )
             except (TypeError, ValueError) as exc:
                 log.warning("pricing_entry_invalid key=%s err=%s", key, exc)
