@@ -12,6 +12,7 @@
     <nav>
       <a href="#overview" data-tab="overview" class="active">Overview</a>
       <a href="#audit" data-tab="audit">Audit Log</a>
+      <a href="#scorecard" data-tab="scorecard">Scorecard</a>
       <a href="#cost" data-tab="cost">Cost</a>
       <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
@@ -84,6 +85,22 @@
       <h2>Audit log <button class="reload" id="audit-reload">↻</button></h2>
       <p class="hint">Every LLM call as it happens. The token bar shows where the tokens *go* — system / tools / history / current user — so you can spot CLI bloat (a "hi" prompt shouldn't ship 30 KB of system + 12 tool defs). Click any row for full metadata.</p>
       <div id="audit-list"></div>
+    </section>
+
+    <!-- Scorecard (brain layer) --------------------------------------------->
+    <section id="tab-scorecard" class="tab">
+      <h2>Model Scorecard <button class="reload" id="sc-reload">↻</button></h2>
+      <p class="hint">The brain layer. Each (provider, model, tier) accumulates a score in [0, 1] starting at 0.50. Bloat findings (excessive context, history dominance, unused tools, oversized payload) subtract; clean requests slowly add. Score &lt; 0.30 → routing demotes the model and falls through to the tier's fallback. Penalties decay with a 7-day half-life. Click an incident to see the audit detail.</p>
+      <table id="sc-table" class="clickable">
+        <thead>
+          <tr>
+            <th>provider</th><th>model</th><th>tier</th>
+            <th>score</th><th>samples</th><th>waste</th>
+            <th>status</th><th>recent incidents</th>
+          </tr>
+        </thead>
+        <tbody id="sc-tbody"></tbody>
+      </table>
     </section>
 
     <!-- Privacy (Lighthouse audit) ------------------------------------------>

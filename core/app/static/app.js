@@ -115,6 +115,7 @@
     else if (activeTab === "cost") loadCost();
     else if (activeTab === "privacy") loadPrivacy();
     else if (activeTab === "decisions") loadDecisions();
+    else if (activeTab === "scorecard") loadScorecard();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
   }
@@ -515,6 +516,16 @@
         const latency = r.duration_ms != null ? r.duration_ms + "ms" : "—";
         const calls = (r.tool_calls_made || []).map((t) => `<span class="audit-tool-chip">${esc(t.name || "?")}</span>`).join("");
         const callsLine = calls ? `<div class="audit-tools-called">${calls}</div>` : "";
+        // Bloat chip — show when this request triggered findings.
+        let bloatChip = "";
+        if (r.bloat_score && r.bloat_score > 0) {
+          const sev = r.bloat_score >= 0.06 ? "crit" : r.bloat_score >= 0.02 ? "warn" : "info";
+          const wasteText = r.estimated_waste_usd && r.estimated_waste_usd > 0
+            ? ` · $${r.estimated_waste_usd.toFixed(4)}`
+            : "";
+          const reqKB = r.request_size_bytes ? Math.round(r.request_size_bytes / 1024) + "KB" : "";
+          bloatChip = `<span class="bloat-chip bloat-${sev}" title="bloat score ${r.bloat_score.toFixed(3)}">⚠ ${reqKB}${wasteText}</span>`;
+        }
         // Show "decision → actual" when they differ (e.g. openrouter/auto → google/gemini-2.5-flash).
         const decided = r.model || r.model_requested || "—";
         const actual = r.actual_model && r.actual_model !== decided ? r.actual_model : null;
@@ -525,7 +536,7 @@
           <div class="audit-row" data-decision="${esc(r.decision_id)}">
             <div class="audit-dot ${dot}"></div>
             <div>
-              <div class="audit-model">${esc(decided)}${actualBit} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span></div>
+              <div class="audit-model">${esc(decided)}${actualBit} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span> ${bloatChip}</div>
               ${callsLine}
             </div>
             <div>${bar}<div class="audit-source" style="margin-top:2px">${total} tokens · ${(r.request_size_bytes || 0) >= 1024 ? Math.round(r.request_size_bytes / 1024) + "KB" : (r.request_size_bytes || 0) + "B"} req</div></div>
@@ -636,6 +647,24 @@
     if (d.payload_anatomy) {
       html += '<div class="section-title">Payload Anatomy — what shipped upstream</div>';
       html += renderPayloadAnatomy(d.payload_anatomy);
+    }
+
+    // Bloat findings — brain layer's per-finding evaluation of this request
+    if (d.bloat_findings && d.bloat_findings.length) {
+      html += '<div class="section-title">Bloat Findings <span class="hint">— score penalty: −' + (d.bloat_score || 0).toFixed(3);
+      if (d.estimated_waste_usd) html += ' · est. wasted spend: $' + d.estimated_waste_usd.toFixed(4);
+      html += '</span></div>';
+      html += '<div class="bloat-findings">';
+      html += d.bloat_findings.map(f => `
+        <div class="bloat-finding bloat-${esc(f.severity || "info")}">
+          <div class="bloat-finding-head">
+            <span class="bloat-sev-badge bloat-${esc(f.severity || "info")}">${esc(f.severity)}</span>
+            <b>${esc(f.type)}</b>
+            <span class="hint">−${(f.penalty || 0).toFixed(3)}</span>
+          </div>
+          <div class="bloat-finding-detail">${esc(f.detail || "")}</div>
+        </div>`).join("");
+      html += '</div>';
     }
 
     // Prompt body — block-style (one msg-block per message)
@@ -869,6 +898,77 @@
       loadCost();
     });
   });
+
+  // --- Scorecard (brain layer) -------------------------------------------
+
+  document.getElementById("sc-reload").addEventListener("click", () => loadScorecard());
+
+  async function loadScorecard() {
+    const tbody = document.getElementById("sc-tbody");
+    tbody.innerHTML = '<tr><td colspan="8" class="hint">loading…</td></tr>';
+    try {
+      const data = await api("/v1/scorecard");
+      const items = data.items || [];
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="hint">No scorecard data yet — make a few requests via /v1/chat/completions and they\'ll show up here.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(renderScorecardRow).join("");
+      // Wire up incident click → audit detail.
+      tbody.querySelectorAll("[data-incident-decision]").forEach(el => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const did = el.getAttribute("data-incident-decision");
+          openDecisionDetail(did);
+        });
+      });
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="8" class="hint">load failed: ${esc(e.message || e)}</td></tr>`;
+    }
+  }
+
+  function renderScorecardRow(r) {
+    const score = r.score.toFixed(3);
+    const scoreColor = r.score < 0.30 ? "#ff5c5c" : r.score < 0.45 ? "#f0b132" : r.score > 0.55 ? "#4caf50" : "#888";
+    const statusBadge = r.is_demoted
+      ? '<span class="sc-badge sc-demoted">demoted</span>'
+      : r.score > 0.55
+        ? '<span class="sc-badge sc-trusted">trusted</span>'
+        : '<span class="sc-badge sc-neutral">neutral</span>';
+    const waste = r.total_waste_usd > 0
+      ? '<span class="sc-waste">$' + r.total_waste_usd.toFixed(4) + '</span>'
+      : '<span class="hint">$0</span>';
+    const incidents = (r.recent_incidents || []).length === 0
+      ? '<span class="hint">none</span>'
+      : r.recent_incidents.map(i => {
+          const sev = i.severity || "info";
+          return `<span class="sc-incident sc-sev-${esc(sev)}" data-incident-decision="${esc(i.decision_id)}" title="penalty -${i.score_penalty.toFixed(3)} · waste $${(i.estimated_waste_usd || 0).toFixed(4)} · ${i.ts}">${esc(i.finding_type)}</span>`;
+        }).join(" ");
+    return `
+      <tr>
+        <td>${esc(r.provider)}</td>
+        <td><b>${esc(r.model)}</b></td>
+        <td>${esc(r.tier)}</td>
+        <td><span style="color:${scoreColor};font-family:var(--mono);font-weight:600">${score}</span></td>
+        <td>${r.sample_size}</td>
+        <td>${waste}</td>
+        <td>${statusBadge}</td>
+        <td>${incidents}</td>
+      </tr>`;
+  }
+
+  // Open the decision detail drawer for a decision_id (used by scorecard click-through).
+  async function openDecisionDetail(decisionId) {
+    document.getElementById("detail-id").textContent = decisionId;
+    document.getElementById("detail-body").innerHTML = '<p class="hint">loading…</p>';
+    drawer.classList.remove("hidden");
+    try {
+      const d = await api(`/v1/decisions/${decisionId}`);
+      document.getElementById("detail-body").innerHTML = renderDetail(d);
+    } catch (e) {
+      document.getElementById("detail-body").innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
 
   async function loadCost() {
     if (!getToken()) return;

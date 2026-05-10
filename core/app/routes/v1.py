@@ -207,12 +207,35 @@ async def _process_chat_request(
             raise HTTPException(status_code=503, detail="routing_table_unavailable")
         prefs = await queries.get_routing_preferences(pool, agent_id=agent_id)
         is_unhealthy = health_tracker.is_unhealthy if health_tracker else (lambda *_: False)
-        # Banned: caller prefs + extension bans + brain demotions (level 6).
-        all_banned = list(dict.fromkeys([*prefs["banned_models"], *plugin_banned, *plugin_demoted]))
+
+        # Brain layer: scorecard-based demotion. Pull demoted models for this
+        # tier and merge into banned_models. Note in decision_reason if used.
+        scorecard_demoted: list[str] = []
+        scorecard_demotion_note: str | None = None
+        try:
+            from app.scorecard import is_demoted as _scorecard_is_demoted
+            primary_pick = resolve_healthy(tier, routing_table, lambda *_: False)
+            primary_demoted, primary_score = await _scorecard_is_demoted(
+                pool, provider=primary_pick.provider, model=primary_pick.model, tier=tier,
+            )
+            if primary_demoted:
+                scorecard_demoted.append(primary_pick.model)
+                scorecard_demotion_note = (
+                    f"scorecard_demoted:{primary_pick.model}@{tier}:{primary_score:.2f}"
+                )
+        except Exception as exc:
+            log.warning("scorecard_lookup_failed", error=str(exc), tier=tier)
+
+        # Banned: caller prefs + extension bans + brain demotions (level 6) + scorecard.
+        all_banned = list(dict.fromkeys([
+            *prefs["banned_models"], *plugin_banned, *plugin_demoted, *scorecard_demoted,
+        ]))
         route_pick = resolve_healthy(tier, routing_table, is_unhealthy, banned_models=all_banned)
         decision_provider = route_pick.provider
         decision_model = route_pick.model
         decision_reason = f"auto:{tier}->{route_pick.provider}/{route_pick.model}"
+        if scorecard_demotion_note:
+            decision_reason += f" ({scorecard_demotion_note})"
         payload["model"] = decision_model
     else:
         decision_provider = "passthrough"
@@ -380,6 +403,19 @@ async def _process_chat_request(
         actual_model=actual_model,
         actual_provider=actual_provider,
     )
+    # Brain layer — fire-and-forget. Compute bloat findings + update scorecard.
+    # Wrapped in try/except so a brain failure never breaks the request path.
+    if pool is not None:
+        try:
+            from app.scorecard import process_brain
+            await process_brain(
+                pool, pricing,
+                decision_id=decision_id,
+                actual_provider=actual_provider,
+                actual_model=actual_model,
+            )
+        except Exception as exc:
+            log.warning("brain_layer_failed", error=str(exc), decision_id=str(decision_id))
 
     if decision_provider != "passthrough":
         if health_tracker is not None:
@@ -534,6 +570,18 @@ def _streaming_response(
                     actual_model=parsed.get("actual_model"),
                     actual_provider=parsed.get("actual_provider"),
                 )
+                # Brain layer — same fire-and-forget pattern as non-streaming.
+                if pool is not None:
+                    try:
+                        from app.scorecard import process_brain
+                        await process_brain(
+                            pool, stream_pricing,
+                            decision_id=decision_id,
+                            actual_provider=parsed.get("actual_provider"),
+                            actual_model=parsed.get("actual_model"),
+                        )
+                    except Exception as exc:
+                        log.warning("brain_layer_failed_in_stream", error=str(exc), decision_id=str(decision_id))
             except Exception as exc:
                 log.error(
                     "outcome_write_failed_in_stream",
@@ -882,6 +930,67 @@ async def decision_detail(decision_id: str, request: Request) -> Response:
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
     return JSONResponse(row)
+
+
+@router.get("/scorecard")
+async def scorecard_view(request: Request) -> Response:
+    """Brain layer scorecard — per-(provider, model, tier) score, sample count,
+    cumulative wasted USD, and recent incidents linking back to the offending
+    decisions.
+
+    Auth required, but scorecard data is global (not per-agent) — every
+    authenticated agent sees the same brain memory.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.scorecard import get_scorecard_with_incidents
+    rows = await get_scorecard_with_incidents(pool, incidents_per_row=5)
+    return JSONResponse({"items": rows})
+
+
+@router.get("/scorecard/{provider}/{model_path:path}/incidents")
+async def scorecard_incidents(provider: str, model_path: str, request: Request) -> Response:
+    """Paginated incident list for one (provider, model). The model_path can
+    contain slashes (openrouter/deepseek/deepseek-v4-flash), hence path:.
+    Query params: tier (required), limit (default 50, max 500).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    tier = request.query_params.get("tier")
+    if not tier:
+        raise HTTPException(status_code=400, detail="tier query param required")
+    try:
+        limit = min(500, max(1, int(request.query_params.get("limit", "50"))))
+    except ValueError:
+        limit = 50
+    rows = await pool.fetch(
+        """
+        SELECT id::text, decision_id::text, finding_type, severity,
+               score_penalty, estimated_waste_usd, ts
+          FROM nautgate.model_incidents
+         WHERE provider = $1 AND model = $2 AND tier = $3
+         ORDER BY ts DESC
+         LIMIT $4
+        """,
+        provider, model_path, tier, limit,
+    )
+    items = [
+        {
+            "id": r["id"],
+            "decision_id": r["decision_id"],
+            "finding_type": r["finding_type"],
+            "severity": r["severity"],
+            "score_penalty": float(r["score_penalty"]),
+            "estimated_waste_usd": float(r["estimated_waste_usd"] or 0),
+            "ts": r["ts"].isoformat() if r["ts"] else None,
+        }
+        for r in rows
+    ]
+    return JSONResponse({"items": items, "count": len(items)})
 
 
 @router.get("/stats")

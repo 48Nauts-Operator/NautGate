@@ -679,6 +679,8 @@ async def get_recent_decisions(
                d.tools_count        AS tools_count,
                d.stream_flag        AS stream_flag,
                d.request_size_bytes AS request_size_bytes,
+               d.bloat_score        AS bloat_score,
+               d.estimated_waste_usd AS estimated_waste_usd,
                o.status_code        AS status_code,
                o.duration_ms        AS duration_ms,
                o.first_byte_ms      AS first_byte_ms,
@@ -710,6 +712,10 @@ async def get_recent_decisions(
             d["score"] = float(d["score"])
         if d.get("cost_usd") is not None:
             d["cost_usd"] = float(d["cost_usd"])
+        if d.get("bloat_score") is not None:
+            d["bloat_score"] = float(d["bloat_score"])
+        if d.get("estimated_waste_usd") is not None:
+            d["estimated_waste_usd"] = float(d["estimated_waste_usd"])
         if isinstance(d.get("tool_calls_made"), str):
             try:
                 d["tool_calls_made"] = json.loads(d["tool_calls_made"])
