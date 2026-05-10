@@ -69,9 +69,94 @@ nav a:hover { color: var(--text); }
   font-size: 13px;
 }
 .auth button:hover, button:hover { filter: brightness(1.1); }
+.auth-state-label { font-size: 11px; color: var(--text-dim); }
 .auth-state { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
 .auth-state.ok { color: var(--good); }
 .auth-state.bad { color: var(--bad); }
+.session-pill {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: inherit;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-pill:hover { border-color: var(--accent); }
+
+/* Sessions table on Overview */
+.sessions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.sessions-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+}
+.sessions-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.sessions-table tr.session-row-active {
+  background: rgba(76, 175, 80, 0.06);
+}
+.sess-active-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--good, #4caf50);
+}
+.sessions-table button {
+  font-size: 11px;
+  padding: 3px 8px;
+  margin-right: 4px;
+}
+.sessions-table button.ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.sessions-table button.ghost:hover { color: var(--text); border-color: var(--accent); }
+.sessions-table button.danger:hover { color: #ff5c5c; border-color: #ff5c5c; }
+
+.sessions-add { margin-top: 8px; }
+.sessions-add summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 13px;
+  padding: 4px 0;
+}
+.sessions-add-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.sessions-add-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  flex: 1;
+  min-width: 200px;
+}
 
 main {
   padding: 24px;

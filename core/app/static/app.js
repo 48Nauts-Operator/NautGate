@@ -3,52 +3,219 @@
 // token stored in localStorage. Tab routing via URL hash.
 
 (() => {
+  // Legacy single-token key — migrated into sessions on first run.
   const TOKEN_KEY = "nautgate.token";
+  // Sessions: array of { id, label, token, agent_id, key_id, last_seen_at }.
+  const SESSIONS_KEY = "nautgate.sessions";
+  const ACTIVE_SESSION_KEY = "nautgate.active_session";
   const REFRESH_MS = 5000;
 
   let refreshTimer = null;
   let activeTab = "overview";
 
-  // --- Auth ---------------------------------------------------------------
+  // --- Sessions (multi-token) --------------------------------------------
 
-  const tokenInput = document.getElementById("token-input");
-  const tokenSave = document.getElementById("token-save");
   const authState = document.getElementById("auth-state");
+  const sessionPill = document.getElementById("session-pill");
+
+  function loadSessions() {
+    try {
+      const raw = localStorage.getItem(SESSIONS_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* fall through to migration */ }
+    // Migration: if there's a single-token entry from the old layout, fold it in.
+    const legacy = localStorage.getItem(TOKEN_KEY);
+    if (legacy) {
+      const sessions = [{ id: cryptoId(), label: "imported", token: legacy, agent_id: null, key_id: null, last_seen_at: null }];
+      saveSessions(sessions);
+      localStorage.setItem(ACTIVE_SESSION_KEY, sessions[0].id);
+      // Don't delete the legacy key right away; remove on next save instead.
+      return sessions;
+    }
+    return [];
+  }
+  function saveSessions(sessions) {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+    // Migration cleanup: drop the old single-token key once we have sessions.
+    if (sessions.length) localStorage.removeItem(TOKEN_KEY);
+  }
+  function cryptoId() {
+    if (window.crypto?.randomUUID) return crypto.randomUUID();
+    return "s_" + Math.random().toString(36).slice(2, 12);
+  }
+  function getActiveSessionId() {
+    return localStorage.getItem(ACTIVE_SESSION_KEY) || "";
+  }
+  function setActiveSessionId(id) {
+    if (id) localStorage.setItem(ACTIVE_SESSION_KEY, id);
+    else localStorage.removeItem(ACTIVE_SESSION_KEY);
+  }
+  function getActiveSession() {
+    const sessions = loadSessions();
+    const id = getActiveSessionId();
+    return sessions.find(s => s.id === id) || sessions[0] || null;
+  }
 
   function getToken() {
-    // Order: explicit user-saved token in localStorage > server-injected meta token.
-    const stored = localStorage.getItem(TOKEN_KEY);
-    if (stored) return stored;
+    const active = getActiveSession();
+    if (active) return active.token;
+    // Fallback: server-injected meta token (single-token install).
     const meta = document.querySelector('meta[name="nautgate-token"]');
     return meta ? meta.getAttribute("content") || "" : "";
   }
-  function setToken(t) {
-    if (t) localStorage.setItem(TOKEN_KEY, t);
-    else localStorage.removeItem(TOKEN_KEY);
-    renderAuth();
-  }
+
   function renderAuth() {
-    const t = getToken();
-    const fromMeta =
-      !localStorage.getItem(TOKEN_KEY) &&
-      !!document.querySelector('meta[name="nautgate-token"]');
-    if (t) {
-      authState.textContent = fromMeta ? "auto" : "saved";
+    const active = getActiveSession();
+    if (active) {
+      const label = active.label || active.agent_id || "session";
+      const id4 = (active.token || "").slice(-4);
+      authState.textContent = `${label} · …${id4}`;
       authState.classList.add("ok");
       authState.classList.remove("bad");
-      tokenInput.value = t.slice(0, 12) + "…";
     } else {
-      authState.textContent = "no token";
+      authState.textContent = "no session";
       authState.classList.remove("ok");
       authState.classList.add("bad");
     }
   }
 
-  tokenSave.addEventListener("click", () => {
-    const v = tokenInput.value.trim();
-    if (v.endsWith("…")) return; // user didn't change it
-    setToken(v);
-    refreshActive();
+  // Pill click → switch to Overview tab and focus the sessions list.
+  sessionPill?.addEventListener("click", () => {
+    location.hash = "#overview";
+    setTimeout(() => document.getElementById("sessions-list")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  });
+
+  // --- Sessions UI on the Overview tab -----------------------------------
+
+  function fmtAgo(iso) {
+    if (!iso) return "—";
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return Math.floor(ms / 1000) + "s ago";
+    if (ms < 3600000) return Math.floor(ms / 60000) + "m ago";
+    if (ms < 86400000) return Math.floor(ms / 3600000) + "h ago";
+    return Math.floor(ms / 86400000) + "d ago";
+  }
+
+  function renderSessions() {
+    const list = document.getElementById("sessions-list");
+    if (!list) return;
+    const sessions = loadSessions();
+    const activeId = getActiveSessionId() || (sessions[0]?.id ?? "");
+
+    if (!sessions.length) {
+      list.innerHTML = '<p class="hint">No saved sessions. Add one below — paste a bearer token (ng_…) and optionally label it.</p>';
+      return;
+    }
+
+    list.innerHTML = '<table class="sessions-table"><thead><tr><th></th><th>label</th><th>agent</th><th>token</th><th>last used</th><th></th></tr></thead><tbody>'
+      + sessions.map(s => {
+        const isActive = s.id === activeId;
+        const tail = (s.token || "").slice(-6);
+        const labelText = s.label || (s.agent_id || "(unlabeled)");
+        const agentText = s.agent_id ? esc(s.agent_id) : '<span class="hint">unknown — click Verify</span>';
+        return `
+          <tr class="${isActive ? "session-row-active" : ""}">
+            <td>${isActive ? '<span class="sess-active-dot" title="active session"></span>' : ''}</td>
+            <td><b>${esc(labelText)}</b></td>
+            <td>${agentText}</td>
+            <td><code>ng_…${esc(tail)}</code></td>
+            <td>${fmtAgo(s.last_seen_at)}</td>
+            <td>
+              ${isActive
+                ? '<span class="hint">active</span>'
+                : `<button data-sess-activate="${esc(s.id)}">Activate</button>`}
+              <button data-sess-verify="${esc(s.id)}" class="ghost">Verify</button>
+              <button data-sess-delete="${esc(s.id)}" class="ghost danger">×</button>
+            </td>
+          </tr>`;
+      }).join("")
+      + '</tbody></table>';
+
+    // Wire up actions.
+    list.querySelectorAll("[data-sess-activate]").forEach(b => b.addEventListener("click", () => {
+      setActiveSessionId(b.getAttribute("data-sess-activate"));
+      renderAuth(); renderSessions(); refreshActive();
+    }));
+    list.querySelectorAll("[data-sess-delete]").forEach(b => b.addEventListener("click", () => {
+      const id = b.getAttribute("data-sess-delete");
+      if (!confirm("Delete this session?")) return;
+      const sessions = loadSessions().filter(s => s.id !== id);
+      saveSessions(sessions);
+      if (getActiveSessionId() === id) {
+        setActiveSessionId(sessions[0]?.id || "");
+      }
+      renderAuth(); renderSessions(); refreshActive();
+    }));
+    list.querySelectorAll("[data-sess-verify]").forEach(b => b.addEventListener("click", async () => {
+      const id = b.getAttribute("data-sess-verify");
+      await verifySession(id);
+      renderSessions();
+    }));
+  }
+
+  async function verifySession(id) {
+    const sessions = loadSessions();
+    const s = sessions.find(x => x.id === id);
+    if (!s) return;
+    try {
+      const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + s.token } });
+      if (!res.ok) throw new Error("status_" + res.status);
+      const me = await res.json();
+      s.agent_id = me.agent_id || null;
+      s.key_id = me.key_id || null;
+      s.last_seen_at = new Date().toISOString();
+      if (!s.label) s.label = me.agent_id || "session";
+      saveSessions(sessions);
+    } catch (e) {
+      s.agent_id = null;
+      s.last_seen_at = new Date().toISOString();
+      saveSessions(sessions);
+    }
+  }
+
+  // Add-session form
+  document.getElementById("add-save")?.addEventListener("click", async () => {
+    const errorEl = document.getElementById("add-error");
+    errorEl.textContent = "";
+    const token = document.getElementById("add-token").value.trim();
+    const label = document.getElementById("add-label").value.trim();
+    if (!token) { errorEl.textContent = "token required"; return; }
+    if (!token.startsWith("ng_")) { errorEl.textContent = "expected ng_… format"; return; }
+    // Validate by hitting whoami before saving.
+    try {
+      const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + token } });
+      if (res.status === 401) { errorEl.textContent = "401 — token rejected"; return; }
+      if (!res.ok) { errorEl.textContent = "validation failed: " + res.status; return; }
+      const me = await res.json();
+      const sessions = loadSessions();
+      // Dedupe by token.
+      const existing = sessions.find(s => s.token === token);
+      if (existing) {
+        existing.agent_id = me.agent_id;
+        existing.key_id = me.key_id;
+        existing.last_seen_at = new Date().toISOString();
+        if (label) existing.label = label;
+      } else {
+        sessions.push({
+          id: cryptoId(),
+          label: label || me.agent_id || "session",
+          token,
+          agent_id: me.agent_id,
+          key_id: me.key_id,
+          last_seen_at: new Date().toISOString(),
+        });
+      }
+      saveSessions(sessions);
+      // If this was the first session, make it active.
+      if (!getActiveSessionId()) setActiveSessionId(sessions[sessions.length - 1].id);
+      // Reset form.
+      document.getElementById("add-token").value = "";
+      document.getElementById("add-label").value = "";
+      document.getElementById("sessions-add").open = false;
+      renderAuth(); renderSessions(); refreshActive();
+    } catch (e) {
+      errorEl.textContent = "error: " + e.message;
+    }
   });
 
   // --- API helpers --------------------------------------------------------
@@ -124,6 +291,9 @@
   // --- Overview -----------------------------------------------------------
 
   async function loadOverview() {
+    // Sessions section gets re-rendered every Overview load so the
+    // last-used timestamps stay fresh as the active session makes calls.
+    renderSessions();
     try {
       const s = await api("/v1/stats?hours=24");
       document.getElementById("m-total").textContent = s.requests_total ?? "0";
@@ -1337,4 +1507,19 @@
     activateTab("overview");
   }
   renderAuth();
+  renderSessions();
+
+  // Auto-verify any session that's missing an agent_id, in the background.
+  // This populates labels for legacy-imported sessions on first load.
+  setTimeout(async () => {
+    const sessions = loadSessions();
+    let dirty = false;
+    for (const s of sessions) {
+      if (!s.agent_id && s.token) {
+        await verifySession(s.id);
+        dirty = true;
+      }
+    }
+    if (dirty) { renderAuth(); renderSessions(); }
+  }, 100);
 })();

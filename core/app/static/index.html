@@ -22,16 +22,30 @@
       <a href="#settings" data-tab="settings">Settings</a>
     </nav>
     <div class="auth">
-      <input id="token-input" type="password" placeholder="Bearer token (ng_…)" />
-      <button id="token-save">Save</button>
-      <span id="auth-state" class="auth-state">no token</span>
+      <span class="auth-state-label">session:</span>
+      <button id="session-pill" class="session-pill" title="Click to manage sessions on the Overview tab">
+        <span id="auth-state" class="auth-state">no session</span>
+      </button>
     </div>
   </header>
 
   <main>
     <!-- Overview ------------------------------------------------------------>
     <section id="tab-overview" class="tab active">
-      <h2>Last 24h</h2>
+      <h2>Sessions</h2>
+      <p class="hint">Saved bearer tokens. Click <b>Activate</b> to switch which one the dashboard uses for all API calls. Each session shows its agent identity (from <code>/v1/whoami</code>). Tokens are stored in your browser only — never sent anywhere except NautGate itself.</p>
+      <div id="sessions-list"></div>
+      <details id="sessions-add" class="sessions-add">
+        <summary>+ Add session</summary>
+        <div class="sessions-add-form">
+          <input id="add-token" type="password" placeholder="Bearer token (ng_…)" />
+          <input id="add-label" type="text" placeholder="Label (optional, e.g. 'Pi', 'Claude Code')" />
+          <button id="add-save">Save session</button>
+          <div id="add-error" class="hint" style="color:#ff5c5c"></div>
+        </div>
+      </details>
+
+      <h2 style="margin-top:24px">Last 24h</h2>
       <div class="grid">
         <div class="card"><div class="metric" id="m-total">—</div><div class="label">requests</div></div>
         <div class="card"><div class="metric" id="m-empty">—</div><div class="label">empty rate</div></div>

@@ -1002,6 +1002,38 @@ async def scorecard_incidents(provider: str, model_path: str, request: Request) 
     return JSONResponse({"items": items, "count": len(items)})
 
 
+@router.get("/whoami")
+async def whoami(request: Request) -> Response:
+    """Identity for the bearer token in this request.
+
+    Returned: agent_id, default_profile, daily_budget_usd, key_id (last 4
+    chars of the api key id for UI display). Used by the Sessions tab to
+    label saved tokens.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    # Pull the api_key row so we can show the budget/profile alongside.
+    row = await pool.fetchrow(
+        """
+        SELECT id::text AS key_id, default_profile, daily_budget_usd, last_used_at
+          FROM nautgate.api_keys
+         WHERE agent_id = $1
+         ORDER BY last_used_at DESC NULLS LAST
+         LIMIT 1
+        """,
+        agent_id,
+    )
+    return JSONResponse({
+        "agent_id": agent_id,
+        "key_id": row["key_id"] if row else None,
+        "default_profile": row["default_profile"] if row else "auto",
+        "daily_budget_usd": float(row["daily_budget_usd"]) if row and row["daily_budget_usd"] is not None else None,
+        "last_used_at": row["last_used_at"].isoformat() if row and row["last_used_at"] else None,
+    })
+
+
 @router.get("/drift")
 async def drift_overview(request: Request) -> Response:
     """Behavior-drift overview — open alerts + per-(provider, model, metric)
