@@ -87,6 +87,27 @@ nav a:hover { color: var(--text); }
 }
 .session-pill:hover { border-color: var(--accent); }
 
+/* Cost-tab agent picker */
+.cost-agent-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.cost-agent-picker select {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cost-agent-picker select:hover { border-color: var(--accent); }
+
 /* Sessions table on Overview */
 .sessions-table {
   width: 100%;

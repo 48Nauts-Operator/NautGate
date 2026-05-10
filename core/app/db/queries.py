@@ -221,24 +221,34 @@ async def upsert_routing_preferences(
 async def get_cost_summary(
     pool: asyncpg.Pool,
     *,
-    agent_id: str,
+    agent_id: str | None,
     hours: int,
 ) -> dict:
-    """Aggregate cost over the last N hours, broken down by provider/model/tier."""
+    """Aggregate cost over the last N hours, broken down by provider/model/tier.
+
+    ``agent_id=None`` or ``"*"`` returns aggregate across all agents.
+    Any other value filters to that single agent.
+    """
+    is_all = agent_id is None or agent_id == "*"
+    where = "d.ts > NOW() - make_interval(hours => $1)" if is_all else (
+        "d.agent_id = $2 AND d.ts > NOW() - make_interval(hours => $1)"
+    )
+    base_params: list = [hours]
+    if not is_all:
+        base_params.append(agent_id)
+
     async with pool.acquire() as conn:
         totals = await conn.fetchrow(
-            """
+            f"""
             SELECT COUNT(*)                          AS total_calls,
                    SUM(o.cost_usd)::FLOAT            AS total_cost_usd,
                    SUM(o.prompt_tokens)::BIGINT      AS total_prompt_tokens,
                    SUM(o.completion_tokens)::BIGINT  AS total_completion_tokens
               FROM nautgate.route_decisions d
               LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
-             WHERE d.agent_id = $1
-               AND d.ts > NOW() - make_interval(hours => $2)
+             WHERE {where}
             """,
-            agent_id,
-            hours,
+            *base_params,
         )
 
         async def _by(field_sql: str):
@@ -251,13 +261,11 @@ async def get_cost_summary(
                        SUM(o.completion_tokens)::BIGINT AS completion_tokens
                   FROM nautgate.route_decisions d
                   LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
-                 WHERE d.agent_id = $1
-                   AND d.ts > NOW() - make_interval(hours => $2)
+                 WHERE {where}
                  GROUP BY {field_sql}
                  ORDER BY cost_usd DESC NULLS LAST
                 """,
-                agent_id,
-                hours,
+                *base_params,
             )
             return [
                 {
@@ -273,9 +281,11 @@ async def get_cost_summary(
         by_provider = await _by("d.decision_provider")
         by_model = await _by("d.decision_model")
         by_tier = await _by("d.classified_tier")
+        # New: per-agent breakdown only useful on the "all" view.
+        by_agent = await _by("d.agent_id") if is_all else []
 
     return {
-        "agent_id": agent_id,
+        "agent_id": "*" if is_all else agent_id,
         "window_hours": hours,
         "total_calls": int((totals or {}).get("total_calls") or 0),
         "total_cost_usd": (totals or {}).get("total_cost_usd"),
@@ -284,32 +294,28 @@ async def get_cost_summary(
         "by_provider": by_provider,
         "by_model": by_model,
         "by_tier": by_tier,
+        "by_agent": by_agent,
     }
 
 
 async def get_cost_timeseries(
     pool: asyncpg.Pool,
     *,
-    agent_id: str,
+    agent_id: str | None,
     bucket: str,
     hours: int,
 ) -> dict:
-    """Bucketed cost series suitable for a line chart.
-
-    Returns:
-        {
-            "agent_id": ...,
-            "bucket": "hour" | "day",
-            "window_hours": N,
-            "series": [
-                {"provider": "anthropic", "points": [{"ts": "...", "cost_usd": 0.01, "calls": 3}, ...]},
-                ...
-            ],
-        }
-
-    `bucket` MUST be one of {"hour", "day"} — caller validates and we trust it.
+    """Bucketed cost series. ``agent_id=None`` / ``"*"`` returns aggregate
+    across all agents; any other value filters to that single agent.
     """
     bucket = bucket if bucket in ("hour", "day") else "hour"
+    is_all = agent_id is None or agent_id == "*"
+    where = "d.ts > NOW() - make_interval(hours => $1)" if is_all else (
+        "d.agent_id = $2 AND d.ts > NOW() - make_interval(hours => $1)"
+    )
+    params: list = [hours]
+    if not is_all:
+        params.append(agent_id)
     rows = await pool.fetch(
         f"""
         SELECT date_trunc('{bucket}', d.ts) AS bucket_ts,
@@ -318,13 +324,11 @@ async def get_cost_timeseries(
                COUNT(*)                      AS calls
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
-         WHERE d.agent_id = $1
-           AND d.ts > NOW() - make_interval(hours => $2)
+         WHERE {where}
          GROUP BY bucket_ts, provider
          ORDER BY bucket_ts ASC
         """,
-        agent_id,
-        hours,
+        *params,
     )
 
     series_map: dict[str, list[dict]] = {}
@@ -339,11 +343,45 @@ async def get_cost_timeseries(
         )
 
     return {
-        "agent_id": agent_id,
+        "agent_id": "*" if is_all else agent_id,
         "bucket": bucket,
         "window_hours": hours,
         "series": [{"provider": p, "points": points} for p, points in series_map.items()],
     }
+
+
+async def get_agents_with_key_counts(pool: asyncpg.Pool) -> list[dict]:
+    """List distinct agent_ids from api_keys + how many keys each has + their
+    cumulative activity (last 30 days). Used by the Cost tab's dropdown.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT k.agent_id,
+               COUNT(DISTINCT k.id)               AS key_count,
+               COALESCE(c.call_count, 0)::BIGINT  AS call_count_30d,
+               c.last_call
+          FROM nautgate.api_keys k
+          LEFT JOIN (
+              SELECT agent_id,
+                     COUNT(*)        AS call_count,
+                     MAX(ts)         AS last_call
+                FROM nautgate.route_decisions
+               WHERE ts > NOW() - INTERVAL '30 days'
+               GROUP BY agent_id
+          ) c ON c.agent_id = k.agent_id
+         GROUP BY k.agent_id, c.call_count, c.last_call
+         ORDER BY call_count_30d DESC, k.agent_id ASC
+        """
+    )
+    return [
+        {
+            "agent_id": r["agent_id"],
+            "key_count": int(r["key_count"]),
+            "call_count_30d": int(r["call_count_30d"] or 0),
+            "last_call": r["last_call"].isoformat() if r["last_call"] else None,
+        }
+        for r in rows
+    ]
 
 
 async def get_decisions_for_findings_scan(

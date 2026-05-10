@@ -898,13 +898,46 @@ async def findings_summary(request: Request) -> Response:
     return JSONResponse(build_audit(decisions))
 
 
-@router.get("/cost/summary")
-async def cost_summary(request: Request) -> Response:
-    """Total cost + by-provider/model/tier breakdowns over the last `?hours=N`."""
+def _resolve_cost_scope(request: Request, authed_agent: str) -> str | None:
+    """Resolve the ``agent_id`` cost-query param.
+
+    - omitted          → authenticated agent (current behavior)
+    - ``"*"`` or "all" → aggregate across all agents
+    - any other        → that specific agent (any authenticated holder may query
+                         any agent's cost; the dashboard is admin-grade).
+    """
+    raw = request.query_params.get("agent_id")
+    if not raw:
+        return authed_agent
+    if raw in ("*", "all", "ALL"):
+        return "*"
+    return raw
+
+
+@router.get("/agents")
+async def list_agents(request: Request) -> Response:
+    """Distinct agent_ids from api_keys + 30-day call counts. Drives the
+    Cost-tab dropdown.
+    """
     pool = getattr(request.app.state, "db", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
-    agent_id = await authenticate(pool, request)
+    await authenticate(pool, request)
+    items = await queries.get_agents_with_key_counts(pool)
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.get("/cost/summary")
+async def cost_summary(request: Request) -> Response:
+    """Total cost + by-provider/model/tier breakdowns over the last `?hours=N`.
+
+    Optional ``?agent_id=*`` aggregates across all agents.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    authed_agent = await authenticate(pool, request)
+    scope = _resolve_cost_scope(request, authed_agent)
 
     try:
         hours = int(request.query_params.get("hours", "24"))
@@ -913,7 +946,7 @@ async def cost_summary(request: Request) -> Response:
     if hours < 1 or hours > 720:
         raise HTTPException(status_code=400, detail="hours must be in 1..720")
 
-    return JSONResponse(await queries.get_cost_summary(pool, agent_id=agent_id, hours=hours))
+    return JSONResponse(await queries.get_cost_summary(pool, agent_id=scope, hours=hours))
 
 
 @router.get("/cost/timeseries")
@@ -921,13 +954,15 @@ async def cost_timeseries(request: Request) -> Response:
     """Bucketed cost time-series for the line chart.
 
     Query params:
-      bucket : "hour" (default) or "day"
-      hours  : 1..720 (default 168 = 7 days)
+      bucket   : "hour" (default) or "day"
+      hours    : 1..720 (default 168 = 7 days)
+      agent_id : optional; ``*`` for all, otherwise specific agent
     """
     pool = getattr(request.app.state, "db", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
-    agent_id = await authenticate(pool, request)
+    authed_agent = await authenticate(pool, request)
+    scope = _resolve_cost_scope(request, authed_agent)
 
     bucket = request.query_params.get("bucket", "hour")
     if bucket not in ("hour", "day"):
@@ -941,7 +976,7 @@ async def cost_timeseries(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="hours must be in 1..720")
 
     return JSONResponse(
-        await queries.get_cost_timeseries(pool, agent_id=agent_id, bucket=bucket, hours=hours)
+        await queries.get_cost_timeseries(pool, agent_id=scope, bucket=bucket, hours=hours)
     )
 
 

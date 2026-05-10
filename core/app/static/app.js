@@ -1068,16 +1068,46 @@
 
   let costChart = null;
   let costWindow = { hours: 24, bucket: "hour" };
+  // Selected agent for the Cost tab; "*" = aggregate across all agents.
+  let costAgent = "*";
 
-  document.querySelectorAll(".window-buttons button").forEach((b) => {
+  // Scope the time-window buttons to the Cost tab only so we don't capture
+  // the Privacy tab's buttons too.
+  document.querySelectorAll("#tab-cost .window-buttons button").forEach((b) => {
     b.addEventListener("click", () => {
       costWindow = { hours: Number(b.dataset.window), bucket: b.dataset.bucket };
       document
-        .querySelectorAll(".window-buttons button")
+        .querySelectorAll("#tab-cost .window-buttons button")
         .forEach((x) => x.classList.toggle("active", x === b));
       loadCost();
     });
   });
+
+  document.getElementById("cost-agent-select")?.addEventListener("change", (e) => {
+    costAgent = e.target.value || "*";
+    loadCost();
+  });
+
+  async function loadCostAgentOptions() {
+    const sel = document.getElementById("cost-agent-select");
+    if (!sel) return;
+    try {
+      const data = await api("/v1/agents");
+      const items = data.items || [];
+      // Preserve current selection across reloads.
+      const current = sel.value || "*";
+      const allOpt = '<option value="*">All agents</option>';
+      const opts = items.map(a => {
+        const label = `${esc(a.agent_id)} (${a.call_count_30d} calls / 30d)`;
+        return `<option value="${esc(a.agent_id)}">${label}</option>`;
+      }).join("");
+      sel.innerHTML = allOpt + opts;
+      sel.value = current;
+      costAgent = sel.value || "*";
+    } catch (e) {
+      // Keep the single "All agents" option that's in HTML.
+    }
+  }
 
   // --- Scorecard (brain layer) -------------------------------------------
 
@@ -1268,11 +1298,15 @@
 
   async function loadCost() {
     if (!getToken()) return;
+    // Refresh the agent dropdown options on every cost load so new keys show up.
+    await loadCostAgentOptions();
+    const scope = costAgent || "*";
+    const scopeQuery = `&agent_id=${encodeURIComponent(scope)}`;
     try {
       const [summary, ts] = await Promise.all([
-        api(`/v1/cost/summary?hours=${costWindow.hours}`),
+        api(`/v1/cost/summary?hours=${costWindow.hours}${scopeQuery}`),
         api(
-          `/v1/cost/timeseries?hours=${costWindow.hours}&bucket=${costWindow.bucket}`
+          `/v1/cost/timeseries?hours=${costWindow.hours}&bucket=${costWindow.bucket}${scopeQuery}`
         ),
       ]);
       renderCostSummary(summary);
@@ -1296,6 +1330,22 @@
     fillCostTable("cost-provider", s.by_provider, ["key", "cost_usd", "calls"]);
     fillCostTable("cost-model", s.by_model, ["key", "cost_usd", "calls"]);
     fillCostTierTable("cost-tier", s.by_tier);
+
+    // by_agent table — only rendered when we asked for the aggregate view.
+    const byAgent = s.by_agent || [];
+    const showByAgent = byAgent.length > 0;
+    document.getElementById("cost-by-agent-title").style.display = showByAgent ? "" : "none";
+    document.getElementById("cost-agent").style.display = showByAgent ? "" : "none";
+    if (showByAgent) {
+      const tbody = document.querySelector("#cost-agent tbody");
+      tbody.innerHTML = byAgent.map(r => `
+        <tr>
+          <td><b>${esc(r.key || "—")}</b></td>
+          <td>${usd(r.cost_usd)}</td>
+          <td>${r.calls || 0}</td>
+          <td>${(r.prompt_tokens || 0).toLocaleString()} / ${(r.completion_tokens || 0).toLocaleString()}</td>
+        </tr>`).join("");
+    }
   }
 
   function fillCostTable(id, rows, fields) {

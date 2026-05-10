@@ -69,6 +69,12 @@
           <button data-window="168" data-bucket="hour">7d</button>
           <button data-window="720" data-bucket="day">30d</button>
         </span>
+        <span class="cost-agent-picker">
+          <label for="cost-agent-select">agent:</label>
+          <select id="cost-agent-select">
+            <option value="*" selected>All agents</option>
+          </select>
+        </span>
       </h2>
       <div class="grid">
         <div class="card"><div class="metric" id="c-total">$0.00</div><div class="label">total spend</div></div>
@@ -93,6 +99,11 @@
 
       <h3>By tier</h3>
       <table id="cost-tier"><thead><tr><th>tier</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody></table>
+
+      <h3 id="cost-by-agent-title" style="display:none">By agent</h3>
+      <table id="cost-agent" style="display:none">
+        <thead><tr><th>agent</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody>
+      </table>
     </section>
 
     <!-- Audit Log (per-call live feed) -------------------------------------->
