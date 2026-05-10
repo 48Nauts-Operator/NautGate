@@ -85,6 +85,44 @@ def _stub(coming_in: str, message: str) -> JSONResponse:
 # ============================================================================
 
 
+def _normalize_anthropic_snapshot(model: str | None) -> str:
+    """Map Anthropic snapshot IDs (what Claude Code & the SDK send) to the
+    family keys NautRouter's MODELS map uses.
+
+    Examples:
+      claude-opus-4-7-20251201        → claude-opus-4
+      claude-opus-4-7                 → claude-opus-4
+      claude-sonnet-4-6-20251101      → claude-sonnet-4
+      claude-sonnet-4-5-20250929      → claude-sonnet-4
+      claude-haiku-4-5                → claude-haiku-4.5
+      claude-3-5-sonnet-20241022      → claude-sonnet-4   (best-effort fallback)
+      gpt-4o, gemini-2.5-flash, …     → unchanged
+
+    Returns the input unchanged when no rule matches.
+    """
+    if not model or not isinstance(model, str):
+        return model or ""
+    m = model.lower()
+    # Strip the trailing date suffix if present (e.g. "-20251201").
+    import re as _re
+    m_base = _re.sub(r"-\d{8}$", "", m)
+    # Anthropic family detection.
+    if m_base.startswith("claude-opus-4"):
+        return "claude-opus-4"
+    if m_base.startswith("claude-sonnet-4"):
+        return "claude-sonnet-4"
+    if m_base.startswith("claude-haiku-4"):
+        return "claude-haiku-4.5"
+    # Best-effort for the older 3.x naming; map to the closest 4.x family.
+    if m_base.startswith("claude-3-5-sonnet") or m_base.startswith("claude-3-7-sonnet"):
+        return "claude-sonnet-4"
+    if m_base.startswith("claude-3-5-haiku") or m_base.startswith("claude-3-haiku"):
+        return "claude-haiku-4.5"
+    if m_base.startswith("claude-3-opus"):
+        return "claude-opus-4"
+    return model
+
+
 async def _process_chat_request(
     request: Request,
     *,
@@ -241,6 +279,16 @@ async def _process_chat_request(
         decision_provider = "passthrough"
         decision_model = model_requested
         decision_reason = f"explicit:{model_requested}"
+        # Normalize Anthropic snapshot IDs (what Claude Code sends, e.g.
+        # "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5") to
+        # NautRouter's MODELS map keys ("claude-opus-4", etc.). Without this,
+        # NautRouter sees an unknown model and falls back to its default
+        # routing, which was producing empty/Gemini-shaped responses for
+        # Claude Code.
+        normalized = _normalize_anthropic_snapshot(model_requested)
+        if normalized != model_requested:
+            payload["model"] = normalized
+            decision_reason = f"explicit:{model_requested}->{normalized}"
 
     captured = capture_prompt(messages, classification.sensitivity)
     captured_tools = capture_tools(payload.get("tools"), classification.sensitivity)

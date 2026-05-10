@@ -107,9 +107,39 @@ def request_to_openai_chat(payload: dict) -> dict:
     out["messages"] = msgs
 
     # Pass-through scalars.
-    for k in ("temperature", "top_p", "max_tokens", "stream", "metadata", "tools", "tool_choice"):
+    for k in ("temperature", "top_p", "max_tokens", "stream", "metadata", "tool_choice"):
         if k in payload:
             out[k] = payload[k]
+
+    # Tools need a *shape* translation, not pass-through. Anthropic format:
+    #   {"name", "description", "input_schema"}
+    # OpenAI format:
+    #   {"type": "function", "function": {"name", "description", "parameters"}}
+    # Without this, upstream models receive malformed tool defs and silently
+    # produce no tool_calls — which presents to Claude Code as an empty answer.
+    raw_tools = payload.get("tools")
+    if isinstance(raw_tools, list) and raw_tools:
+        translated_tools: list[dict] = []
+        for t in raw_tools:
+            if not isinstance(t, dict):
+                continue
+            # Already OpenAI-shaped (passthrough/Codex clients): keep as-is.
+            if "function" in t and isinstance(t["function"], dict):
+                translated_tools.append(t)
+                continue
+            # Anthropic-shaped: rebuild as OpenAI function tool.
+            if "name" in t:
+                translated_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.get("name"),
+                        "description": t.get("description", ""),
+                        # Anthropic uses input_schema; OpenAI uses parameters.
+                        "parameters": t.get("input_schema") or t.get("parameters") or {"type": "object"},
+                    },
+                })
+        if translated_tools:
+            out["tools"] = translated_tools
 
     if "stop_sequences" in payload:
         out["stop"] = payload["stop_sequences"]
@@ -166,13 +196,36 @@ class AnthropicStreamTranslator:
         self.model = model
         self._buf = bytearray()
         self._message_started = False
-        self._content_block_started = False
-        self._content_block_stopped = False
+        # Text content block (index 0 if any text was streamed).
+        self._text_block_started = False
+        self._text_block_stopped = False
+        # Tool-use content blocks. OpenAI streams tool_calls with their own
+        # `index` (per call), but Anthropic content_block indices are global
+        # within the message — we map openai_tool_index → anthropic_block_index.
+        self._tool_blocks: dict[int, dict] = {}  # openai_idx → {block_index, started, stopped, name, id}
+        self._next_block_index = 0
         self._message_stopped = False
         self._input_tokens: int | None = None
         self._output_tokens: int | None = None
         self._finish_reason: str | None = None
         self._message_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+    # Backwards-compat shims so existing tests that touched these names still work.
+    @property
+    def _content_block_started(self) -> bool:
+        return self._text_block_started
+
+    @_content_block_started.setter
+    def _content_block_started(self, v: bool) -> None:
+        self._text_block_started = v
+
+    @property
+    def _content_block_stopped(self) -> bool:
+        return self._text_block_stopped
+
+    @_content_block_stopped.setter
+    def _content_block_stopped(self, v: bool) -> None:
+        self._text_block_stopped = v
 
     # ---- helpers ----
 
@@ -202,8 +255,18 @@ class AnthropicStreamTranslator:
             },
         )
 
+    def _allocate_block_index(self) -> int:
+        idx = self._next_block_index
+        self._next_block_index += 1
+        return idx
+
     def _start_content_block(self) -> bytes:
-        self._content_block_started = True
+        """Open the text content block at index 0 (always reserved for text)."""
+        self._text_block_started = True
+        # Make sure index 0 stays for text — if no tools have been opened yet,
+        # _next_block_index is 0; bump it to 1.
+        if self._next_block_index == 0:
+            self._next_block_index = 1
         return self._emit(
             "content_block_start",
             {
@@ -224,8 +287,56 @@ class AnthropicStreamTranslator:
         )
 
     def _stop_content_block(self) -> bytes:
-        self._content_block_stopped = True
+        self._text_block_stopped = True
         return self._emit("content_block_stop", {"type": "content_block_stop", "index": 0})
+
+    # ---- tool_use translation ----
+
+    def _start_tool_block(self, openai_idx: int, tool_id: str, name: str) -> bytes:
+        block_index = self._allocate_block_index()
+        self._tool_blocks[openai_idx] = {
+            "block_index": block_index,
+            "started": True,
+            "stopped": False,
+            "name": name,
+            "id": tool_id,
+        }
+        return self._emit(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": block_index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": name,
+                    "input": {},
+                },
+            },
+        )
+
+    def _delta_tool_input(self, openai_idx: int, partial_json: str) -> bytes:
+        info = self._tool_blocks.get(openai_idx)
+        if info is None:
+            return b""
+        return self._emit(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": info["block_index"],
+                "delta": {"type": "input_json_delta", "partial_json": partial_json},
+            },
+        )
+
+    def _stop_tool_block(self, openai_idx: int) -> bytes:
+        info = self._tool_blocks.get(openai_idx)
+        if info is None or info["stopped"]:
+            return b""
+        info["stopped"] = True
+        return self._emit(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": info["block_index"]},
+        )
 
     def _message_delta_stop(self) -> bytes:
         return self._emit(
@@ -283,8 +394,12 @@ class AnthropicStreamTranslator:
         out: list[bytes] = []
         if not self._message_started:
             out.append(self._start_message())
-        if self._content_block_started and not self._content_block_stopped:
+        if self._text_block_started and not self._text_block_stopped:
             out.append(self._stop_content_block())
+        # Close any still-open tool_use blocks so the message ends cleanly.
+        for openai_idx, info in self._tool_blocks.items():
+            if info["started"] and not info["stopped"]:
+                out.append(self._stop_tool_block(openai_idx))
         if not self._message_stopped:
             out.append(self._message_delta_stop())
             out.append(self._stop_message())
@@ -308,13 +423,58 @@ class AnthropicStreamTranslator:
         if not self._message_started:
             out.append(self._start_message())
 
+        # Text content delta — opens the text block on first non-empty text.
         text = delta.get("content")
         if isinstance(text, str) and text:
-            if not self._content_block_started:
+            if not self._text_block_started:
                 out.append(self._start_content_block())
             out.append(self._delta_text(text))
 
+        # Tool-call deltas. OpenAI streams these as a list, each entry tagged
+        # with its own `index`. The first chunk for a given index carries
+        # `id` and `function.name`; subsequent chunks carry only
+        # `function.arguments` partials. Anthropic's wire format is:
+        #   content_block_start (type=tool_use, id, name, input={})
+        #   content_block_delta (type=input_json_delta, partial_json="...")
+        #   content_block_stop
+        tool_calls = delta.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                openai_idx = tc.get("index", 0)
+                fn = tc.get("function") or {}
+                call_id = tc.get("id")
+                name = fn.get("name")
+                args_partial = fn.get("arguments")
+                # First chunk for this call (has id and/or name) → open block.
+                if openai_idx not in self._tool_blocks and (call_id or name):
+                    out.append(self._start_tool_block(
+                        openai_idx,
+                        tool_id=call_id or f"call_{uuid.uuid4().hex[:24]}",
+                        name=name or "",
+                    ))
+                # Argument deltas come as already-stringified JSON fragments.
+                if isinstance(args_partial, str) and args_partial:
+                    if openai_idx not in self._tool_blocks:
+                        # Defensive: open a block even without id/name so we
+                        # never drop a partial.
+                        out.append(self._start_tool_block(
+                            openai_idx,
+                            tool_id=f"call_{uuid.uuid4().hex[:24]}",
+                            name="",
+                        ))
+                    out.append(self._delta_tool_input(openai_idx, args_partial))
+
         if ch.get("finish_reason"):
             self._finish_reason = ch["finish_reason"]
+            # If the model finished with tool_calls, close all tool blocks now
+            # (rather than waiting for the [DONE] / stream-end terminator).
+            if ch["finish_reason"] in ("tool_calls", "stop"):
+                if self._text_block_started and not self._text_block_stopped:
+                    out.append(self._stop_content_block())
+                for openai_idx, info in list(self._tool_blocks.items()):
+                    if info["started"] and not info["stopped"]:
+                        out.append(self._stop_tool_block(openai_idx))
 
         return out

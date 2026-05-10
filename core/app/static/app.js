@@ -177,10 +177,19 @@
   document.getElementById("add-save")?.addEventListener("click", async () => {
     const errorEl = document.getElementById("add-error");
     errorEl.textContent = "";
-    const token = document.getElementById("add-token").value.trim();
+    let token = document.getElementById("add-token").value.trim();
+    // Be forgiving: strip "Bearer " prefix and any quotes a copy-paste may add.
+    token = token.replace(/^Bearer\s+/i, "").replace(/^["']|["']$/g, "").trim();
     const label = document.getElementById("add-label").value.trim();
     if (!token) { errorEl.textContent = "token required"; return; }
-    if (!token.startsWith("ng_")) { errorEl.textContent = "expected ng_… format"; return; }
+    if (!token.startsWith("ng_")) {
+      // Common mistake: pasting the key_id UUID instead of the full token.
+      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+      errorEl.textContent = looksLikeUuid
+        ? "that looks like a key_id (UUID). The token is on the next line of the issue_key.py output — starts with ng_…"
+        : "expected ng_… format (got " + token.slice(0, 8) + "…)";
+      return;
+    }
     // Validate by hitting whoami before saving.
     try {
       const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + token } });
