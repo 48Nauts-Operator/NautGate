@@ -245,6 +245,10 @@ async def _process_chat_request(
     captured = capture_prompt(messages, classification.sensitivity)
     captured_tools = capture_tools(payload.get("tools"), classification.sensitivity)
 
+    # Heuristic session id for drift detection (compaction events).
+    from app.drift import compute_session_id
+    session_id = compute_session_id(agent_id, messages)
+
     # PRECAPTURE
     await queries.precapture(
         pool,
@@ -271,6 +275,7 @@ async def _process_chat_request(
         tools_count=audit_meta["tools_count"],
         stream_flag=audit_meta["stream_flag"],
         request_size_bytes=audit_meta["request_size_bytes"],
+        session_id=session_id,
     )
 
     # PLUGINS: on_request — fire-and-forget after PRECAPTURE.
@@ -407,6 +412,7 @@ async def _process_chat_request(
     # Wrapped in try/except so a brain failure never breaks the request path.
     if pool is not None:
         try:
+            from app.drift_engine import process_drift
             from app.scorecard import process_brain
             await process_brain(
                 pool, pricing,
@@ -414,6 +420,7 @@ async def _process_chat_request(
                 actual_provider=actual_provider,
                 actual_model=actual_model,
             )
+            await process_drift(pool, decision_id=decision_id)
         except Exception as exc:
             log.warning("brain_layer_failed", error=str(exc), decision_id=str(decision_id))
 
@@ -573,6 +580,7 @@ def _streaming_response(
                 # Brain layer — same fire-and-forget pattern as non-streaming.
                 if pool is not None:
                     try:
+                        from app.drift_engine import process_drift
                         from app.scorecard import process_brain
                         await process_brain(
                             pool, stream_pricing,
@@ -580,6 +588,7 @@ def _streaming_response(
                             actual_provider=parsed.get("actual_provider"),
                             actual_model=parsed.get("actual_model"),
                         )
+                        await process_drift(pool, decision_id=decision_id)
                     except Exception as exc:
                         log.warning("brain_layer_failed_in_stream", error=str(exc), decision_id=str(decision_id))
             except Exception as exc:
@@ -990,6 +999,42 @@ async def scorecard_incidents(provider: str, model_path: str, request: Request) 
         }
         for r in rows
     ]
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.get("/drift")
+async def drift_overview(request: Request) -> Response:
+    """Behavior-drift overview — open alerts + per-(provider, model, metric)
+    baselines. Companion to /v1/scorecard.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.drift_engine import get_drift_overview
+    return JSONResponse(await get_drift_overview(pool))
+
+
+@router.get("/drift/{provider}/{model_path:path}/anomalies")
+async def drift_anomalies(provider: str, model_path: str, request: Request) -> Response:
+    """Recent anomaly events for one (provider, model, metric). model_path
+    contains slashes hence path:; metric required as query param.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    metric = request.query_params.get("metric")
+    if not metric:
+        raise HTTPException(status_code=400, detail="metric query param required")
+    try:
+        limit = min(500, max(1, int(request.query_params.get("limit", "50"))))
+    except ValueError:
+        limit = 50
+    from app.drift_engine import get_recent_anomalies
+    items = await get_recent_anomalies(
+        pool, provider=provider, model=model_path, metric_name=metric, limit=limit,
+    )
     return JSONResponse({"items": items, "count": len(items)})
 
 

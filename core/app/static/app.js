@@ -116,6 +116,7 @@
     else if (activeTab === "privacy") loadPrivacy();
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "scorecard") loadScorecard();
+    else if (activeTab === "drift") loadDrift();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
   }
@@ -968,6 +969,122 @@
     } catch (e) {
       document.getElementById("detail-body").innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
     }
+  }
+
+  // --- Drift (behavior-change detection) ---------------------------------
+
+  document.getElementById("dr-reload").addEventListener("click", () => loadDrift());
+
+  function fmtNum(v) {
+    if (v == null) return "—";
+    if (Math.abs(v) >= 1000) return v.toFixed(0);
+    if (Math.abs(v) >= 1) return v.toFixed(2);
+    if (Math.abs(v) >= 0.001) return v.toFixed(4);
+    return v.toExponential(2);
+  }
+
+  function fmtAge(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    const ageMs = Date.now() - dt.getTime();
+    const sec = Math.floor(ageMs / 1000);
+    if (sec < 60) return sec + "s ago";
+    if (sec < 3600) return Math.floor(sec / 60) + "m ago";
+    if (sec < 86400) return Math.floor(sec / 3600) + "h ago";
+    return Math.floor(sec / 86400) + "d ago";
+  }
+
+  async function loadDrift() {
+    const alertsEl = document.getElementById("dr-alerts");
+    const histTbody = document.getElementById("dr-alerts-tbody");
+    const baseTbody = document.getElementById("dr-baselines-tbody");
+    alertsEl.innerHTML = '<p class="hint">loading…</p>';
+    histTbody.innerHTML = '<tr><td colspan="10" class="hint">loading…</td></tr>';
+    baseTbody.innerHTML = '<tr><td colspan="9" class="hint">loading…</td></tr>';
+    try {
+      const data = await api("/v1/drift");
+      const alerts = data.alerts || [];
+      const baselines = data.baselines || [];
+
+      // Open alerts hero panel
+      const open = alerts.filter(a => a.is_open);
+      if (!open.length) {
+        alertsEl.innerHTML = '<p class="hint">No open alerts. Drift detection needs ~10 samples per (provider, model, metric) to warm up.</p>';
+      } else {
+        alertsEl.innerHTML = open.map(renderOpenAlert).join("");
+      }
+
+      // History table — all alerts.
+      if (!alerts.length) {
+        histTbody.innerHTML = '<tr><td colspan="10" class="hint">No alerts yet.</td></tr>';
+      } else {
+        histTbody.innerHTML = alerts.map(renderAlertHistoryRow).join("");
+      }
+
+      // Baselines table.
+      if (!baselines.length) {
+        baseTbody.innerHTML = '<tr><td colspan="9" class="hint">No baselines yet — make some requests through /v1/chat/completions.</td></tr>';
+      } else {
+        baseTbody.innerHTML = baselines.map(renderBaselineRow).join("");
+      }
+    } catch (e) {
+      alertsEl.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  function renderOpenAlert(a) {
+    const arrow = a.direction === "up" ? "↑" : "↓";
+    const compaction = a.metric === "messages_count_delta";
+    const headline = compaction
+      ? `<b>${esc(a.provider)}/${esc(a.model)}</b> compacted history (turns dropped by ${Math.abs(a.peak_observed)})`
+      : `<b>${esc(a.provider)}/${esc(a.model)}</b> · <code>${esc(a.metric)}</code> ${arrow} drift (peak z = ${a.peak_z_score.toFixed(2)})`;
+    const detail = compaction
+      ? `${a.sample_count} compaction event${a.sample_count === 1 ? "" : "s"} since ${fmtAge(a.started_at)}`
+      : `observed <b>${fmtNum(a.peak_observed)}</b> vs baseline <b>${fmtNum(a.baseline_at_alert)}</b> · ${a.sample_count} samples since ${fmtAge(a.started_at)}`;
+    return `
+      <div class="dr-alert dr-alert-${esc(a.direction)}">
+        <div class="dr-alert-head">${arrow} ${headline}</div>
+        <div class="dr-alert-detail">${detail}</div>
+      </div>`;
+  }
+
+  function renderAlertHistoryRow(a) {
+    const status = a.is_open
+      ? '<span class="dr-status dr-open">OPEN</span>'
+      : '<span class="dr-status dr-resolved">resolved</span>';
+    const arrow = a.direction === "up" ? "↑" : "↓";
+    return `
+      <tr>
+        <td>${esc(a.provider)}</td>
+        <td>${esc(a.model)}</td>
+        <td><code>${esc(a.metric)}</code></td>
+        <td>${arrow}</td>
+        <td>${a.peak_z_score === -99 ? "compaction" : a.peak_z_score.toFixed(2)}</td>
+        <td>${fmtNum(a.peak_observed)}</td>
+        <td>${fmtNum(a.baseline_at_alert)}</td>
+        <td>${a.sample_count}</td>
+        <td>${fmtAge(a.started_at)}</td>
+        <td>${status}</td>
+      </tr>`;
+  }
+
+  function renderBaselineRow(b) {
+    const zClass = b.last_z_score == null
+      ? ""
+      : Math.abs(b.last_z_score) > 3 ? "style=\"color:#ff5c5c\""
+        : Math.abs(b.last_z_score) > 2 ? "style=\"color:#f0b132\"" : "";
+    return `
+      <tr>
+        <td>${esc(b.provider)}</td>
+        <td>${esc(b.model)}</td>
+        <td><code>${esc(b.metric)}</code></td>
+        <td>${fmtNum(b.mean)}</td>
+        <td>${fmtNum(b.stddev)}</td>
+        <td>${b.sample_count}</td>
+        <td>${fmtNum(b.last_observed)}</td>
+        <td ${zClass}>${b.last_z_score == null ? "—" : b.last_z_score.toFixed(2)}</td>
+        <td>${fmtAge(b.updated_at)}</td>
+      </tr>`;
   }
 
   async function loadCost() {

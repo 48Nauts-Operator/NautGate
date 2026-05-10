@@ -38,6 +38,7 @@ async def precapture(
     tools_count: int | None = None,
     stream_flag: bool | None = None,
     request_size_bytes: int | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Insert the audit row before forwarding upstream. Synchronous by design."""
     signals_json = json.dumps(classified_signals) if classified_signals else None
@@ -53,11 +54,11 @@ async def precapture(
                  prompt_body, prompt_body_truncated_at_byte,
                  tools_body, tools_body_truncated_at_byte,
                  source_ip, source_hostname, messages_count, tools_count,
-                 stream_flag, request_size_bytes)
+                 stream_flag, request_size_bytes, session_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
                     $12, $13, $14, $15, $16,
                     $17, $18,
-                    $19::inet, $20, $21, $22, $23, $24)
+                    $19::inet, $20, $21, $22, $23, $24, $25)
             """,
             decision_id,
             agent_id,
@@ -83,6 +84,7 @@ async def precapture(
             tools_count,
             stream_flag,
             request_size_bytes,
+            session_id,
         )
 
 

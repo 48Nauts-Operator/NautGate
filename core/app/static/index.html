@@ -13,6 +13,7 @@
       <a href="#overview" data-tab="overview" class="active">Overview</a>
       <a href="#audit" data-tab="audit">Audit Log</a>
       <a href="#scorecard" data-tab="scorecard">Scorecard</a>
+      <a href="#drift" data-tab="drift">Drift</a>
       <a href="#cost" data-tab="cost">Cost</a>
       <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
@@ -100,6 +101,39 @@
           </tr>
         </thead>
         <tbody id="sc-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Drift (behavior-change detection) ----------------------------------->
+    <section id="tab-drift" class="tab">
+      <h2>Behavior Drift <button class="reload" id="dr-reload">↻</button></h2>
+      <p class="hint">Catches silent provider-side changes. Per (provider, model, metric) we maintain an EWMA baseline and z-score every new sample. <b>3+ consecutive |z| &gt; 3 anomalies</b> raise an alert. Tracked: <code>input_tokens_per_byte</code> (tokenizer/cache change), <code>response_size_bytes</code> (verbosity drift), <code>first_byte_ms</code>, <code>duration_ms</code>, and <code>messages_count_delta</code> (compaction events). Compaction fires immediately on a sharp drop, not after warmup.</p>
+
+      <h3>Open alerts</h3>
+      <div id="dr-alerts"></div>
+
+      <h3>All alerts (open + resolved)</h3>
+      <table id="dr-alerts-history" class="clickable">
+        <thead>
+          <tr>
+            <th>provider</th><th>model</th><th>metric</th><th>direction</th>
+            <th>peak z</th><th>peak observed</th><th>baseline</th>
+            <th>samples</th><th>started</th><th>status</th>
+          </tr>
+        </thead>
+        <tbody id="dr-alerts-tbody"></tbody>
+      </table>
+
+      <h3>Baselines</h3>
+      <table id="dr-baselines" class="clickable">
+        <thead>
+          <tr>
+            <th>provider</th><th>model</th><th>metric</th>
+            <th>mean</th><th>stddev</th><th>samples</th>
+            <th>last observed</th><th>last z</th><th>updated</th>
+          </tr>
+        </thead>
+        <tbody id="dr-baselines-tbody"></tbody>
       </table>
     </section>
 
