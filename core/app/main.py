@@ -135,17 +135,30 @@ def create_app() -> FastAPI:
 
         @app.get("/dashboard")
         async def dashboard_index() -> HTMLResponse:
+            # Cache-bust the static assets by appending mtime-based query
+            # strings. Without this the browser keeps serving stale CSS/JS
+            # after each deploy and visual changes appear to "not land".
+            settings = get_settings()
+            try:
+                css_v = int((static_dir / "style.css").stat().st_mtime)
+                js_v = int((static_dir / "app.js").stat().st_mtime)
+            except OSError:
+                css_v = js_v = 0
+            html = index_html.replace(
+                'href="/static/style.css"',
+                f'href="/static/style.css?v={css_v}"',
+            ).replace(
+                'src="/static/app.js"',
+                f'src="/static/app.js?v={js_v}"',
+            )
             # If a local admin token is configured, inject it into a <meta> tag
             # so the JS skips manual entry. Token is server-rendered into the
             # HTML body — never travels via URL or cookie.
-            settings = get_settings()
             token_meta = ""
             if settings.nautgate_local_admin_token:
-                # Single-quote attribute escape: tokens are urlsafe-base64 + hex,
-                # never contain quotes, but be defensive.
                 t = settings.nautgate_local_admin_token.replace('"', "&quot;")
                 token_meta = f'\n  <meta name="nautgate-token" content="{t}">'
-            html = index_html.replace(
+            html = html.replace(
                 "<title>NautGate</title>",
                 f"<title>NautGate</title>{token_meta}",
             )
