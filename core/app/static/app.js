@@ -1424,7 +1424,7 @@
     const labels = Array.from(allTs).sort();
 
     // Convert each series to a value array aligned to `labels`.
-    const palette = ["#6ea5ff", "#10b981", "#f59e0b", "#ef4444", "#a78bfa", "#22d3ee"];
+    const palette = ["#c2410c", "#10b981", "#f59e0b", "#ef4444", "#a78bfa", "#22d3ee"];
     const datasets = ts.series.map((s, i) => {
       const byTs = Object.fromEntries(s.points.map((p) => [p.ts, p.cost_usd]));
       return {
@@ -1466,13 +1466,18 @@
     });
   }
 
+  // Chart x-axis labels in CET / CEST (Europe/Berlin).
+  const _CHART_HOUR_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ, hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const _CHART_DAY_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ, month: "2-digit", day: "2-digit",
+  });
   function shortLabel(iso) {
     if (!iso) return "";
     const d = new Date(iso);
-    if (costWindow.bucket === "day") {
-      return d.toISOString().substr(5, 5); // MM-DD
-    }
-    return d.toISOString().substr(11, 5); // HH:MM
+    if (costWindow.bucket === "day") return _CHART_DAY_FMT.format(d);
+    return _CHART_HOUR_FMT.format(d);
   }
 
   function usd(n) {
@@ -1574,10 +1579,33 @@
     if (x === null || x === undefined) return "—";
     return Math.round(x) + "ms";
   }
+  // All UI timestamps are rendered in CET / CEST (Europe/Berlin) regardless
+  // of the viewer's locale. Backend stores UTC; we convert on display.
+  const _TZ = "Europe/Berlin";
+  const _TS_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const _DATE_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
   function tsShort(ts) {
     if (!ts) return "-";
-    const d = new Date(ts);
-    return d.toISOString().substr(11, 8);
+    return _TS_FMT.format(new Date(ts));
+  }
+  function tsFull(ts) {
+    if (!ts) return "-";
+    return _DATE_FMT.format(new Date(ts));
   }
   function statusClass(code) {
     if (!code) return "";
