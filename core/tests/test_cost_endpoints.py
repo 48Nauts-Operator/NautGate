@@ -18,8 +18,8 @@ async def app_with_cost(monkeypatch):
             raise HTTPException(status_code=401, detail="bad token")
         return "alice"
 
-    async def fake_summary(pool, *, agent_id, hours):
-        captured["summary"] = {"agent_id": agent_id, "hours": hours}
+    async def fake_summary(pool, *, agent_id, hours, project_id=None):
+        captured["summary"] = {"agent_id": agent_id, "hours": hours, "project_id": project_id}
         return {
             "agent_id": agent_id,
             "window_hours": hours,
@@ -48,8 +48,8 @@ async def app_with_cost(monkeypatch):
             ],
         }
 
-    async def fake_timeseries(pool, *, agent_id, bucket, hours):
-        captured["timeseries"] = {"agent_id": agent_id, "bucket": bucket, "hours": hours}
+    async def fake_timeseries(pool, *, agent_id, bucket, hours, project_id=None):
+        captured["timeseries"] = {"agent_id": agent_id, "bucket": bucket, "hours": hours, "project_id": project_id}
         return {
             "agent_id": agent_id,
             "bucket": bucket,

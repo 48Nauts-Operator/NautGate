@@ -33,6 +33,10 @@ async def main() -> int:
         "--profile", default="auto", help="default routing profile (default: auto)"
     )
     parser.add_argument(
+        "--project", default=None,
+        help="project label — groups multiple keys into one cost center",
+    )
+    parser.add_argument(
         "--db-url",
         default=os.environ.get("NAUTGATE_DB_URL"),
         help="Postgres URL (default: $NAUTGATE_DB_URL)",
@@ -45,16 +49,24 @@ async def main() -> int:
 
     plaintext, key_id, key_hash = issue_key()
     conn = await asyncpg.connect(args.db_url)
+    sibling_count = 0
     try:
+        if args.project:
+            sibling_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM nautgate.api_keys WHERE project_id = $1",
+                args.project,
+            )
         await conn.execute(
             """
-            INSERT INTO nautgate.api_keys (id, key_hash, agent_id, default_profile)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO nautgate.api_keys
+                (id, key_hash, agent_id, default_profile, project_id)
+            VALUES ($1, $2, $3, $4, $5)
             """,
             key_id,
             key_hash,
             args.agent_id,
             args.profile,
+            args.project,
         )
     finally:
         await conn.close()
@@ -62,6 +74,15 @@ async def main() -> int:
     print(f"key_id:    {key_id}")
     print(f"agent_id:  {args.agent_id}")
     print(f"profile:   {args.profile}")
+    if args.project:
+        print(f"project:   {args.project}")
+        if sibling_count > 0:
+            print(
+                f"           (aggregating into existing project — "
+                f"{sibling_count} sibling key(s) already share this project)"
+            )
+        else:
+            print("           (new project created)")
     print()
     print("Token (shown ONCE — store it in your client now):")
     print(plaintext)

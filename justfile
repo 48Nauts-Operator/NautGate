@@ -46,11 +46,12 @@ psql:
 # Issue a fresh API key for an agent. Tees a copy to /tmp/ng-token-<agent>.txt
 # so scrollback can't eat the token. Prints the ng_ line by itself at the end
 # for easy copy-paste.
-# Usage: just issue-key alice               (profile defaults to "auto")
-#        just issue-key claude-code premium
-issue-key agent_id profile="auto":
+# Usage: just issue-key alice                       (profile=auto, no project)
+#        just issue-key claude-code premium         (premium profile)
+#        just issue-key claude-code auto nautgate   (group under project=nautgate)
+issue-key agent_id profile="auto" project="":
     @echo "→ token will also be saved at /tmp/ng-token-{{agent_id}}.txt"
-    cd core && NAUTGATE_DB_URL="${NAUTGATE_DB_URL:-postgres://nautgate:nautgate@localhost:5432/nautgate}" uv run python ../scripts/issue_key.py --agent-id {{agent_id}} --profile {{profile}} 2>&1 | tee /tmp/ng-token-{{agent_id}}.txt
+    cd core && NAUTGATE_DB_URL="${NAUTGATE_DB_URL:-postgres://nautgate:nautgate@localhost:5432/nautgate}" uv run python ../scripts/issue_key.py --agent-id {{agent_id}} --profile {{profile}} {{ if project != "" { "--project " + project } else { "" } }} 2>&1 | tee /tmp/ng-token-{{agent_id}}.txt
     @echo ""
     @echo "Token (copy this line):"
     @grep -E '^ng_' /tmp/ng-token-{{agent_id}}.txt || echo "(no ng_ line found — check output above)"

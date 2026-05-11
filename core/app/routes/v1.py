@@ -324,6 +324,7 @@ async def _process_chat_request(
         stream_flag=audit_meta["stream_flag"],
         request_size_bytes=audit_meta["request_size_bytes"],
         session_id=session_id,
+        project_id=getattr(request.state, "project_id", None),
     )
 
     # PLUGINS: on_request — fire-and-forget after PRECAPTURE.
@@ -914,6 +915,14 @@ def _resolve_cost_scope(request: Request, authed_agent: str) -> str | None:
     return raw
 
 
+def _resolve_project_scope(request: Request) -> str | None:
+    """``?project_id=foo`` filters; ``*`` or absent → no project filter."""
+    raw = request.query_params.get("project_id")
+    if not raw or raw in ("*", "all", "ALL"):
+        return None
+    return raw
+
+
 @router.get("/agents")
 async def list_agents(request: Request) -> Response:
     """Distinct agent_ids from api_keys + 30-day call counts. Drives the
@@ -924,6 +933,19 @@ async def list_agents(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     items = await queries.get_agents_with_key_counts(pool)
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.get("/projects")
+async def list_projects(request: Request) -> Response:
+    """Distinct projects (cost centers) with their keys, agents, 30-day
+    activity, and cumulative spend. Drives the project dropdown / panel.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    items = await queries.get_projects_with_stats(pool)
     return JSONResponse({"items": items, "count": len(items)})
 
 
@@ -946,7 +968,10 @@ async def cost_summary(request: Request) -> Response:
     if hours < 1 or hours > 720:
         raise HTTPException(status_code=400, detail="hours must be in 1..720")
 
-    return JSONResponse(await queries.get_cost_summary(pool, agent_id=scope, hours=hours))
+    project_scope = _resolve_project_scope(request)
+    return JSONResponse(await queries.get_cost_summary(
+        pool, agent_id=scope, hours=hours, project_id=project_scope,
+    ))
 
 
 @router.get("/cost/timeseries")
@@ -975,8 +1000,11 @@ async def cost_timeseries(request: Request) -> Response:
     if hours < 1 or hours > 720:
         raise HTTPException(status_code=400, detail="hours must be in 1..720")
 
+    project_scope = _resolve_project_scope(request)
     return JSONResponse(
-        await queries.get_cost_timeseries(pool, agent_id=scope, bucket=bucket, hours=hours)
+        await queries.get_cost_timeseries(
+            pool, agent_id=scope, bucket=bucket, hours=hours, project_id=project_scope,
+        )
     )
 
 

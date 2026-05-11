@@ -1070,6 +1070,8 @@
   let costWindow = { hours: 24, bucket: "hour" };
   // Selected agent for the Cost tab; "*" = aggregate across all agents.
   let costAgent = "*";
+  // Selected project for the Cost tab; "*" = no project filter.
+  let costProject = "*";
 
   // Scope the time-window buttons to the Cost tab only so we don't capture
   // the Privacy tab's buttons too.
@@ -1085,6 +1087,11 @@
 
   document.getElementById("cost-agent-select")?.addEventListener("change", (e) => {
     costAgent = e.target.value || "*";
+    loadCost();
+  });
+
+  document.getElementById("cost-project-select")?.addEventListener("change", (e) => {
+    costProject = e.target.value || "*";
     loadCost();
   });
 
@@ -1105,7 +1112,29 @@
       sel.value = current;
       costAgent = sel.value || "*";
     } catch (e) {
-      // Keep the single "All agents" option that's in HTML.
+      /* keep default */
+    }
+  }
+
+  async function loadCostProjectOptions() {
+    const sel = document.getElementById("cost-project-select");
+    if (!sel) return;
+    try {
+      const data = await api("/v1/projects");
+      const items = data.items || [];
+      const current = sel.value || "*";
+      const allOpt = '<option value="*">All projects</option>';
+      const opts = items.map(p => {
+        const cost = (p.total_cost_usd_30d || 0).toFixed(3);
+        const agents = (p.agents || []).join("+");
+        const label = `${esc(p.project_id)} · ${p.key_count}k · ${agents} · $${cost}/30d`;
+        return `<option value="${esc(p.project_id)}">${label}</option>`;
+      }).join("");
+      sel.innerHTML = allOpt + opts;
+      sel.value = current;
+      costProject = sel.value || "*";
+    } catch (e) {
+      /* keep default */
     }
   }
 
@@ -1298,15 +1327,16 @@
 
   async function loadCost() {
     if (!getToken()) return;
-    // Refresh the agent dropdown options on every cost load so new keys show up.
-    await loadCostAgentOptions();
+    // Refresh dropdowns on every load so new keys/projects appear.
+    await Promise.all([loadCostAgentOptions(), loadCostProjectOptions()]);
     const scope = costAgent || "*";
-    const scopeQuery = `&agent_id=${encodeURIComponent(scope)}`;
+    const project = costProject || "*";
+    const qs = `&agent_id=${encodeURIComponent(scope)}&project_id=${encodeURIComponent(project)}`;
     try {
       const [summary, ts] = await Promise.all([
-        api(`/v1/cost/summary?hours=${costWindow.hours}${scopeQuery}`),
+        api(`/v1/cost/summary?hours=${costWindow.hours}${qs}`),
         api(
-          `/v1/cost/timeseries?hours=${costWindow.hours}&bucket=${costWindow.bucket}${scopeQuery}`
+          `/v1/cost/timeseries?hours=${costWindow.hours}&bucket=${costWindow.bucket}${qs}`
         ),
       ]);
       renderCostSummary(summary);
@@ -1339,6 +1369,22 @@
     if (showByAgent) {
       const tbody = document.querySelector("#cost-agent tbody");
       tbody.innerHTML = byAgent.map(r => `
+        <tr>
+          <td><b>${esc(r.key || "—")}</b></td>
+          <td>${usd(r.cost_usd)}</td>
+          <td>${r.calls || 0}</td>
+          <td>${(r.prompt_tokens || 0).toLocaleString()} / ${(r.completion_tokens || 0).toLocaleString()}</td>
+        </tr>`).join("");
+    }
+
+    // by_project table — appears when not filtered to a single project.
+    const byProject = s.by_project || [];
+    const showByProject = byProject.length > 0;
+    document.getElementById("cost-by-project-title").style.display = showByProject ? "" : "none";
+    document.getElementById("cost-project-tbl").style.display = showByProject ? "" : "none";
+    if (showByProject) {
+      const tbody = document.querySelector("#cost-project-tbl tbody");
+      tbody.innerHTML = byProject.map(r => `
         <tr>
           <td><b>${esc(r.key || "—")}</b></td>
           <td>${usd(r.cost_usd)}</td>

@@ -39,6 +39,7 @@ async def precapture(
     stream_flag: bool | None = None,
     request_size_bytes: int | None = None,
     session_id: str | None = None,
+    project_id: str | None = None,
 ) -> None:
     """Insert the audit row before forwarding upstream. Synchronous by design."""
     signals_json = json.dumps(classified_signals) if classified_signals else None
@@ -54,11 +55,11 @@ async def precapture(
                  prompt_body, prompt_body_truncated_at_byte,
                  tools_body, tools_body_truncated_at_byte,
                  source_ip, source_hostname, messages_count, tools_count,
-                 stream_flag, request_size_bytes, session_id)
+                 stream_flag, request_size_bytes, session_id, project_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
                     $12, $13, $14, $15, $16,
                     $17, $18,
-                    $19::inet, $20, $21, $22, $23, $24, $25)
+                    $19::inet, $20, $21, $22, $23, $24, $25, $26)
             """,
             decision_id,
             agent_id,
@@ -85,6 +86,7 @@ async def precapture(
             stream_flag,
             request_size_bytes,
             session_id,
+            project_id,
         )
 
 
@@ -223,19 +225,24 @@ async def get_cost_summary(
     *,
     agent_id: str | None,
     hours: int,
+    project_id: str | None = None,
 ) -> dict:
     """Aggregate cost over the last N hours, broken down by provider/model/tier.
 
     ``agent_id=None`` or ``"*"`` returns aggregate across all agents.
     Any other value filters to that single agent.
+    ``project_id`` further narrows to one project (cost center).
     """
     is_all = agent_id is None or agent_id == "*"
-    where = "d.ts > NOW() - make_interval(hours => $1)" if is_all else (
-        "d.agent_id = $2 AND d.ts > NOW() - make_interval(hours => $1)"
-    )
+    conds: list[str] = ["d.ts > NOW() - make_interval(hours => $1)"]
     base_params: list = [hours]
     if not is_all:
         base_params.append(agent_id)
+        conds.append(f"d.agent_id = ${len(base_params)}")
+    if project_id and project_id != "*":
+        base_params.append(project_id)
+        conds.append(f"d.project_id = ${len(base_params)}")
+    where = " AND ".join(conds)
 
     async with pool.acquire() as conn:
         totals = await conn.fetchrow(
@@ -283,9 +290,12 @@ async def get_cost_summary(
         by_tier = await _by("d.classified_tier")
         # New: per-agent breakdown only useful on the "all" view.
         by_agent = await _by("d.agent_id") if is_all else []
+        # Per-project breakdown — only meaningful when not already filtered.
+        by_project = await _by("COALESCE(d.project_id, '(none)')") if not project_id or project_id == "*" else []
 
     return {
         "agent_id": "*" if is_all else agent_id,
+        "project_id": project_id or "*",
         "window_hours": hours,
         "total_calls": int((totals or {}).get("total_calls") or 0),
         "total_cost_usd": (totals or {}).get("total_cost_usd"),
@@ -295,6 +305,7 @@ async def get_cost_summary(
         "by_model": by_model,
         "by_tier": by_tier,
         "by_agent": by_agent,
+        "by_project": by_project,
     }
 
 
@@ -304,18 +315,22 @@ async def get_cost_timeseries(
     agent_id: str | None,
     bucket: str,
     hours: int,
+    project_id: str | None = None,
 ) -> dict:
     """Bucketed cost series. ``agent_id=None`` / ``"*"`` returns aggregate
-    across all agents; any other value filters to that single agent.
+    across all agents; any other value filters. ``project_id`` further narrows.
     """
     bucket = bucket if bucket in ("hour", "day") else "hour"
     is_all = agent_id is None or agent_id == "*"
-    where = "d.ts > NOW() - make_interval(hours => $1)" if is_all else (
-        "d.agent_id = $2 AND d.ts > NOW() - make_interval(hours => $1)"
-    )
+    conds: list[str] = ["d.ts > NOW() - make_interval(hours => $1)"]
     params: list = [hours]
     if not is_all:
         params.append(agent_id)
+        conds.append(f"d.agent_id = ${len(params)}")
+    if project_id and project_id != "*":
+        params.append(project_id)
+        conds.append(f"d.project_id = ${len(params)}")
+    where = " AND ".join(conds)
     rows = await pool.fetch(
         f"""
         SELECT date_trunc('{bucket}', d.ts) AS bucket_ts,
@@ -348,6 +363,53 @@ async def get_cost_timeseries(
         "window_hours": hours,
         "series": [{"provider": p, "points": points} for p, points in series_map.items()],
     }
+
+
+async def get_projects_with_stats(pool: asyncpg.Pool) -> list[dict]:
+    """List projects (distinct project_id values) with their key/agent counts
+    and 30-day activity. Drives the Cost tab's project dropdown.
+
+    A "project" is a free-form text label on the api_keys row — there's no
+    separate projects table; the label IS the identity.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT k.project_id                                          AS project_id,
+               COUNT(DISTINCT k.id)                                  AS key_count,
+               COUNT(DISTINCT k.agent_id)                            AS agent_count,
+               ARRAY_AGG(DISTINCT k.agent_id ORDER BY k.agent_id)    AS agents,
+               COALESCE(c.call_count, 0)::BIGINT                     AS call_count_30d,
+               c.total_cost_usd::FLOAT                               AS total_cost_usd_30d,
+               c.last_call
+          FROM nautgate.api_keys k
+          LEFT JOIN (
+              SELECT project_id,
+                     COUNT(*)                         AS call_count,
+                     SUM(o.cost_usd)                  AS total_cost_usd,
+                     MAX(d.ts)                        AS last_call
+                FROM nautgate.route_decisions d
+                LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+               WHERE d.ts > NOW() - INTERVAL '30 days'
+                 AND d.project_id IS NOT NULL
+               GROUP BY project_id
+          ) c ON c.project_id = k.project_id
+         WHERE k.project_id IS NOT NULL
+         GROUP BY k.project_id, c.call_count, c.total_cost_usd, c.last_call
+         ORDER BY call_count_30d DESC, k.project_id ASC
+        """
+    )
+    return [
+        {
+            "project_id": r["project_id"],
+            "key_count": int(r["key_count"]),
+            "agent_count": int(r["agent_count"]),
+            "agents": list(r["agents"] or []),
+            "call_count_30d": int(r["call_count_30d"] or 0),
+            "total_cost_usd_30d": float(r["total_cost_usd_30d"] or 0) if r["total_cost_usd_30d"] else 0.0,
+            "last_call": r["last_call"].isoformat() if r["last_call"] else None,
+        }
+        for r in rows
+    ]
 
 
 async def get_agents_with_key_counts(pool: asyncpg.Pool) -> list[dict]:

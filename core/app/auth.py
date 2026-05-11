@@ -24,7 +24,8 @@ from fastapi import HTTPException, Request
 
 _PH = PasswordHasher()
 _CACHE_TTL_SEC = 300.0
-_CACHE: dict[str, tuple[str, float]] = {}
+# token → (agent_id, project_id_or_none, expires_at_monotonic)
+_CACHE: dict[str, tuple[str, str | None, float]] = {}
 
 _BAD_TOKEN = HTTPException(status_code=401, detail="missing or invalid bearer token")
 
@@ -77,19 +78,19 @@ def _split_token(raw: str) -> tuple[uuid.UUID, str]:
     return key_id, secret
 
 
-def _cache_get(token: str, *, now: float) -> str | None:
+def _cache_get(token: str, *, now: float) -> tuple[str, str | None] | None:
     entry = _CACHE.get(token)
     if entry is None:
         return None
-    agent_id, expires_at = entry
+    agent_id, project_id, expires_at = entry
     if expires_at < now:
         _CACHE.pop(token, None)
         return None
-    return agent_id
+    return (agent_id, project_id)
 
 
-def _cache_put(token: str, agent_id: str, *, now: float) -> None:
-    _CACHE[token] = (agent_id, now + _CACHE_TTL_SEC)
+def _cache_put(token: str, agent_id: str, project_id: str | None, *, now: float) -> None:
+    _CACHE[token] = (agent_id, project_id, now + _CACHE_TTL_SEC)
 
 
 def cache_clear() -> None:
@@ -104,6 +105,10 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
     ``x-api-key: ng_...`` (Anthropic shape) so Claude Code, the Anthropic SDK,
     Codex, and the OpenAI SDK all work without translation.
 
+    Also stashes ``request.state.agent_id`` and ``request.state.project_id``
+    so downstream handlers (PRECAPTURE etc.) can read them without a second
+    DB roundtrip.
+
     Cache hit: returns immediately without touching the DB or argon2id.
     Cache miss: looks up api_keys by id, verifies argon2id, caches the result.
     """
@@ -112,13 +117,16 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
     now = time.monotonic()
     cached = _cache_get(raw, now=now)
     if cached is not None:
-        return cached
+        agent_id, project_id = cached
+        request.state.agent_id = agent_id
+        request.state.project_id = project_id
+        return agent_id
 
     key_id, secret = _split_token(raw)
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT key_hash, agent_id FROM nautgate.api_keys WHERE id = $1",
+            "SELECT key_hash, agent_id, project_id FROM nautgate.api_keys WHERE id = $1",
             key_id,
         )
     if row is None:
@@ -130,5 +138,13 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
         raise _BAD_TOKEN from None
 
     agent_id = row["agent_id"]
-    _cache_put(raw, agent_id, now=now)
+    # `project_id` was added in migration 009. Tolerate fake rows in tests
+    # and any future schema drift that doesn't include the column.
+    try:
+        project_id = row["project_id"]
+    except (KeyError, IndexError):
+        project_id = None
+    _cache_put(raw, agent_id, project_id, now=now)
+    request.state.agent_id = agent_id
+    request.state.project_id = project_id
     return agent_id
