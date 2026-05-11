@@ -704,6 +704,12 @@ def _streaming_response(
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request) -> Response:
+    # ChatGPT-OAuth bypass — if Codex (or anyone) sends with chatgpt-account-id,
+    # forward transparently to chatgpt.com. See app/oauth_forwarder.py.
+    from app.oauth_forwarder import forward_to_chatgpt, is_chatgpt_oauth_request
+    if is_chatgpt_oauth_request(request):
+        return await forward_to_chatgpt(request)
+
     try:
         payload = await request.json()
     except Exception as exc:
@@ -765,6 +771,13 @@ async def messages(request: Request) -> Response:
 
 @router.post("/responses")
 async def responses(request: Request) -> Response:
+    # ChatGPT-OAuth Codex bypasses the standard pipeline: forwards to
+    # chatgpt.com directly, skipping ng_-token auth and NautRouter.
+    # Audit row is still written (decision_provider=chatgpt-oauth).
+    from app.oauth_forwarder import forward_to_chatgpt, is_chatgpt_oauth_request
+    if is_chatgpt_oauth_request(request):
+        return await forward_to_chatgpt(request)
+
     try:
         raw = await request.json()
     except Exception as exc:
