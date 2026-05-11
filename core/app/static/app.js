@@ -2,7 +2,7 @@
 // Hits /v1/stats, /v1/decisions/recent, /v1/models, /v1/profile with the bearer
 // token stored in localStorage. Tab routing via URL hash.
 
-(() => {
+(async () => {
   // Legacy single-token key — migrated into sessions on first run.
   const TOKEN_KEY = "nautgate.token";
   // Sessions: array of { id, label, token, agent_id, key_id, last_seen_at }.
@@ -1558,6 +1558,62 @@
 
   // --- Boot --------------------------------------------------------------
 
+  // --- Auto-import sessions from URL fragment ---------------------------
+  // The mint shell aliases (justclaude / justpi / etc.) open the dashboard
+  // with #import=<base64-of-{token,label,agent_id}> to hand off a freshly-
+  // minted token. The fragment is browser-only, never sent to the server.
+  async function consumeImportFragment() {
+    const m = (location.hash || "").match(/^#?import=([A-Za-z0-9+/=_-]+)/);
+    if (!m) return null;
+    let payload;
+    try {
+      const json = atob(m[1].replace(/-/g, "+").replace(/_/g, "/"));
+      payload = JSON.parse(json);
+    } catch (e) {
+      console.warn("nautgate import: failed to decode fragment", e);
+      return null;
+    }
+    if (!payload || !payload.token || !String(payload.token).startsWith("ng_")) return null;
+    // Verify the token against /v1/whoami before saving.
+    try {
+      const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + payload.token } });
+      if (!res.ok) {
+        console.warn("nautgate import: /v1/whoami rejected the token", res.status);
+        return null;
+      }
+      const me = await res.json();
+      const sessions = loadSessions();
+      const existing = sessions.find(s => s.token === payload.token);
+      const label = payload.label || me.agent_id || "session";
+      if (existing) {
+        existing.label = label;
+        existing.agent_id = me.agent_id;
+        existing.key_id = me.key_id;
+        existing.last_seen_at = new Date().toISOString();
+      } else {
+        sessions.push({
+          id: cryptoId(),
+          label,
+          token: payload.token,
+          agent_id: me.agent_id,
+          key_id: me.key_id,
+          last_seen_at: new Date().toISOString(),
+        });
+      }
+      saveSessions(sessions);
+      const newest = sessions[sessions.length - 1];
+      setActiveSessionId(existing ? existing.id : newest.id);
+      // Strip the fragment so a reload doesn't re-import (and so the token
+      // isn't visible in the URL bar anymore).
+      history.replaceState(null, "", location.pathname + location.search);
+      return label;
+    } catch (e) {
+      console.warn("nautgate import: validation failed", e);
+      return null;
+    }
+  }
+  const importedLabel = await consumeImportFragment();
+
   // Start tab from URL hash, default to overview.
   const initial = (location.hash || "#overview").slice(1);
   if (document.getElementById("tab-" + initial)) {
@@ -1567,6 +1623,16 @@
   }
   renderAuth();
   renderSessions();
+  if (importedLabel) {
+    // Tiny toast: 4s pinned banner on the Overview Sessions section.
+    const banner = document.createElement("div");
+    banner.style.cssText = "padding:8px 12px;margin:8px 0;border-left:3px solid #4caf50;background:rgba(76,175,80,0.08);font-size:13px";
+    banner.textContent = `Session "${importedLabel}" imported and activated.`;
+    document.getElementById("sessions-list")?.parentNode?.insertBefore(
+      banner, document.getElementById("sessions-list")
+    );
+    setTimeout(() => banner.remove(), 4000);
+  }
 
   // Auto-verify any session that's missing an agent_id, in the background.
   // This populates labels for legacy-imported sessions on first load.
