@@ -1511,6 +1511,156 @@
     }
   }
 
+  // --- Backup (Settings → Backup section) --------------------------------
+
+  document.getElementById("bk-reload")?.addEventListener("click", () => {
+    loadBackupConfig(); loadBackupList();
+  });
+  document.getElementById("bk-save-config")?.addEventListener("click", saveBackupConfig);
+  document.getElementById("bk-create-now")?.addEventListener("click", createBackupNow);
+
+  async function loadBackupConfig() {
+    try {
+      const cfg = await api("/v1/backups/config");
+      document.getElementById("bk-enabled").checked = !!cfg.enabled;
+      document.getElementById("bk-interval").value = cfg.interval_hours ?? 3;
+      document.getElementById("bk-retention").value = cfg.retention_count ?? 20;
+      const next = cfg.next_run_at ? `next: ${tsFull(cfg.next_run_at)}` : "no run scheduled";
+      const last = cfg.last_run_at ? ` · last: ${tsFull(cfg.last_run_at)}` : "";
+      document.getElementById("bk-config-state").textContent = next + last;
+    } catch (e) { /* swallow */ }
+  }
+
+  async function saveBackupConfig() {
+    const stateEl = document.getElementById("bk-config-state");
+    stateEl.textContent = "saving…";
+    const body = {
+      enabled: document.getElementById("bk-enabled").checked,
+      interval_hours: Number(document.getElementById("bk-interval").value) || 3,
+      retention_count: Number(document.getElementById("bk-retention").value) || 20,
+    };
+    try {
+      const res = await fetch("/v1/backups/config", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      await loadBackupConfig();
+    } catch (e) {
+      stateEl.textContent = "save failed: " + (e.message || e);
+    }
+  }
+
+  async function createBackupNow() {
+    const stateEl = document.getElementById("bk-create-state");
+    stateEl.textContent = "running pg_dump…";
+    try {
+      const res = await fetch("/v1/backups", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + getToken() },
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`${res.status} ${detail.slice(0, 200)}`);
+      }
+      const row = await res.json();
+      stateEl.textContent = `✓ created ${humanBytes(row.size_bytes)}`;
+      await loadBackupList();
+      setTimeout(() => { stateEl.textContent = ""; }, 4000);
+    } catch (e) {
+      stateEl.textContent = "✗ " + (e.message || e);
+    }
+  }
+
+  async function loadBackupList() {
+    const tbody = document.getElementById("bk-tbody");
+    if (!tbody) return;
+    try {
+      const data = await api("/v1/backups");
+      const items = data.items || [];
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="hint">No backups yet. Click "Create backup now" or wait for the scheduler.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(b => {
+        const counts = b.table_counts || {};
+        const summary = Object.entries(counts).map(([k,v]) => `${k}:${v}`).join(" · ") || '<span class="hint">—</span>';
+        const statusBadge = b.status === "ok"
+          ? '<span class="bk-status bk-ok">ok</span>'
+          : b.status === "failed"
+            ? `<span class="bk-status bk-failed" title="${esc(b.error_message || "")}">failed</span>`
+            : '<span class="bk-status bk-progress">in progress</span>';
+        const restoreBtn = b.status === "ok" && b.exists_on_disk
+          ? `<button class="bk-restore" data-bk-id="${esc(b.id)}">Restore</button>`
+          : "";
+        return `
+          <tr>
+            <td>${tsFull(b.ts)}</td>
+            <td>${humanBytes(b.size_bytes)}</td>
+            <td><span class="bk-via bk-via-${esc(b.created_via)}">${esc(b.created_via)}</span></td>
+            <td class="bk-counts">${summary}</td>
+            <td>${statusBadge}</td>
+            <td>
+              ${restoreBtn}
+              <button class="ghost bk-delete" data-bk-id="${esc(b.id)}">×</button>
+            </td>
+          </tr>`;
+      }).join("");
+      tbody.querySelectorAll(".bk-restore").forEach(b => b.addEventListener("click", () => restoreBackup(b.getAttribute("data-bk-id"))));
+      tbody.querySelectorAll(".bk-delete").forEach(b => b.addEventListener("click", () => deleteBackup(b.getAttribute("data-bk-id"))));
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="6" class="hint">load failed: ${esc(e.message || e)}</td></tr>`;
+    }
+  }
+
+  async function deleteBackup(id) {
+    if (!confirm("Delete this backup? The file on disk will be removed.")) return;
+    try {
+      const res = await fetch("/v1/backups/" + encodeURIComponent(id), {
+        method: "DELETE",
+        headers: { Authorization: "Bearer " + getToken() },
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      await loadBackupList();
+    } catch (e) {
+      alert("delete failed: " + (e.message || e));
+    }
+  }
+
+  async function restoreBackup(id) {
+    if (!confirm(
+      "RESTORE will DROP the entire nautgate schema and reload it from this backup.\n\n" +
+      "All data not in this backup (newer audit rows, scorecard changes, drift baselines, etc.) will be PERMANENTLY LOST.\n\n" +
+      "Continue?"
+    )) return;
+    const stateEl = document.getElementById("bk-create-state");
+    stateEl.textContent = "restoring…";
+    try {
+      const res = await fetch("/v1/backups/" + encodeURIComponent(id) + "/restore", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`${res.status} ${detail.slice(0, 200)}`);
+      }
+      stateEl.textContent = "✓ restored";
+      await loadBackupList();
+    } catch (e) {
+      stateEl.textContent = "✗ restore failed: " + (e.message || e);
+    }
+  }
+
+  function humanBytes(n) {
+    if (!n) return "—";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + " MB";
+    return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+  }
+
   // --- Settings -----------------------------------------------------------
 
   document.getElementById("prefs-save").addEventListener("click", async () => {
@@ -1545,6 +1695,8 @@
     } catch (e) {
       /* swallow */
     }
+    // Refresh the Backup section every time Settings is opened.
+    await Promise.all([loadBackupConfig(), loadBackupList()]);
     // Provider keys: read-only env hint. We don't have an endpoint that
     // exposes which keys are set (and shouldn't, for security). Hint at the
     // env-var contract instead.

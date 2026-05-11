@@ -268,6 +268,41 @@
       <button id="prefs-save">Save profile</button>
       <span id="prefs-state" class="prefs-state"></span>
 
+      <h2>Backup <button class="reload" id="bk-reload" title="reload">↻</button></h2>
+      <p class="hint">Full snapshots of the <code>nautgate</code> schema (audit log, scorecard, drift baselines, keys, projects — everything). Stored on the gateway host under <code>~/.nautgate/backups/</code> as gzipped SQL. Scheduled backups run in the background; restore is destructive (drops the schema before reloading) and requires explicit confirmation.</p>
+
+      <div class="bk-config">
+        <label>
+          <input type="checkbox" id="bk-enabled" />
+          Scheduled backups enabled
+        </label>
+        <label>Every
+          <input type="number" id="bk-interval" min="1" max="168" step="1" style="width:5em" />
+          hours
+        </label>
+        <label>Keep last
+          <input type="number" id="bk-retention" min="1" max="500" step="1" style="width:5em" />
+          backups (older are pruned)
+        </label>
+        <button id="bk-save-config">Save schedule</button>
+        <span id="bk-config-state" class="hint"></span>
+      </div>
+
+      <div class="bk-actions">
+        <button id="bk-create-now">Create backup now</button>
+        <span id="bk-create-state" class="hint"></span>
+      </div>
+
+      <table id="bk-table">
+        <thead>
+          <tr>
+            <th>when</th><th>size</th><th>source</th>
+            <th>contents</th><th>status</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="bk-tbody"><tr><td colspan="6" class="hint">loading…</td></tr></tbody>
+      </table>
+
       <h2>Provider keys</h2>
       <p class="hint">Provider API keys (Anthropic, OpenAI, Gemini, …) live as environment variables on the gateway and require a container restart to rotate. Editing keys from the UI is on the v2 roadmap.</p>
       <pre id="keys-status" class="code">checking…</pre>

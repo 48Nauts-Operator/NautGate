@@ -87,6 +87,25 @@ nav a:hover { color: var(--text); }
 }
 .session-pill:hover { border-color: var(--accent); }
 
+/* Backup panel (Settings → Backup) */
+.bk-config { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: center; margin: 10px 0 8px; font-size: 13px; }
+.bk-config input[type="number"] { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); padding: 4px 6px; border-radius: 4px; font-family: var(--mono); }
+.bk-actions { margin: 14px 0; display: flex; gap: 10px; align-items: center; }
+#bk-table { width: 100%; margin-top: 6px; font-size: 12px; }
+#bk-table th { text-align: left; font-weight: 500; color: var(--text-dim); border-bottom: 1px solid var(--border); padding: 6px 8px; }
+#bk-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.bk-counts { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.bk-status { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-family: var(--mono); text-transform: uppercase; }
+.bk-status.bk-ok       { background: rgba(76,175,80,0.18); color: #4caf50; border: 1px solid rgba(76,175,80,0.5); }
+.bk-status.bk-failed   { background: rgba(255,92,92,0.18); color: #ff5c5c; border: 1px solid rgba(255,92,92,0.5); cursor: help; }
+.bk-status.bk-progress { background: rgba(240,177,50,0.15); color: #f0b132; border: 1px solid rgba(240,177,50,0.4); }
+.bk-via { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-family: var(--mono); }
+.bk-via-manual    { background: rgba(110,165,255,0.10); color: #6ea5ff; }
+.bk-via-scheduled { background: rgba(180,180,180,0.10); color: #a8b0bc; }
+#bk-table button.bk-restore { background: var(--accent); color: white; font-size: 11px; padding: 3px 9px; margin-right: 4px; }
+#bk-table button.bk-delete  { background: transparent; color: var(--text-dim); border: 1px solid var(--border); padding: 3px 8px; font-size: 11px; }
+#bk-table button.bk-delete:hover { color: #ff5c5c; border-color: #ff5c5c; }
+
 /* Cost-tab agent picker */
 .cost-agent-picker {
   display: inline-flex;

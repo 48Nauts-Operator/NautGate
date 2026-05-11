@@ -1113,6 +1113,120 @@ async def scorecard_incidents(provider: str, model_path: str, request: Request) 
     return JSONResponse({"items": items, "count": len(items)})
 
 
+@router.get("/backups")
+async def list_backups_endpoint(request: Request) -> Response:
+    """List recent backups (newest first)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.backup import list_backups
+    try:
+        limit = min(500, max(1, int(request.query_params.get("limit", "100"))))
+    except ValueError:
+        limit = 100
+    items = await list_backups(pool, limit=limit)
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.post("/backups")
+async def create_backup_endpoint(request: Request) -> Response:
+    """Trigger an immediate backup (created_via='manual')."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.backup import create_backup
+    try:
+        row = await create_backup(pool, via="manual")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"backup_failed: {exc}") from None
+    return JSONResponse(row, status_code=201)
+
+
+# /backups/config endpoints MUST come before the parametric /backups/{id}
+# routes so they're matched as literal paths (otherwise "config" would be
+# parsed as a backup_id UUID).
+@router.get("/backups/config")
+async def get_backup_config_endpoint(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.backup import get_config
+    return JSONResponse(await get_config(pool))
+
+
+@router.put("/backups/config")
+async def put_backup_config_endpoint(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    from app.backup import update_config
+    try:
+        cfg = await update_config(
+            pool,
+            enabled=body.get("enabled"),
+            interval_hours=body.get("interval_hours"),
+            retention_count=body.get("retention_count"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return JSONResponse(cfg)
+
+
+@router.delete("/backups/{backup_id}")
+async def delete_backup_endpoint(backup_id: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        bid = uuid.UUID(backup_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad backup_id") from None
+    from app.backup import delete_backup
+    ok = await delete_backup(pool, bid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse({"deleted": True})
+
+
+@router.post("/backups/{backup_id}/restore")
+async def restore_backup_endpoint(backup_id: str, request: Request) -> Response:
+    """DESTRUCTIVE: drops the nautgate schema and reloads from the backup.
+
+    Requires JSON body {"confirm": true} so a stray click can't wipe data.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict) or body.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="confirm=true required in body")
+    try:
+        bid = uuid.UUID(backup_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad backup_id") from None
+    from app.backup import restore_backup
+    try:
+        await restore_backup(pool, bid)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"restore_failed: {exc}") from None
+    return JSONResponse({"restored": True, "backup_id": backup_id})
+
+
 @router.get("/whoami")
 async def whoami(request: Request) -> Response:
     """Identity for the bearer token in this request.

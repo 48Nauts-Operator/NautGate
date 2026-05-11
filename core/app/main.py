@@ -83,9 +83,24 @@ async def lifespan(app: FastAPI):
         app.state.nautrouter = NautRouterClient(settings.nautrouter_base_url)
         log.info("nautrouter_client_ready", base_url=settings.nautrouter_base_url)
 
+    # Background backup scheduler: ticks every minute, fires a backup when
+    # backup_config.next_run_at has passed.
+    app.state.backup_task = None
+    if app.state.db is not None:
+        import asyncio as _asyncio
+
+        from app.backup import run_scheduler as _backup_scheduler
+        app.state.backup_task = _asyncio.create_task(_backup_scheduler(app.state.db))
+
     try:
         yield
     finally:
+        if getattr(app.state, "backup_task", None) is not None:
+            app.state.backup_task.cancel()
+            try:
+                await app.state.backup_task
+            except BaseException:
+                pass
         if getattr(app.state, "plugins", None) is not None:
             await app.state.plugins.aclose()
         if app.state.nautrouter is not None:
