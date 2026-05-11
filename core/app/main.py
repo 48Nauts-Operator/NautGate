@@ -103,6 +103,11 @@ async def lifespan(app: FastAPI):
                 pass
         if getattr(app.state, "plugins", None) is not None:
             await app.state.plugins.aclose()
+        try:
+            from app.sb_memory import close_pool as _sb_close_pool
+            await _sb_close_pool()
+        except Exception:
+            pass
         if app.state.nautrouter is not None:
             await app.state.nautrouter.aclose()
             log.info("nautrouter_client_closed")

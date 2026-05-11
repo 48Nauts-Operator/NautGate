@@ -374,6 +374,9 @@ async def _process_chat_request(
             common_headers=common_headers,
             stream_translator=stream_translator,
             stream_translator_finish=stream_translator_finish,
+            agent_id=agent_id,
+            session_id=session_id,
+            captured_prompt_body=captured.body,
         )
 
     # --- non-streaming ---
@@ -470,6 +473,17 @@ async def _process_chat_request(
                 actual_model=actual_model,
             )
             await process_drift(pool, decision_id=decision_id)
+            # SecondBrain memory ingest (opt-in via NAUTGATE_SB_INGEST=true).
+            # Replaces the role FlowAI used to play — flow-proxy can retire
+            # once this is enabled in production.
+            from app.sb_memory import ingest_outcome as _sb_ingest
+            await _sb_ingest(
+                agent_id=agent_id,
+                session_id=session_id,
+                model=actual_model or decision_model,
+                prompt_body=captured.body,
+                response_body=response_captured.body,
+            )
         except Exception as exc:
             log.warning("brain_layer_failed", error=str(exc), decision_id=str(decision_id))
 
@@ -557,6 +571,10 @@ def _streaming_response(
     common_headers: dict,
     stream_translator: Callable[[bytes], list[bytes]] | None,
     stream_translator_finish: Callable[[], list[bytes]] | None,
+    # New: passed through to the post-outcome SB ingest hook.
+    agent_id: str | None = None,
+    session_id: str | None = None,
+    captured_prompt_body: str | None = None,
 ) -> StreamingResponse:
     """Tee + cap + (optional) inline format translation. Tech Paper §11."""
     capture = StreamCapture(cap_bytes=ACCUMULATOR_CAP_BYTES_DEFAULT)
@@ -638,6 +656,15 @@ def _streaming_response(
                             actual_model=parsed.get("actual_model"),
                         )
                         await process_drift(pool, decision_id=decision_id)
+                        # SecondBrain ingest (opt-in via NAUTGATE_SB_INGEST=true)
+                        from app.sb_memory import ingest_outcome as _sb_ingest
+                        await _sb_ingest(
+                            agent_id=agent_id or "anonymous",
+                            session_id=session_id,
+                            model=parsed.get("actual_model") or decision_model,
+                            prompt_body=captured_prompt_body,
+                            response_body=response_captured.body,
+                        )
                     except Exception as exc:
                         log.warning("brain_layer_failed_in_stream", error=str(exc), decision_id=str(decision_id))
             except Exception as exc:
