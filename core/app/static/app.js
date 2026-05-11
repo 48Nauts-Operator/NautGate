@@ -1539,6 +1539,68 @@
     }
   }
 
+  // --- SecondBrain ingest (Settings → SB section) ------------------------
+
+  document.getElementById("sb-save")?.addEventListener("click", saveSBConfig);
+  document.getElementById("sb-test")?.addEventListener("click", testSBConfig);
+
+  async function loadSBConfig() {
+    try {
+      const cfg = await api("/v1/config");
+      const sb = (cfg && cfg.sb_ingest) || {};
+      document.getElementById("sb-enabled").checked = !!sb.enabled;
+      document.getElementById("sb-host").value = sb.host || "";
+      document.getElementById("sb-port").value = sb.port ?? 5433;
+      document.getElementById("sb-database").value = sb.database || "agents_memory";
+      document.getElementById("sb-user").value = sb.user || "agents";
+    } catch (e) { /* leave defaults */ }
+  }
+
+  async function saveSBConfig() {
+    const stateEl = document.getElementById("sb-state");
+    stateEl.textContent = "saving…";
+    const body = {
+      sb_ingest: {
+        enabled: document.getElementById("sb-enabled").checked,
+        host: document.getElementById("sb-host").value.trim(),
+        port: Number(document.getElementById("sb-port").value) || 5433,
+        database: document.getElementById("sb-database").value.trim() || "agents_memory",
+        user: document.getElementById("sb-user").value.trim() || "agents",
+      },
+    };
+    try {
+      const res = await fetch("/v1/config", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      stateEl.textContent = "✓ saved";
+      setTimeout(() => { stateEl.textContent = ""; }, 3000);
+    } catch (e) {
+      stateEl.textContent = "✗ save failed: " + (e.message || e);
+    }
+  }
+
+  async function testSBConfig() {
+    const stateEl = document.getElementById("sb-state");
+    stateEl.textContent = "testing… (uses *saved* config — Save first if you changed values)";
+    try {
+      const res = await fetch("/v1/config/sb-ingest/test", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + getToken() },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        stateEl.innerHTML = '<span style="color:#4caf50">✓ ' + esc(data.detail) + '</span>';
+      } else {
+        stateEl.innerHTML = '<span style="color:#ff5c5c">✗ ' + esc(data.detail) + '</span>';
+      }
+    } catch (e) {
+      stateEl.innerHTML = '<span style="color:#ff5c5c">✗ ' + esc(e.message || e) + '</span>';
+    }
+  }
+
   // --- Backup (Settings → Backup section) --------------------------------
 
   document.getElementById("bk-reload")?.addEventListener("click", () => {
@@ -1723,8 +1785,8 @@
     } catch (e) {
       /* swallow */
     }
-    // Refresh the Backup section every time Settings is opened.
-    await Promise.all([loadBackupConfig(), loadBackupList()]);
+    // Refresh the Backup and SB-ingest sections every time Settings opens.
+    await Promise.all([loadBackupConfig(), loadBackupList(), loadSBConfig()]);
     // Provider keys: read-only env hint. We don't have an endpoint that
     // exposes which keys are set (and shouldn't, for security). Hint at the
     // env-var contract instead.

@@ -478,6 +478,7 @@ async def _process_chat_request(
             # once this is enabled in production.
             from app.sb_memory import ingest_outcome as _sb_ingest
             await _sb_ingest(
+                app_pool=pool,
                 agent_id=agent_id,
                 session_id=session_id,
                 model=actual_model or decision_model,
@@ -659,6 +660,7 @@ def _streaming_response(
                         # SecondBrain ingest (opt-in via NAUTGATE_SB_INGEST=true)
                         from app.sb_memory import ingest_outcome as _sb_ingest
                         await _sb_ingest(
+                            app_pool=pool,
                             agent_id=agent_id or "anonymous",
                             session_id=session_id,
                             model=parsed.get("actual_model") or decision_model,
@@ -1265,6 +1267,66 @@ async def restore_backup_endpoint(backup_id: str, request: Request) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"restore_failed: {exc}") from None
     return JSONResponse({"restored": True, "backup_id": backup_id})
+
+
+@router.get("/config")
+async def get_config_endpoint(request: Request) -> Response:
+    """Return runtime-tunable app settings (currently: SB ingest config)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.app_config import get_settings
+    s = await get_settings(pool)
+    # Never expose secrets via GET — strip any password field we'd added by accident.
+    if isinstance(s.get("sb_ingest"), dict):
+        s["sb_ingest"].pop("password", None)
+    return JSONResponse(s)
+
+
+@router.put("/config")
+async def put_config_endpoint(request: Request) -> Response:
+    """Patch runtime-tunable settings. Body: partial JSON like
+    ``{"sb_ingest": {"enabled": true, "host": "100.71.163.122"}}``.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        patch = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(patch, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    # Never accept passwords through this endpoint.
+    if isinstance(patch.get("sb_ingest"), dict):
+        patch["sb_ingest"].pop("password", None)
+    from app.app_config import update_settings
+    from app.sb_memory import config_cache_clear
+    merged = await update_settings(pool, patch)
+    config_cache_clear()  # next ingest call re-reads from DB
+    if isinstance(merged.get("sb_ingest"), dict):
+        merged["sb_ingest"].pop("password", None)
+    return JSONResponse(merged)
+
+
+@router.post("/config/sb-ingest/test")
+async def test_sb_ingest_endpoint(request: Request) -> Response:
+    """Open a quick connection to the configured SB DB and report ok/error.
+
+    Uses the *current* saved config (DB + env merge) — i.e. tests what
+    ingest would actually use right now. Run *after* saving changes.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.app_config import sb_ingest_config
+    from app.sb_memory import test_connection
+    cfg = await sb_ingest_config(pool)
+    ok, detail = await test_connection(cfg)
+    return JSONResponse({"ok": ok, "detail": detail, "host": cfg.get("host"), "port": cfg.get("port"), "database": cfg.get("database")}, status_code=200 if ok else 502)
 
 
 @router.get("/whoami")

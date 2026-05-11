@@ -1,6 +1,20 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# Load .env into os.environ early so app modules that read via os.environ.get
+# (sb_memory.py, backup.py, etc.) pick up values from .env without needing
+# pydantic-settings declarations for every knob. Looks in core/.env first
+# (where you typically launch uvicorn from) then repo root.
+try:
+    from dotenv import load_dotenv
+    _here = Path(__file__).resolve().parent.parent  # → core/
+    for _p in (_here / ".env", _here.parent / ".env"):
+        if _p.is_file():
+            load_dotenv(_p, override=False)
+            break
+except ImportError:
+    pass
+
 import structlog
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse

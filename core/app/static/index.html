@@ -268,6 +268,31 @@
       <button id="prefs-save">Save profile</button>
       <span id="prefs-state" class="prefs-state"></span>
 
+      <h2>SecondBrain memory ingest</h2>
+      <p class="hint">When enabled, every completed request also writes a user-prompt + assistant-reply pair into a remote <code>memories</code> table — same shape FlowAI's flow-proxy used. This is what feeds your SecondBrain dashboard (pgvector / Neo4j / Qdrant). Toggle off if you don't run SB. Password is read from the gateway's <code>MEMORY_DB_PASSWORD</code> env var, not the UI.</p>
+
+      <div class="bk-config" id="sb-config-row">
+        <label>
+          <input type="checkbox" id="sb-enabled" />
+          Enable ingest
+        </label>
+        <label>Host (IP or DNS)
+          <input type="text" id="sb-host" placeholder="100.71.163.122 or stargate.local" style="width:18em" />
+        </label>
+        <label>Port
+          <input type="number" id="sb-port" min="1" max="65535" style="width:6em" />
+        </label>
+        <label>Database
+          <input type="text" id="sb-database" style="width:14em" />
+        </label>
+        <label>User
+          <input type="text" id="sb-user" style="width:10em" />
+        </label>
+        <button id="sb-save">Save</button>
+        <button id="sb-test" class="ghost">Test connection</button>
+        <span id="sb-state" class="hint"></span>
+      </div>
+
       <h2>Backup <button class="reload" id="bk-reload" title="reload">↻</button></h2>
       <p class="hint">Full snapshots of the <code>nautgate</code> schema (audit log, scorecard, drift baselines, keys, projects — everything). Stored on the gateway host under <code>~/.nautgate/backups/</code> as gzipped SQL. Scheduled backups run in the background; restore is destructive (drops the schema before reloading) and requires explicit confirmation.</p>
 

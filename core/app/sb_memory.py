@@ -29,7 +29,6 @@ Schema (Stargate side, pre-existing):
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import Any
 
@@ -39,17 +38,45 @@ import structlog
 log = structlog.get_logger()
 
 # ── Config ──────────────────────────────────────────────────────────────────
+# Resolved per-call from the DB (nautgate.app_config) with env fallback.
+# Cached briefly so we don't hammer Postgres on every outcome write.
 
-def _is_enabled() -> bool:
-    return os.environ.get("NAUTGATE_SB_INGEST", "").lower() in ("1", "true", "yes")
+_config_cache: dict | None = None
+_config_cached_at: float = 0.0
+_CONFIG_CACHE_TTL_SEC = 10.0
 
 
-def _sb_dsn() -> str:
-    host = os.environ.get("MEMORY_DB_HOST", "100.71.163.122")
-    port = os.environ.get("MEMORY_DB_PORT", "5433")
-    name = os.environ.get("MEMORY_DB_NAME", "agents_memory")
-    user = os.environ.get("MEMORY_DB_USER", "agents")
-    pw = os.environ.get("MEMORY_DB_PASSWORD", "agents_secure_2026")
+async def _get_config(pool) -> dict:
+    """Fetch and cache the live SB config (enabled flag + connection)."""
+    global _config_cache, _config_cached_at
+    now = time.monotonic()
+    if _config_cache is not None and (now - _config_cached_at) < _CONFIG_CACHE_TTL_SEC:
+        return _config_cache
+    from app.app_config import sb_ingest_config
+    cfg = await sb_ingest_config(pool)
+    _config_cache = cfg
+    _config_cached_at = now
+    return cfg
+
+
+def config_cache_clear() -> None:
+    """Force the next call to re-read config from the DB. Called by the
+    PUT /v1/config endpoint right after updating, so changes take effect
+    on the very next request.
+    """
+    global _config_cache, _config_cached_at, _pool
+    _config_cache = None
+    _config_cached_at = 0.0
+    # Close the old pool so the next request rebuilds it with the new DSN.
+    _pool = None
+
+
+def _dsn_from(cfg: dict) -> str:
+    user = cfg.get("user") or "agents"
+    pw = cfg.get("password") or ""
+    host = cfg.get("host") or "100.71.163.122"
+    port = cfg.get("port") or 5433
+    name = cfg.get("database") or "agents_memory"
     return f"postgres://{user}:{pw}@{host}:{port}/{name}"
 
 
@@ -91,17 +118,17 @@ def _record_success() -> None:
 _pool: asyncpg.Pool | None = None
 
 
-async def _get_pool() -> asyncpg.Pool | None:
+async def _get_pool(cfg: dict) -> asyncpg.Pool | None:
     global _pool
     if _pool is not None:
         return _pool
     try:
         _pool = await asyncpg.create_pool(
-            _sb_dsn(),
+            _dsn_from(cfg),
             min_size=1, max_size=4,
             command_timeout=5.0,
         )
-        log.info("sb_memory_pool_ready", dsn_host=os.environ.get("MEMORY_DB_HOST", "100.71.163.122"))
+        log.info("sb_memory_pool_ready", dsn_host=cfg.get("host"))
         return _pool
     except Exception as exc:
         _record_failure()
@@ -275,6 +302,7 @@ def _build_entries(
 
 async def ingest_outcome(
     *,
+    app_pool,                      # NautGate's pool — used to load app_config
     agent_id: str,
     session_id: str | None,
     model: str | None,
@@ -283,8 +311,14 @@ async def ingest_outcome(
 ) -> None:
     """Fire-and-forget: extract the user/assistant delta from a completed
     decision and write it to ``agents_memory.memories`` on stargate.
+
+    Config is resolved at call time (DB > env > defaults) so toggling
+    the Dashboard switch takes effect on the next request — no restart.
     """
-    if not _is_enabled() or _circuit_open():
+    if _circuit_open():
+        return
+    cfg = await _get_config(app_pool)
+    if not cfg.get("enabled"):
         return
     entries = _build_entries(
         agent_id=agent_id,
@@ -296,7 +330,7 @@ async def ingest_outcome(
     if not entries:
         return
 
-    pool = await _get_pool()
+    pool = await _get_pool(cfg)
     if pool is None:
         return
 
@@ -318,3 +352,20 @@ async def ingest_outcome(
     except Exception as exc:
         _record_failure()
         log.warning("sb_memory_ingest_failed", error=str(exc), agent_id=agent_id)
+
+
+async def test_connection(cfg: dict) -> tuple[bool, str]:
+    """Open a one-shot connection to the configured SB DB and run a tiny
+    query. Returns (ok, detail_or_error). Used by the 'Test' button in the
+    Dashboard so the operator can verify creds before flipping the toggle.
+    """
+    try:
+        conn = await asyncpg.connect(_dsn_from(cfg), timeout=5.0)
+        try:
+            row = await conn.fetchrow("SELECT COUNT(*) AS n FROM memories LIMIT 1")
+            count = int(row["n"]) if row else 0
+        finally:
+            await conn.close()
+        return True, f"connected · {count:,} memories in target DB"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
