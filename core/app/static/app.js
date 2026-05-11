@@ -3,6 +3,35 @@
 // token stored in localStorage. Tab routing via URL hash.
 
 (async () => {
+  // ── Timestamp formatters (must be declared before any function that
+  // ── transitively uses them via render closures). All UI timestamps
+  // ── render in CET / CEST (Europe/Berlin); the backend stores UTC.
+  const _TZ = "Europe/Berlin";
+  const _TS_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ,
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  });
+  const _DATE_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const _CHART_HOUR_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ, hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const _CHART_DAY_FMT = new Intl.DateTimeFormat("en-GB", {
+    timeZone: _TZ, month: "2-digit", day: "2-digit",
+  });
+
+  function tsShort(ts) {
+    if (!ts) return "-";
+    try { return _TS_FMT.format(new Date(ts)); } catch (e) { return "-"; }
+  }
+  function tsFull(ts) {
+    if (!ts) return "-";
+    try { return _DATE_FMT.format(new Date(ts)); } catch (e) { return "-"; }
+  }
+
   // Legacy single-token key — migrated into sessions on first run.
   const TOKEN_KEY = "nautgate.token";
   // Sessions: array of { id, label, token, agent_id, key_id, last_seen_at }.
@@ -665,19 +694,25 @@
   const auditDetailCache = new Map();
 
   async function loadAudit() {
-    if (!getToken()) return;
+    const list = document.getElementById("audit-list");
+    if (!getToken()) {
+      list.innerHTML = '<p class="hint">No active session — pick one in Overview → Sessions.</p>';
+      return;
+    }
     try {
       const r = await api("/v1/decisions/recent?limit=50");
-      renderAudit(r.data || []);
+      renderAudit(r.data || [], r.agent_id);
     } catch (e) {
-      /* swallow */
+      list.innerHTML = `<p class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</p>`;
+      console.error("loadAudit failed", e);
     }
   }
 
-  function renderAudit(rows) {
+  function renderAudit(rows, agentId) {
     const list = document.getElementById("audit-list");
     if (!rows.length) {
-      list.innerHTML = '<p class="hint">No requests yet. Send one and it\'ll appear here within 5s.</p>';
+      const who = agentId ? `agent_id <code>${esc(agentId)}</code>` : "the active session";
+      list.innerHTML = `<p class="hint">No requests for ${who} yet. The audit log is scoped to whichever session is active — switch sessions on the Overview tab to see another agent's traffic.</p>`;
       return;
     }
     list.innerHTML = rows
@@ -1466,13 +1501,6 @@
     });
   }
 
-  // Chart x-axis labels in CET / CEST (Europe/Berlin).
-  const _CHART_HOUR_FMT = new Intl.DateTimeFormat("en-GB", {
-    timeZone: _TZ, hour: "2-digit", minute: "2-digit", hour12: false,
-  });
-  const _CHART_DAY_FMT = new Intl.DateTimeFormat("en-GB", {
-    timeZone: _TZ, month: "2-digit", day: "2-digit",
-  });
   function shortLabel(iso) {
     if (!iso) return "";
     const d = new Date(iso);
@@ -1731,34 +1759,8 @@
     if (x === null || x === undefined) return "—";
     return Math.round(x) + "ms";
   }
-  // All UI timestamps are rendered in CET / CEST (Europe/Berlin) regardless
-  // of the viewer's locale. Backend stores UTC; we convert on display.
-  const _TZ = "Europe/Berlin";
-  const _TS_FMT = new Intl.DateTimeFormat("en-GB", {
-    timeZone: _TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const _DATE_FMT = new Intl.DateTimeFormat("en-GB", {
-    timeZone: _TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-
-  function tsShort(ts) {
-    if (!ts) return "-";
-    return _TS_FMT.format(new Date(ts));
-  }
-  function tsFull(ts) {
-    if (!ts) return "-";
-    return _DATE_FMT.format(new Date(ts));
-  }
+  // (Timestamp formatters moved to the top of the IIFE — used by render
+  // functions that may run before this line during boot.)
   function statusClass(code) {
     if (!code) return "";
     if (code >= 500) return "status-5xx";
