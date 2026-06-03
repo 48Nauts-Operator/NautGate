@@ -1,7 +1,12 @@
 # NautGate tier → provider/model routing table.
 #
-# AIM: try the cheap/capable open models first, escalate to Claude only when
-# the request genuinely warrants it.
+# POLICY: NautGate's `auto` tier MUST NOT route to Anthropic or OpenAI
+# models — the operator holds Max-plan + ChatGPT subscriptions, so any
+# Claude/GPT spend through OpenRouter would be paying twice. Explicit
+# `claude-*` / `gpt-*` requests from Claude Code / Codex still flow through
+# their OAuth passthroughs (see app/oauth_forwarder.py + the snapshot
+# normaliser) — those use the subscription, not per-token billing. Only
+# the auto tier is restricted.
 #
 # Cost reference (per million tokens, in/out):
 #   deepseek-v4-flash   $0.14 / $0.28   (1M ctx)
@@ -9,8 +14,7 @@
 #   kimi-k2-thinking    $0.60 / $2.50   (262k ctx, strong reasoning)
 #   kimi-k2.6           $0.75 / $3.50   (262k ctx, strong agentic + code)
 #   gemini-flash        $0.15 / $0.60   (1M ctx)
-#   gpt-4o-mini         $0.15 / $0.60   (128k ctx)
-#   claude-sonnet       $3.00 / $15.00  (only as last-resort fallback)
+#   gemini-pro          $1.25 / $5.00   (1M ctx, strong reasoning)
 #
 # Pinned models — no openrouter/auto hop, no surprise cost.
 
@@ -24,14 +28,15 @@ tiers:
     # Pi's typical "list these files / read this / write that" lands here.
     # DeepSeek V4 Pro: cheap, capable on code, 1M context for long histories.
     primary:  { provider: openrouter, model: openrouter/deepseek/deepseek-v4-pro }
-    fallback: { provider: openrouter, model: openrouter/openai/gpt-4o-mini }
+    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
   deep:
     # Code-heavy or programming-domain prose (iOS, frameworks, etc.).
     # Kimi K2 Thinking is the cheapest strong-reasoning model on the market.
     primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2-thinking }
     fallback: { provider: openrouter, model: openrouter/deepseek/deepseek-v4-pro }
   expert:
-    # Only when score ≥ 0.5 OR ≥3 fenced code blocks. Try Kimi K2.6 first;
-    # Sonnet is the *fallback*, not the default.
+    # Hardest tier. Kimi K2.6 → Gemini Pro fallback. NO Anthropic/OpenAI.
+    # If Claude is truly needed, the caller should request claude-opus-4-7
+    # explicitly so it routes via the OAuth passthrough (Max subscription).
     primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2.6 }
-    fallback: { provider: openrouter, model: openrouter/anthropic/claude-sonnet }
+    fallback: { provider: openrouter, model: openrouter/google/gemini-pro }

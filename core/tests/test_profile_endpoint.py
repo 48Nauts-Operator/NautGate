@@ -185,7 +185,7 @@ def test_banned_models_filter_in_resolve_healthy():
         }
     }
     # gpt-4o-mini banned → fall through to claude-haiku-4-5.
-    r = resolve_healthy("fast", table, lambda *_: False, banned_models=["gpt-4o-mini"])
+    r = resolve_healthy("fast", table, lambda *_: False, banned_models=["gpt-4o-mini"], enforce_subscription_ban=False)
     assert r.provider == "anthropic"
     assert r.model == "claude-haiku-4-5"
 
@@ -201,6 +201,8 @@ def test_banned_models_with_banned_fallback_returns_primary():
         }
     }
     r = resolve_healthy(
-        "fast", table, lambda *_: False, banned_models=["gpt-4o-mini", "claude-haiku-4-5"]
+        "fast", table, lambda *_: False,
+        banned_models=["gpt-4o-mini", "claude-haiku-4-5"],
+        enforce_subscription_ban=False,
     )
     assert r.model == "gpt-4o-mini"  # primary returned despite ban

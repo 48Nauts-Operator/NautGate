@@ -97,6 +97,16 @@ async def lifespan(app: FastAPI):
         app.state.nautrouter = NautRouterClient(settings.nautrouter_base_url)
         log.info("nautrouter_client_ready", base_url=settings.nautrouter_base_url)
 
+    # Quality-eval judge client. Direct httpx to OpenAI (or LMStudio when
+    # the operator picks that in Settings) — intentionally bypasses
+    # NautRouter so judge calls never get re-routed, never appear in our
+    # own routing analytics, and don't create a feedback loop.
+    import httpx as _httpx
+    app.state.quality_judge = _httpx.AsyncClient(
+        timeout=_httpx.Timeout(15.0, connect=2.0),
+        limits=_httpx.Limits(max_keepalive_connections=4, max_connections=8),
+    )
+
     # Background backup scheduler: ticks every minute, fires a backup when
     # backup_config.next_run_at has passed.
     app.state.backup_task = None
@@ -122,6 +132,11 @@ async def lifespan(app: FastAPI):
             await _sb_close_pool()
         except Exception:
             pass
+        if getattr(app.state, "quality_judge", None) is not None:
+            try:
+                await app.state.quality_judge.aclose()
+            except Exception:
+                pass
         if app.state.nautrouter is not None:
             await app.state.nautrouter.aclose()
             log.info("nautrouter_client_closed")
@@ -150,7 +165,25 @@ def create_app() -> FastAPI:
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-        index_html = (static_dir / "index.html").read_text(encoding="utf-8")
+
+        # In-process cache for index.html — keyed by file mtime so edits land
+        # without a restart. Reading on every request is cheap (one stat +
+        # one read for ~50 KB), but caching avoids the read when the file is
+        # unchanged across thousands of dashboard hits.
+        _index_cache: dict[str, str | int] = {"mtime": 0, "html": ""}
+
+        def _read_index() -> str:
+            try:
+                m = int((static_dir / "index.html").stat().st_mtime)
+            except OSError:
+                return _index_cache.get("html") or ""
+            if m != _index_cache["mtime"]:
+                _index_cache["mtime"] = m
+                _index_cache["html"] = (static_dir / "index.html").read_text(encoding="utf-8")
+            return _index_cache["html"]
+
+        # Prime the cache so the first request doesn't pay the read.
+        _read_index()
 
         @app.get("/dashboard")
         async def dashboard_index() -> HTMLResponse:
@@ -163,6 +196,7 @@ def create_app() -> FastAPI:
                 js_v = int((static_dir / "app.js").stat().st_mtime)
             except OSError:
                 css_v = js_v = 0
+            index_html = _read_index()
             html = index_html.replace(
                 'href="/static/style.css"',
                 f'href="/static/style.css?v={css_v}"',

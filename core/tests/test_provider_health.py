@@ -87,7 +87,7 @@ def table():
 
 
 def test_resolve_healthy_returns_primary_when_all_healthy(table):
-    r = resolve_healthy("fast", table, lambda *_: False)
+    r = resolve_healthy("fast", table, lambda *_: False, enforce_subscription_ban=False)
     assert r.provider == "openai"
     assert r.model == "gpt-4o-mini"
 
@@ -96,14 +96,14 @@ def test_resolve_healthy_falls_back_when_primary_unhealthy(table):
     def is_unhealthy(provider, model):
         return (provider, model) == ("openai", "gpt-4o-mini")
 
-    r = resolve_healthy("fast", table, is_unhealthy)
+    r = resolve_healthy("fast", table, is_unhealthy, enforce_subscription_ban=False)
     assert r.provider == "anthropic"
     assert r.model == "claude-haiku-4-5"
 
 
 def test_resolve_healthy_returns_primary_when_no_fallback_even_if_unhealthy(table):
     """If unhealthy primary has no fallback, we'd rather use it than strand the request."""
-    r = resolve_healthy("deep", table, lambda *_: True)
+    r = resolve_healthy("deep", table, lambda *_: True, enforce_subscription_ban=False)
     assert r.provider == "anthropic"
     assert r.model == "claude-sonnet-4-6"
 
@@ -115,5 +115,5 @@ def test_resolve_healthy_respects_specific_pair_only(table):
     def is_unhealthy(provider, model):
         return (provider, model) == ("openai", "gpt-4o-mini")
 
-    r = resolve_healthy("balanced", table, is_unhealthy)
+    r = resolve_healthy("balanced", table, is_unhealthy, enforce_subscription_ban=False)
     assert r.provider == "anthropic"  # primary used as-is

@@ -289,7 +289,11 @@
 
   // --- Tab routing --------------------------------------------------------
 
-  document.querySelectorAll("nav a").forEach((a) => {
+  // Only bind to anchors that declare a top-level tab via data-tab. This
+  // matters because nested <nav> elements (e.g. the Settings sub-nav) would
+  // otherwise be captured by `nav a` and call activateTab(undefined),
+  // wiping the page until the next refresh.
+  document.querySelectorAll("nav a[data-tab]").forEach((a) => {
     a.addEventListener("click", () => {
       const tab = a.dataset.tab;
       activateTab(tab);
@@ -298,7 +302,7 @@
 
   function activateTab(name) {
     activeTab = name;
-    document.querySelectorAll("nav a").forEach((a) =>
+    document.querySelectorAll("nav a[data-tab]").forEach((a) =>
       a.classList.toggle("active", a.dataset.tab === name)
     );
     document.querySelectorAll(".tab").forEach((s) =>
@@ -322,9 +326,34 @@
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "scorecard") loadScorecard();
     else if (activeTab === "drift") loadDrift();
+    else if (activeTab === "quality") loadQuality();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
   }
+
+  // --- Settings sub-tabs (horizontal nav within #tab-settings) ----------
+  const SETTINGS_SUBTAB_KEY = "nautgate-settings-subtab";
+  function showSettingsSubtab(name) {
+    if (!name) name = "profile";
+    document.querySelectorAll("#settings-subnav a").forEach((a) =>
+      a.classList.toggle("active", a.dataset.subtab === name)
+    );
+    document.querySelectorAll("#tab-settings .settings-pane").forEach((p) => {
+      p.hidden = p.dataset.pane !== name;
+    });
+    try { localStorage.setItem(SETTINGS_SUBTAB_KEY, name); } catch (_e) {}
+  }
+  document.querySelectorAll("#settings-subnav a").forEach((a) => {
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      showSettingsSubtab(a.dataset.subtab);
+    });
+  });
+  // Restore last-active sub-tab on page load.
+  try {
+    const saved = localStorage.getItem(SETTINGS_SUBTAB_KEY);
+    if (saved) showSettingsSubtab(saved);
+  } catch (_e) {}
 
   // --- Overview -----------------------------------------------------------
 
@@ -756,7 +785,10 @@
             </div>
             <div>${bar}<div class="audit-source" style="margin-top:2px">${total} tokens · ${(r.request_size_bytes || 0) >= 1024 ? Math.round(r.request_size_bytes / 1024) + "KB" : (r.request_size_bytes || 0) + "B"} req</div></div>
             <div class="audit-meta-right">
-              <div class="audit-cost">${cost}</div>
+              <div class="audit-cost-row">
+                <button class="audit-thumbs-down" data-decision="${esc(r.decision_id)}" title="Bad call — run an immediate quality eval">👎</button>
+                <div class="audit-cost">${cost}</div>
+              </div>
               <div>${latency} · ${tsShort(r.ts)}</div>
             </div>
           </div>
@@ -765,7 +797,43 @@
       .join("");
 
     document.querySelectorAll(".audit-row").forEach((row) => {
-      row.addEventListener("click", () => toggleAuditDetail(row.dataset.decision));
+      row.addEventListener("click", (ev) => {
+        // Don't toggle the drawer when the user clicks the thumbs-down icon.
+        if (ev.target && ev.target.classList.contains("audit-thumbs-down")) return;
+        toggleAuditDetail(row.dataset.decision);
+      });
+    });
+    document.querySelectorAll(".audit-thumbs-down").forEach((btn) => {
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const did = btn.dataset.decision;
+        const prev = btn.textContent;
+        btn.textContent = "⏳";
+        btn.disabled = true;
+        try {
+          const res = await fetch("/v1/quality/evaluate/" + encodeURIComponent(did), {
+            method: "POST",
+            headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+            body: JSON.stringify({ trigger: "thumbs_down" }),
+          });
+          if (!res.ok) throw new Error("http_" + res.status);
+          const row = await res.json();
+          // Invalidate cached detail so reopen pulls fresh data; also refresh
+          // coach panel if drawer is already open for this row.
+          auditDetailCache.delete(did);
+          if (auditExpandedId === did) {
+            const el = document.getElementById("audit-detail-" + did);
+            if (el) toggleAuditDetail(did), toggleAuditDetail(did);
+          }
+          btn.textContent = "✓";
+          btn.title = "Evaluated · open the row to see the Coach";
+          setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 2500);
+        } catch (e) {
+          btn.textContent = "✗";
+          btn.title = "Eval failed: " + (e.message || e);
+          setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 2500);
+        }
+      });
     });
     if (auditExpandedId) {
       const el = document.getElementById("audit-detail-" + auditExpandedId);
@@ -899,6 +967,117 @@
     // Response — block-style with text + tool_use blocks
     html += '<div class="section-title">Response — what came back</div>';
     html += renderResponseBlocks(d);
+
+    // Coach — judge's verdict, lazy-loaded on first expand.
+    html += `
+      <details class="coach-accordion" data-decision="${esc(d.decision_id || "")}">
+        <summary>▸ Coach <span class="hint">(judge eval, click to load)</span></summary>
+        <div class="coach-body"><p class="hint">loading…</p></div>
+      </details>`;
+    return html;
+  }
+
+  // Wire coach accordions after the drawer paints (event delegation on body).
+  document.addEventListener("toggle", async (ev) => {
+    const det = ev.target;
+    if (!(det && det.classList && det.classList.contains("coach-accordion"))) return;
+    if (!det.open) return;
+    const did = det.dataset.decision;
+    const body = det.querySelector(".coach-body");
+    if (!did || !body || body.dataset.loaded === "1") return;
+    body.dataset.loaded = "1";
+    try {
+      const res = await fetch("/v1/quality/evaluation/" + encodeURIComponent(did), {
+        headers: { Authorization: "Bearer " + getToken() },
+      });
+      if (res.status === 404) {
+        body.innerHTML = `
+          <p class="hint">No evaluation for this call yet.</p>
+          <button class="ghost coach-run-now" data-decision="${esc(did)}">Run eval now</button>`;
+        body.querySelector(".coach-run-now").addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const btn = e.target;
+          btn.disabled = true;
+          btn.textContent = "running…";
+          try {
+            const r = await fetch("/v1/quality/evaluate/" + encodeURIComponent(did), {
+              method: "POST",
+              headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+              body: JSON.stringify({ trigger: "manual" }),
+            });
+            if (!r.ok) throw new Error("http_" + r.status);
+            const row = await r.json();
+            body.innerHTML = renderCoachBody(row);
+          } catch (err) {
+            btn.disabled = false;
+            btn.textContent = "Run eval now";
+            body.insertAdjacentHTML("beforeend",
+              `<p class="hint" style="color:#ff5c5c">eval failed: ${esc(err.message || err)}</p>`);
+          }
+        }, { once: true });
+        return;
+      }
+      if (!res.ok) throw new Error("http_" + res.status);
+      const row = await res.json();
+      body.innerHTML = renderCoachBody(row);
+    } catch (e) {
+      body.innerHTML = `<p class="hint">failed to load eval: ${esc(e.message || e)}</p>`;
+    }
+  }, true);  // useCapture so it fires for nested <details>
+
+  function renderCoachBody(row) {
+    const rubric = row.rubric || {};
+    const scoreCell = (label, v) => `
+      <div class="coach-score">
+        <div class="coach-score-label">${esc(label)}</div>
+        <div class="coach-score-value">${v == null ? "—" : v + "/5"}</div>
+      </div>`;
+    const tags = (row.failure_tags || []).map(
+      (t) => `<span class="failure-tag failure-tag-${esc(t)}">${esc(t.replace(/_/g, " "))}</span>`
+    ).join(" ");
+    const suggested = row.suggested_prompt
+      ? `<div class="coach-suggest">
+           <div class="coach-section-label">Suggested better prompt</div>
+           <pre class="coach-suggest-text">${esc(row.suggested_prompt)}</pre>
+           <button class="ghost coach-copy" data-text="${esc(row.suggested_prompt)}">Copy</button>
+         </div>`
+      : "";
+    const notes = row.coach_notes
+      ? `<div class="coach-notes"><b>Notes:</b> ${esc(row.coach_notes)}</div>`
+      : "";
+    const meta = `
+      <div class="hint coach-meta">
+        judge: ${esc(row.judge_provider || "")}/${esc(row.judge_model || "")}
+        · ${row.judge_cost_usd != null ? "$" + Number(row.judge_cost_usd).toFixed(4) : "$—"}
+        · trigger: ${esc(row.trigger || "?")}
+        · ${row.judge_latency_ms != null ? row.judge_latency_ms + " ms" : ""}
+      </div>`;
+    const html = `
+      <div class="coach-scores">
+        ${scoreCell("Task understanding", rubric.task_understanding)}
+        ${scoreCell("Task completion", rubric.task_completion)}
+        ${scoreCell("Reasoning efficiency", rubric.reasoning_efficiency)}
+        ${scoreCell("Prompt clarity", rubric.prompt_clarity)}
+      </div>
+      ${tags ? `<div class="coach-tags">${tags}</div>` : ""}
+      ${suggested}
+      ${notes}
+      ${meta}`;
+    // Hook up Copy after innerHTML lands; the caller assigns innerHTML
+    // synchronously, so attach via a microtask.
+    queueMicrotask(() => {
+      document.querySelectorAll(".coach-copy").forEach((btn) => {
+        if (btn.dataset.wired === "1") return;
+        btn.dataset.wired = "1";
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          navigator.clipboard.writeText(btn.dataset.text || "");
+          const t = btn.textContent;
+          btn.textContent = "✓ copied";
+          setTimeout(() => { btn.textContent = t; }, 1500);
+        });
+      });
+    });
     return html;
   }
 
@@ -1383,6 +1562,11 @@
 
   function renderCostSummary(s) {
     document.getElementById("c-total").textContent = usd(s.total_cost_usd);
+    const savingsEl = document.getElementById("c-savings");
+    if (savingsEl) {
+      savingsEl.textContent = usd(s.subscription_savings_usd);
+      savingsEl.title = "What Anthropic/OpenAI metered billing WOULD have cost — covered by your Max subscription via OAuth passthrough.";
+    }
     document.getElementById("c-calls").textContent = s.total_calls ?? 0;
     const avg =
       s.total_cost_usd && s.total_calls
@@ -1391,9 +1575,13 @@
     document.getElementById("c-avg").textContent = usd(avg);
     document.getElementById("c-tokens").textContent =
       ((s.total_prompt_tokens || 0) + (s.total_completion_tokens || 0)).toLocaleString();
+    const emptyEl = document.getElementById("c-empty");
+    if (emptyEl) emptyEl.textContent = s.empty_count != null ? String(s.empty_count) : "—";
+    const rlEl = document.getElementById("c-ratelimit");
+    if (rlEl) rlEl.textContent = s.rate_limited_count != null ? String(s.rate_limited_count) : "—";
 
-    fillCostTable("cost-provider", s.by_provider, ["key", "cost_usd", "calls"]);
-    fillCostTable("cost-model", s.by_model, ["key", "cost_usd", "calls"]);
+    fillCostProviderTable(s.by_provider);
+    fillCostModelTable(s.by_model);
     fillCostTierTable("cost-tier", s.by_tier);
 
     // by_agent table — only rendered when we asked for the aggregate view.
@@ -1437,6 +1625,61 @@
           `<tr><td>${esc(r[fields[0]] || "—")}</td><td>${usd(r[fields[1]])}</td><td>${r[fields[2]] || 0}</td></tr>`
       )
       .join("");
+  }
+
+  function fillCostProviderTable(rows) {
+    const tbody = document.querySelector("#cost-provider tbody");
+    tbody.innerHTML = (rows || [])
+      .map((r) => `
+        <tr>
+          <td>${esc(r.key || "—")}</td>
+          <td>${usd(r.cost_usd)}</td>
+          <td class="cost-notional">${r.notional_cost_usd != null ? usd(r.notional_cost_usd) : "—"}</td>
+          <td>${r.calls || 0}</td>
+        </tr>`)
+      .join("");
+  }
+
+  function fillCostModelTable(rows) {
+    const tbody = document.querySelector("#cost-model tbody");
+    tbody.innerHTML = (rows || [])
+      .map((r) => {
+        const totalCalls = r.calls || 1;
+        const dollarPerCall = (r.cost_usd || 0) / totalCalls;
+        const latency = r.avg_latency_ms != null ? Math.round(r.avg_latency_ms) + " ms" : "—";
+        const emptyPct = totalCalls > 0
+          ? ((r.empty_count || 0) / totalCalls * 100).toFixed(0) + "%"
+          : "—";
+        return `
+          <tr class="cost-model-row" data-model="${esc(r.key)}">
+            <td><b>${esc(r.key || "—")}</b></td>
+            <td>${usd(r.cost_usd)}</td>
+            <td class="cost-notional">${r.notional_cost_usd != null ? usd(r.notional_cost_usd) : "—"}</td>
+            <td>${totalCalls}</td>
+            <td>${dollarPerCall > 0 ? "$" + dollarPerCall.toFixed(4) : "—"}</td>
+            <td>${(r.prompt_tokens || 0).toLocaleString()} / ${(r.completion_tokens || 0).toLocaleString()}</td>
+            <td>${latency}</td>
+            <td>${r.empty_count || 0} (${emptyPct})</td>
+          </tr>`;
+      })
+      .join("");
+    // Wire row clicks → jump to Audit Log filtered by model.
+    document.querySelectorAll(".cost-model-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const model = row.dataset.model;
+        if (!model) return;
+        activateTab("audit");
+        // The audit tab doesn't expose a model filter yet; show a hint
+        // toast so the user knows where to look. Click-through is best-effort
+        // until the Audit tab supports model filtering directly.
+        const hintEl = document.querySelector("#tab-audit .hint");
+        if (hintEl) {
+          const orig = hintEl.textContent;
+          hintEl.textContent = `Filtered hint: showing recent calls. Look for model=${model}.`;
+          setTimeout(() => { hintEl.textContent = orig; }, 4000);
+        }
+      });
+    });
   }
 
   function fillCostTierTable(id, rows) {
@@ -1539,7 +1782,8 @@
     }
   }
 
-  // --- SecondBrain ingest (Settings → SB section) ------------------------
+  // --- Engram-OSS ingest (Settings → Engram-OSS sub-tab) -----------------
+  // (Backend keys remain `sb_ingest` / `sb_memory.py` — UI rename only.)
 
   document.getElementById("sb-save")?.addEventListener("click", saveSBConfig);
   document.getElementById("sb-test")?.addEventListener("click", testSBConfig);
@@ -1598,6 +1842,264 @@
       }
     } catch (e) {
       stateEl.innerHTML = '<span style="color:#ff5c5c">✗ ' + esc(e.message || e) + '</span>';
+    }
+  }
+
+  // --- Quality eval (Settings → Quality eval section) -------------------
+
+  document.getElementById("qe-save")?.addEventListener("click", saveQualityConfig);
+  document.getElementById("qe-models-reload")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const prov = document.getElementById("qe-judge-provider").value;
+    loadQualityModels({ provider: prov, force: true });
+  });
+  // When the provider dropdown changes, refresh the base URL hint AND the
+  // model list. We don't persist anything until Save.
+  document.getElementById("qe-judge-provider")?.addEventListener("change", (e) => {
+    const prov = e.target.value;
+    const defaults = {
+      openrouter: "https://openrouter.ai/api",
+      openai: "https://api.openai.com",
+      lmstudio: "http://host.docker.internal:1234",
+      custom: "",
+    };
+    const baseEl = document.getElementById("qe-judge-base-url");
+    if (defaults[prov] !== undefined) baseEl.value = defaults[prov];
+    loadQualityModels({ provider: prov });
+  });
+
+  // Cache the last-fetched model list so re-opening Settings doesn't refetch.
+  let _qualityModelsCache = { provider: null, models: [] };
+
+  async function loadQualityModels({ provider, force = false } = {}) {
+    const sel = document.getElementById("qe-judge-model");
+    const stateEl = document.getElementById("qe-state");
+    const currentValue = sel.value;
+    if (!force && _qualityModelsCache.provider === provider && _qualityModelsCache.models.length) {
+      _renderQualityModels(_qualityModelsCache.models, currentValue);
+      return;
+    }
+    sel.innerHTML = '<option>loading…</option>';
+    stateEl.textContent = `fetching ${provider || "?"} models…`;
+    try {
+      const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+      const res = await fetch("/v1/quality/models" + qs, {
+        headers: { Authorization: "Bearer " + getToken() },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || ("http_" + res.status));
+      _qualityModelsCache = { provider: provider, models: data.models || [] };
+      _renderQualityModels(data.models || [], currentValue);
+      stateEl.textContent = `${data.model_count} models available from ${data.provider}`;
+      setTimeout(() => { if (stateEl.textContent.includes("available")) stateEl.textContent = ""; }, 4000);
+    } catch (e) {
+      sel.innerHTML = '<option value="">— couldn\'t load —</option>';
+      stateEl.innerHTML = '<span style="color:#ff5c5c">✗ fetch models failed: ' + esc(e.message || e) + '</span>';
+    }
+  }
+
+  function _renderQualityModels(models, preferred) {
+    const sel = document.getElementById("qe-judge-model");
+    sel.innerHTML = "";
+    if (!models.length) {
+      sel.innerHTML = '<option value="">— no models —</option>';
+      return;
+    }
+    // If the previously-saved value isn't in the new list, prepend it so
+    // the dropdown still shows the user's actual setting.
+    const ids = new Set(models.map((m) => m.id));
+    if (preferred && !ids.has(preferred)) {
+      const o = document.createElement("option");
+      o.value = preferred;
+      o.textContent = preferred + " (not in catalogue)";
+      sel.appendChild(o);
+    }
+    for (const m of models) {
+      const o = document.createElement("option");
+      o.value = m.id;
+      const p = m.prompt_price_per_m;
+      const c = m.completion_price_per_m;
+      const price = (p != null && c != null)
+        ? ` — $${p}/M in · $${c}/M out`
+        : (p != null ? ` — $${p}/M in` : "");
+      o.textContent = `${m.id}${price}`;
+      sel.appendChild(o);
+    }
+    if (preferred && ids.has(preferred)) {
+      sel.value = preferred;
+    }
+  }
+
+  async function loadQualityConfig() {
+    try {
+      const cfg = await api("/v1/config");
+      const qe = (cfg && cfg.quality_eval) || {};
+      document.getElementById("qe-enabled").checked = qe.enabled !== false;
+      document.getElementById("qe-judge-provider").value = qe.judge_provider || "openrouter";
+      document.getElementById("qe-judge-base-url").value =
+        qe.judge_base_url || "https://openrouter.ai/api";
+      const rate = qe.sample_rate != null ? qe.sample_rate : 0.10;
+      document.getElementById("qe-sample-rate").value = Math.round(rate * 100);
+      document.getElementById("qe-daily-cap").value =
+        qe.daily_cost_cap_usd != null ? qe.daily_cost_cap_usd : 5.00;
+      // Pull the model list for the configured provider; preselect the saved model.
+      const savedModel = qe.judge_model || "openai/gpt-4o-mini";
+      await loadQualityModels({ provider: qe.judge_provider || "openrouter" });
+      // After models loaded, force-select the saved model (it'll be added
+      // as a fallback option if missing from the catalogue).
+      const sel = document.getElementById("qe-judge-model");
+      const opts = Array.from(sel.options).map((o) => o.value);
+      if (!opts.includes(savedModel)) {
+        const o = document.createElement("option");
+        o.value = savedModel;
+        o.textContent = savedModel + " (not in catalogue)";
+        sel.insertBefore(o, sel.firstChild);
+      }
+      sel.value = savedModel;
+    } catch (e) { /* leave defaults */ }
+  }
+
+  async function saveQualityConfig() {
+    const stateEl = document.getElementById("qe-state");
+    stateEl.textContent = "saving…";
+    const ratePct = Number(document.getElementById("qe-sample-rate").value);
+    const provider = document.getElementById("qe-judge-provider").value || "openrouter";
+    const model = document.getElementById("qe-judge-model").value || "openai/gpt-4o-mini";
+    const body = {
+      quality_eval: {
+        enabled: document.getElementById("qe-enabled").checked,
+        judge_provider: provider,
+        judge_model: model,
+        judge_base_url: document.getElementById("qe-judge-base-url").value.trim()
+          || "https://openrouter.ai/api",
+        sample_rate: isFinite(ratePct) ? Math.max(0, Math.min(100, ratePct)) / 100 : 0.10,
+        daily_cost_cap_usd: Number(document.getElementById("qe-daily-cap").value) || 0,
+      },
+    };
+    try {
+      const res = await fetch("/v1/config", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      stateEl.textContent = "✓ saved";
+      setTimeout(() => { stateEl.textContent = ""; }, 3000);
+    } catch (e) {
+      stateEl.textContent = "✗ save failed: " + (e.message || e);
+    }
+  }
+
+  // --- Quality tab -------------------------------------------------------
+
+  let qualityWindow = { hours: 24 };
+  let qualityModelFilter = "*";
+
+  document.querySelectorAll("#tab-quality .window-buttons button").forEach((b) => {
+    b.addEventListener("click", () => {
+      qualityWindow = { hours: Number(b.dataset.window) };
+      document
+        .querySelectorAll("#tab-quality .window-buttons button")
+        .forEach((x) => x.classList.toggle("active", x === b));
+      loadQuality();
+    });
+  });
+  document.getElementById("quality-model-filter")?.addEventListener("change", (e) => {
+    qualityModelFilter = e.target.value || "*";
+    loadQuality();
+  });
+
+  function _heatmapColor(rate) {
+    if (rate == null) return "transparent";
+    const r = Math.max(0, Math.min(1, rate));
+    // green -> amber -> red
+    const hue = (1 - r) * 120;
+    return `hsla(${hue}, 70%, 35%, ${0.25 + r * 0.55})`;
+  }
+
+  async function loadQuality() {
+    try {
+      const qs = `?hours=${qualityWindow.hours}` +
+        (qualityModelFilter && qualityModelFilter !== "*" ? `&model=${encodeURIComponent(qualityModelFilter)}` : "");
+      const s = await api("/v1/quality/summary" + qs);
+      const t = s.totals || {};
+      document.getElementById("q-total").textContent = (t.evaluations || 0).toLocaleString();
+      document.getElementById("q-completion").textContent =
+        t.avg_task_completion != null ? Number(t.avg_task_completion).toFixed(2) : "—";
+      document.getElementById("q-failure-rate").textContent =
+        t.failure_rate != null ? (Number(t.failure_rate) * 100).toFixed(1) + "%" : "—";
+      document.getElementById("q-judge-cost").textContent =
+        t.judge_spend_usd != null ? "$" + Number(t.judge_spend_usd).toFixed(4) : "$—";
+
+      // Heatmap
+      const buckets = ["0_2", "2_4", "4_6", "6_8", "8_10"];
+      const heatBody = document.querySelector("#quality-heatmap tbody");
+      heatBody.innerHTML = (s.heatmap || []).map((r) => {
+        const cells = buckets.map((b) => {
+          const v = r.buckets ? r.buckets[b] : null;
+          const c = r.counts ? r.counts[b] : 0;
+          const display = v == null ? "—" : (v * 100).toFixed(0) + "%";
+          const title = c ? `${c} evals` : "no evals";
+          return `<td style="background:${_heatmapColor(v)}" title="${title}">${display}</td>`;
+        }).join("");
+        return `<tr><td><span class="tag">${esc(r.model)}</span></td>${cells}</tr>`;
+      }).join("") || `<tr><td colspan="6" class="hint">no evaluations yet — they'll start landing within seconds of your next LLM call</td></tr>`;
+
+      // Failure modes
+      const fmBody = document.querySelector("#quality-failure-modes tbody");
+      fmBody.innerHTML = (s.failure_modes || []).map((r) => `
+        <tr>
+          <td>${esc(r.model)}</td>
+          <td>${r.evaluations || 0}</td>
+          <td>${r.over_thinking || 0}</td>
+          <td>${r.off_task || 0}</td>
+          <td>${r.looped || 0}</td>
+          <td>${r.hallucination || 0}</td>
+          <td>${r.partial_answer || 0}</td>
+          <td>${r.refusal || 0}</td>
+          <td>${r.tool_misuse || 0}</td>
+        </tr>`).join("") || `<tr><td colspan="9" class="hint">no failure-mode data yet</td></tr>`;
+
+      // Worst recent
+      const wBody = document.querySelector("#quality-worst tbody");
+      wBody.innerHTML = (s.worst_recent || []).map((r) => {
+        const tags = (r.failure_tags || []).map(
+          (t) => `<span class="failure-tag failure-tag-${esc(t)}">${esc(t.replace(/_/g, " "))}</span>`
+        ).join(" ");
+        return `
+          <tr class="worst-row" data-decision="${esc(r.decision_id)}">
+            <td>${tsShort(r.ts)}</td>
+            <td>${esc(r.model)}</td>
+            <td><span class="tag tier">${esc(r.tier || "—")}</span></td>
+            <td>${r.completion != null ? r.completion.toFixed(1) : "—"}</td>
+            <td>${tags}</td>
+            <td>${esc(r.coach_notes || "")}</td>
+          </tr>`;
+      }).join("") || `<tr><td colspan="6" class="hint">no failures detected in this window</td></tr>`;
+
+      // Click a worst-row to jump to the Audit Log filtered to that call.
+      document.querySelectorAll(".worst-row").forEach((row) => {
+        row.addEventListener("click", () => {
+          activateTab("audit");
+          setTimeout(() => {
+            auditExpandedId = null;
+            toggleAuditDetail(row.dataset.decision);
+          }, 200);
+        });
+      });
+
+      // Populate model filter from observed evaluations on first paint.
+      const sel = document.getElementById("quality-model-filter");
+      if (sel && sel.children.length <= 1 && Array.isArray(s.by_model)) {
+        for (const m of s.by_model) {
+          const opt = document.createElement("option");
+          opt.value = m.model;
+          opt.textContent = `${m.model} · ${m.evaluations} evals`;
+          sel.appendChild(opt);
+        }
+      }
+    } catch (e) {
+      console.error("loadQuality failed", e);
     }
   }
 
@@ -1785,8 +2287,10 @@
     } catch (e) {
       /* swallow */
     }
-    // Refresh the Backup and SB-ingest sections every time Settings opens.
-    await Promise.all([loadBackupConfig(), loadBackupList(), loadSBConfig()]);
+    // Refresh the Backup, SB-ingest and Quality-eval sections every time Settings opens.
+    await Promise.all([
+      loadBackupConfig(), loadBackupList(), loadSBConfig(), loadQualityConfig(),
+    ]);
     // Provider keys: read-only env hint. We don't have an endpoint that
     // exposes which keys are set (and shouldn't, for security). Hint at the
     // env-var contract instead.

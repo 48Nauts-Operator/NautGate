@@ -96,3 +96,24 @@ def test_repo_pricing_loads():
     p = PricingTable.from_yaml(repo_cfg)
     assert p.size > 0
     assert p.lookup("anthropic", "claude-haiku-4.5") is not None
+    # Snapshot IDs that Claude Code actually sends must resolve to a price.
+    for snap in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
+                 "claude-haiku-4-5-20251001"):
+        assert p.lookup("anthropic", snap) is not None, f"missing pricing for {snap}"
+
+
+def test_resolve_pricing_provider_passthrough_anthropic():
+    from app.routes.v1 import _resolve_pricing_provider as resolve
+    # Pure passthrough → derive from model prefix
+    assert resolve("passthrough", None, "claude-opus-4-7") == "anthropic"
+    assert resolve("passthrough", None, "gpt-4o-mini") == "openai"
+    assert resolve("passthrough", None, "gemini-2.5-flash") == "gemini"
+    # actual_provider wins over heuristic
+    assert resolve("passthrough", "anthropic", "claude-opus-4-7") == "anthropic"
+    # Already-real provider is left alone
+    assert resolve("openrouter", None, "any") == "openrouter"
+    # chatgpt-oauth Codex maps to openai
+    assert resolve("chatgpt-oauth", None, "gpt-5.4") == "openai"
+    # Unknown family with no actual_provider → returns the passthrough sentinel
+    assert resolve("passthrough", None, "qwen-7b") == "passthrough"
+    assert resolve("passthrough", None, None) == "passthrough"

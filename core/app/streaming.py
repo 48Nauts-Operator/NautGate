@@ -186,7 +186,6 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
                 completion_tokens = u["output_tokens"]
 
     assembled = "".join(content_parts)
-    was_empty = bool((completion_tokens or 0) > 0 and not assembled)
 
     # Combine OpenAI-streamed and Anthropic-streamed tool calls — only one of
     # the two will actually be populated per request.
@@ -203,6 +202,16 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
             tool_calls.append(
                 {"id": s.get("id"), "name": s["name"], "arguments": s.get("arguments") or ""}
             )
+
+    # was_empty: the model billed for completion tokens but emitted NEITHER
+    # text content NOR tool calls. A tool_use-only response is a real,
+    # successful response — flagging it as empty caused the brain layer to
+    # silently demote models that were actually doing their job correctly.
+    was_empty = bool(
+        (completion_tokens or 0) > 0
+        and not assembled
+        and not tool_calls
+    )
 
     return {
         "prompt_tokens": prompt_tokens,

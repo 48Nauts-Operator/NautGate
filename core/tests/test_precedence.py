@@ -19,14 +19,17 @@ from asgi_lifespan import LifespanManager
 
 
 def _routing_table():
+    # Test fixture uses neutral non-subscription models so the
+    # subscription-owned guard in resolve_healthy doesn't reject them.
+    # Real routing.yaml uses similar Kimi/DeepSeek/Gemini choices.
     return {
         "fast": {
-            "primary": {"provider": "openai", "model": "gpt-4o-mini"},
-            "fallback": {"provider": "anthropic", "model": "claude-haiku-4-5"},
+            "primary": {"provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash"},
+            "fallback": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2-thinking"},
         },
-        "balanced": {"primary": {"provider": "anthropic", "model": "claude-haiku-4-5"}},
-        "deep": {"primary": {"provider": "anthropic", "model": "claude-sonnet-4-6"}},
-        "expert": {"primary": {"provider": "anthropic", "model": "claude-opus-4-7"}},
+        "balanced": {"primary": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2-thinking"}},
+        "deep": {"primary": {"provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-pro"}},
+        "expert": {"primary": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2.6"}},
     }
 
 
@@ -192,7 +195,9 @@ async def test_brain_override_wins_when_no_header(app_with_brain):
 async def test_brain_demoted_extends_banned(app_with_brain):
     """Brain demoting fast.primary forces fallback to fast.fallback."""
     app, calls = app_with_brain
-    app.state.plugins.agg["demoted_models"] = ["gpt-4o-mini"]  # fast.primary
+    app.state.plugins.agg["demoted_models"] = [
+        "openrouter/deepseek/deepseek-v4-flash"
+    ]  # fast.primary
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
         resp = await c.post(
@@ -202,8 +207,8 @@ async def test_brain_demoted_extends_banned(app_with_brain):
         )
     assert resp.status_code == 200
     pc = calls["precapture"][0]
-    assert pc["decision_model"] == "claude-haiku-4-5"  # fallback used
-    assert pc["decision_provider"] == "anthropic"
+    assert pc["decision_model"] == "openrouter/moonshotai/kimi-k2-thinking"  # fallback
+    assert pc["decision_provider"] == "openrouter"
 
 
 # --- Level 7: brain.preferred_tier nudge ----------------------------------
@@ -224,7 +229,7 @@ async def test_preferred_tier_nudges_routing(app_with_brain):
     assert resp.status_code == 200
     pc = calls["precapture"][0]
     assert pc["classified_tier"] == "deep"
-    assert pc["decision_model"] == "claude-sonnet-4-6"  # deep.primary
+    assert pc["decision_model"] == "openrouter/deepseek/deepseek-v4-pro"  # deep.primary
 
 
 # --- Level 8: default score-based pick (no overrides) ---------------------
@@ -244,7 +249,7 @@ async def test_no_overrides_uses_score(app_with_brain):
     assert resp.status_code == 200
     pc = calls["precapture"][0]
     assert pc["classified_tier"] == "fast"
-    assert pc["decision_model"] == "gpt-4o-mini"  # fast.primary
+    assert pc["decision_model"] == "openrouter/deepseek/deepseek-v4-flash"  # fast.primary
 
 
 # --- Header override even works for non-auto models -----------------------

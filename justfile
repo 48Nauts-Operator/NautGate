@@ -24,6 +24,24 @@ dev:
 sync:
     cd core && uv sync
 
+# --- Process control (background uvicorn + DB) ---
+# Thin wrappers over scripts/nautgate.sh — see that file for full docs.
+
+start:
+    scripts/nautgate.sh start
+
+stop:
+    scripts/nautgate.sh stop
+
+restart:
+    scripts/nautgate.sh restart
+
+status:
+    scripts/nautgate.sh status
+
+tail:
+    scripts/nautgate.sh logs
+
 # --- Docker ---
 
 up:

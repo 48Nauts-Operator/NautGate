@@ -856,3 +856,172 @@ table.clickable tbody tr { cursor: pointer; }
   padding: 2px 0;
   border-bottom: 1px dashed var(--border);
 }
+
+/* --- Settings sub-tabs (horizontal sub-nav within tab-settings) ------ */
+.settings-subnav {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: -4px 0 20px;
+  padding: 0;
+}
+.settings-subnav a {
+  padding: 10px 18px;
+  text-decoration: none;
+  color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-size: 14px;
+  border-radius: 4px 4px 0 0;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.settings-subnav a:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+.settings-subnav a.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: rgba(194, 65, 12, 0.05);
+}
+.settings-pane[hidden] { display: none !important; }
+.settings-pane { padding-top: 4px; }
+
+/* --- Cost page extensions -------------------------------------------- */
+.cost-savings { border-left: 3px solid var(--accent); background: rgba(194, 65, 12, 0.04); }
+.cost-savings .metric { color: var(--accent); }
+.cost-notional { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+#cost-model td:nth-child(n+2),
+#cost-provider td:nth-child(n+2) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#cost-model td:first-child { text-align: left; }
+#cost-provider td:first-child { text-align: left; }
+.cost-model-row { cursor: pointer; }
+.cost-model-row:hover { background: rgba(255, 255, 255, 0.04); }
+
+/* --- Quality eval / Coach -------------------------------------------- */
+.audit-cost-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.audit-thumbs-down {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 4px;
+  opacity: 0.45;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
+}
+.audit-thumbs-down:hover {
+  opacity: 1;
+  background: rgba(255, 92, 92, 0.10);
+  border-color: rgba(255, 92, 92, 0.35);
+}
+.audit-thumbs-down:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.coach-accordion {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(194, 65, 12, 0.03);  /* same dark-orange accent, faint */
+}
+.coach-accordion summary {
+  cursor: pointer;
+  font-weight: 500;
+  list-style: none;
+  user-select: none;
+}
+.coach-accordion summary::-webkit-details-marker { display: none; }
+.coach-accordion[open] summary { margin-bottom: 10px; }
+.coach-body { padding-top: 4px; }
+.coach-scores {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.coach-score {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.coach-score-label { font-size: 11px; color: var(--text-dim); }
+.coach-score-value { font-size: 16px; font-weight: 500; }
+
+.failure-tag {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 92, 92, 0.4);
+  background: rgba(255, 92, 92, 0.08);
+  color: #ff7a7a;
+  margin-right: 4px;
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+.failure-tag-over_thinking,
+.failure-tag-under_thinking { color: #f0b132; border-color: rgba(240,177,50,0.5); background: rgba(240,177,50,0.10); }
+.failure-tag-partial_answer,
+.failure-tag-refusal,
+.failure-tag-truncated { color: #c2410c; border-color: rgba(194,65,12,0.5); background: rgba(194,65,12,0.10); }
+
+.coach-tags { margin-bottom: 10px; }
+.coach-suggest {
+  background: rgba(194, 65, 12, 0.06);
+  border: 1px solid rgba(194, 65, 12, 0.25);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.coach-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.coach-suggest-text {
+  margin: 4px 0 6px;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+}
+.coach-copy {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.coach-notes {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.coach-meta {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+/* Quality tab heatmap cells get their colour via inline style;
+   we just align numerals consistently. */
+#quality-heatmap td:not(:first-child),
+#quality-failure-modes td:nth-child(n+2),
+#quality-worst td:nth-child(4) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#quality-worst tbody tr.worst-row { cursor: pointer; }
+#quality-worst tbody tr.worst-row:hover { background: rgba(255, 255, 255, 0.04); }

@@ -16,21 +16,28 @@
 
 pricing:
   # --- Anthropic (NautRouter's MODELS keys) ---
-  anthropic/claude-haiku-4.5:
+  # Both dotted and dashed forms are listed; Claude Code sends dashed snapshot
+  # IDs like "claude-opus-4-7" / "claude-haiku-4-5" and we cost-lookup by the
+  # raw decision_model. Date-suffixed snapshots are aliased to the same price.
+  anthropic/claude-haiku-4.5: &haiku45
     input: 1.00
     output: 5.00
     cache_read: 0.10
     cache_write: 1.25
-  anthropic/claude-sonnet-4:
+  anthropic/claude-haiku-4-5: *haiku45
+  anthropic/claude-haiku-4-5-20251001: *haiku45
+  anthropic/claude-sonnet-4: &sonnet4
     input: 3.00
     output: 15.00
     cache_read: 0.30
     cache_write: 3.75
-  anthropic/claude-opus-4:
+  anthropic/claude-sonnet-4-6: *sonnet4
+  anthropic/claude-opus-4: &opus4
     input: 15.00
     output: 75.00
     cache_read: 1.50
     cache_write: 18.75
+  anthropic/claude-opus-4-7: *opus4
 
   # --- OpenAI ---
   openai/gpt-4o-mini:

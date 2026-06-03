@@ -123,6 +123,35 @@ def _normalize_anthropic_snapshot(model: str | None) -> str:
     return model
 
 
+def _resolve_pricing_provider(
+    decision_provider: str | None,
+    actual_provider: str | None,
+    model: str | None,
+) -> str | None:
+    """Pick the provider key used for pricing.compute_cost.
+
+    `decision_provider` is "passthrough" for any explicit-model request
+    (all Claude Code traffic, Codex passthroughs, etc.), so it never matches
+    pricing.yaml on its own. When that happens we prefer what upstream told us
+    (`actual_provider`), then fall back to a model-prefix heuristic so the cost
+    table still lines up with a real provider/* key.
+    """
+    if decision_provider and decision_provider not in ("passthrough", "chatgpt-oauth"):
+        return decision_provider
+    if actual_provider and actual_provider not in ("passthrough", "chatgpt-oauth"):
+        return actual_provider
+    if not model:
+        return decision_provider
+    m = model.lower()
+    if m.startswith("claude"):
+        return "anthropic"
+    if m.startswith("gpt") or m.startswith("o1") or m.startswith("o3") or m.startswith("codex"):
+        return "openai"
+    if m.startswith("gemini"):
+        return "gemini"
+    return decision_provider
+
+
 async def _process_chat_request(
     request: Request,
     *,
@@ -433,9 +462,10 @@ async def _process_chat_request(
     )
     actual_model = upstream_resp.get("model") if isinstance(upstream_resp, dict) else None
     actual_provider = upstream_resp.get("provider") if isinstance(upstream_resp, dict) else None
+    cost_provider = _resolve_pricing_provider(decision_provider, actual_provider, decision_model)
     cost_usd = (
         pricing.compute_cost(
-            decision_provider,
+            cost_provider,
             decision_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -484,6 +514,15 @@ async def _process_chat_request(
                 model=actual_model or decision_model,
                 prompt_body=captured.body,
                 response_body=response_captured.body,
+            )
+            # Quality eval — sampled + 100% on anomalies. Cheap judge model,
+            # capped daily spend, never blocks the request.
+            from app.quality_eval import process_quality as _process_quality
+            await _process_quality(
+                pool,
+                decision_id=decision_id,
+                judge_client=getattr(request.app.state, "quality_judge", None),
+                pricing=pricing,
             )
         except Exception as exc:
             log.warning("brain_layer_failed", error=str(exc), decision_id=str(decision_id))
@@ -609,9 +648,14 @@ def _streaming_response(
             )
             spool = getattr(request.app.state, "outcome_spool", None)
             stream_pricing = getattr(request.app.state, "pricing", None)
+            stream_cost_provider = _resolve_pricing_provider(
+                decision_provider,
+                parsed.get("actual_provider"),
+                decision_model,
+            )
             stream_cost_usd = (
                 stream_pricing.compute_cost(
-                    decision_provider,
+                    stream_cost_provider,
                     decision_model,
                     prompt_tokens=parsed.get("prompt_tokens"),
                     completion_tokens=parsed.get("completion_tokens"),
@@ -666,6 +710,14 @@ def _streaming_response(
                             model=parsed.get("actual_model") or decision_model,
                             prompt_body=captured_prompt_body,
                             response_body=response_captured.body,
+                        )
+                        # Quality eval — same hook as non-streaming path.
+                        from app.quality_eval import process_quality as _process_quality
+                        await _process_quality(
+                            pool,
+                            decision_id=decision_id,
+                            judge_client=getattr(request.app.state, "quality_judge", None),
+                            pricing=stream_pricing,
                         )
                     except Exception as exc:
                         log.warning("brain_layer_failed_in_stream", error=str(exc), decision_id=str(decision_id))
@@ -739,6 +791,16 @@ async def chat_completions(request: Request) -> Response:
     if is_chatgpt_oauth_request(request):
         return await forward_to_chatgpt(request)
 
+    # Anthropic-OAuth bypass — Claude Code on Max subscription sends an
+    # Authorization: Bearer sk-ant-oat01-... token. Forward verbatim to
+    # api.anthropic.com so we use the subscription, not the metered key.
+    from app.anthropic_oauth_forwarder import (
+        forward_to_anthropic,
+        is_anthropic_oauth_request,
+    )
+    if is_anthropic_oauth_request(request):
+        return await forward_to_anthropic(request)
+
     try:
         payload = await request.json()
     except Exception as exc:
@@ -753,6 +815,16 @@ async def chat_completions(request: Request) -> Response:
 
 @router.post("/messages")
 async def messages(request: Request) -> Response:
+    # Anthropic-OAuth bypass for Claude Code on Max subscription. Detected
+    # by the sk-ant-oat01-* token shape and forwarded verbatim to
+    # api.anthropic.com so the subscription covers the call.
+    from app.anthropic_oauth_forwarder import (
+        forward_to_anthropic,
+        is_anthropic_oauth_request,
+    )
+    if is_anthropic_oauth_request(request):
+        return await forward_to_anthropic(request)
+
     try:
         raw = await request.json()
     except Exception as exc:
@@ -806,6 +878,13 @@ async def responses(request: Request) -> Response:
     from app.oauth_forwarder import forward_to_chatgpt, is_chatgpt_oauth_request
     if is_chatgpt_oauth_request(request):
         return await forward_to_chatgpt(request)
+    # Anthropic-OAuth handles claude-* requests landing on /v1/responses too.
+    from app.anthropic_oauth_forwarder import (
+        forward_to_anthropic,
+        is_anthropic_oauth_request,
+    )
+    if is_anthropic_oauth_request(request):
+        return await forward_to_anthropic(request)
 
     try:
         raw = await request.json()
@@ -1302,12 +1381,20 @@ async def put_config_endpoint(request: Request) -> Response:
     # Never accept passwords through this endpoint.
     if isinstance(patch.get("sb_ingest"), dict):
         patch["sb_ingest"].pop("password", None)
+    # Never accept API keys through this endpoint either — judge_api_key_env
+    # lets ops point at a different env var name; the secret itself stays in env.
+    if isinstance(patch.get("quality_eval"), dict):
+        patch["quality_eval"].pop("api_key", None)
     from app.app_config import update_settings
+    from app.quality_eval import config_cache_clear as qe_cache_clear
     from app.sb_memory import config_cache_clear
     merged = await update_settings(pool, patch)
-    config_cache_clear()  # next ingest call re-reads from DB
+    config_cache_clear()      # next sb_memory ingest re-reads from DB
+    qe_cache_clear()          # next quality_eval call re-reads from DB
     if isinstance(merged.get("sb_ingest"), dict):
         merged["sb_ingest"].pop("password", None)
+    if isinstance(merged.get("quality_eval"), dict):
+        merged["quality_eval"].pop("api_key", None)
     return JSONResponse(merged)
 
 
@@ -1327,6 +1414,204 @@ async def test_sb_ingest_endpoint(request: Request) -> Response:
     cfg = await sb_ingest_config(pool)
     ok, detail = await test_connection(cfg)
     return JSONResponse({"ok": ok, "detail": detail, "host": cfg.get("host"), "port": cfg.get("port"), "database": cfg.get("database")}, status_code=200 if ok else 502)
+
+
+@router.get("/quality/models")
+async def quality_models(request: Request) -> Response:
+    """List models available from the configured judge provider.
+
+    Proxies to `<judge_base_url>/v1/models` using the configured API key.
+    Returns a flat list of ``{id, name, context_length, prompt_price_per_m,
+    completion_price_per_m}`` sorted by ascending input price so the cheapest
+    viable judges appear first.
+
+    Optional query params:
+      - ``provider``: try a different provider than the saved one (e.g.
+        previewing models before saving).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    from app.app_config import QUALITY_PROVIDER_PRESETS, quality_eval_config
+    cfg = await quality_eval_config(pool)
+    # Allow ?provider= preview without saving — useful for the UI dropdown.
+    preview_provider = request.query_params.get("provider")
+    if preview_provider and preview_provider != cfg.get("judge_provider"):
+        preset = QUALITY_PROVIDER_PRESETS.get(preview_provider.lower(), {})
+        cfg = {
+            **cfg,
+            "judge_provider": preview_provider,
+            "judge_base_url": preset.get("base_url") or cfg.get("judge_base_url"),
+            "api_key": __import__("os").environ.get(preset.get("api_key_env") or "", ""),
+        }
+
+    base_url = (cfg.get("judge_base_url") or "").rstrip("/")
+    if not base_url:
+        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
+                             "error": "no_base_url"})
+    # Tolerate base_url with or without a trailing /v1 (LMStudio's default
+    # bundles /v1 in LMSTUDIO_BASE_URL).
+    if base_url.endswith("/v1"):
+        models_url = f"{base_url}/models"
+    else:
+        models_url = f"{base_url}/v1/models"
+
+    headers = {}
+    api_key = cfg.get("api_key") or ""
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    client = getattr(request.app.state, "quality_judge", None)
+    if client is None:
+        raise HTTPException(status_code=503, detail="judge_client_unavailable")
+
+    try:
+        resp = await client.get(models_url, headers=headers, timeout=8.0)
+    except Exception as exc:
+        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
+                             "error": f"fetch_failed: {type(exc).__name__}"},
+                            status_code=502)
+    if resp.status_code >= 400:
+        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
+                             "error": f"http_{resp.status_code}",
+                             "detail": resp.text[:200]},
+                            status_code=502)
+    try:
+        payload = resp.json()
+    except Exception:
+        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
+                             "error": "bad_json"}, status_code=502)
+
+    raw = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
+                             "error": "unexpected_shape"}, status_code=502)
+
+    out: list[dict] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        mid = m.get("id") or m.get("name")
+        if not isinstance(mid, str):
+            continue
+        # OpenRouter returns prices as strings; OpenAI doesn't include pricing.
+        pricing = m.get("pricing") or {}
+        def _pm(v):
+            # Convert USD-per-token → USD-per-million for display.
+            # OpenRouter returns -1 for variable/auto-priced models — treat
+            # those as "unknown" so they don't sort to the very top as
+            # though they were profoundly cheap.
+            try:
+                if v in (None, ""):
+                    return None
+                f = float(v)
+                if f < 0:
+                    return None
+                return round(f * 1_000_000, 4)
+            except (TypeError, ValueError):
+                return None
+        out.append({
+            "id": mid,
+            "name": m.get("name") or mid,
+            "context_length": m.get("context_length") or m.get("context_window"),
+            "prompt_price_per_m": _pm(pricing.get("prompt")),
+            "completion_price_per_m": _pm(pricing.get("completion")),
+            "supports_response_format": bool(
+                m.get("supported_parameters") or m.get("supported_features") or []
+            ),
+        })
+    # Sort: priced models cheapest-first, then unpriced (OpenAI / LMStudio) alphabetically.
+    def _sort_key(m):
+        p = m.get("prompt_price_per_m")
+        return (0 if p is not None else 1, p if p is not None else 0, m["id"])
+    out.sort(key=_sort_key)
+
+    return JSONResponse({
+        "provider": cfg.get("judge_provider"),
+        "base_url": base_url,
+        "model_count": len(out),
+        "models": out,
+    })
+
+
+@router.get("/quality/summary")
+async def quality_summary(request: Request) -> Response:
+    """Aggregates from nautgate.quality_evals for the Quality tab.
+
+    Query params: ``hours`` (default 24), ``model`` (optional filter; "*" =
+    all).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        hours = int(request.query_params.get("hours", "24"))
+    except ValueError:
+        hours = 24
+    hours = max(1, min(hours, 24 * 30))
+    model = request.query_params.get("model")
+    summary = await queries.get_quality_summary(pool, hours=hours, model_filter=model)
+    return JSONResponse(summary)
+
+
+@router.get("/quality/evaluation/{decision_id}")
+async def quality_evaluation_get(decision_id: str, request: Request) -> Response:
+    """Return a single eval row (or 404) for the Audit drawer's Coach panel."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+    row = await queries.get_quality_eval(pool, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no_evaluation")
+    # Stringify timestamp for JSON serialization.
+    if row.get("ts") is not None:
+        row["ts"] = row["ts"].isoformat()
+    return JSONResponse(row)
+
+
+@router.post("/quality/evaluate/{decision_id}")
+async def quality_evaluation_run(decision_id: str, request: Request) -> Response:
+    """Run the judge on a specific decision *right now*, bypassing sampling.
+
+    Body (optional): ``{"trigger": "manual" | "thumbs_down"}``. Defaults to
+    "manual". Honours the daily cost cap and sensitivity gate.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+    trigger = "manual"
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and body.get("trigger") in ("manual", "thumbs_down"):
+            trigger = body["trigger"]
+    except Exception:
+        pass
+    from app.quality_eval import manual_evaluate
+    row = await manual_evaluate(
+        pool,
+        decision_id=uuid.UUID(decision_id),
+        judge_client=getattr(request.app.state, "quality_judge", None),
+        pricing=getattr(request.app.state, "pricing", None),
+        trigger=trigger,
+    )
+    if row is None:
+        raise HTTPException(status_code=422, detail="eval_skipped_or_failed")
+    if row.get("ts") is not None:
+        row["ts"] = row["ts"].isoformat()
+    return JSONResponse(row)
 
 
 @router.get("/whoami")

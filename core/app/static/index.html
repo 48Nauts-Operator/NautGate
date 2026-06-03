@@ -14,6 +14,7 @@
       <a href="#audit" data-tab="audit">Audit Log</a>
       <a href="#scorecard" data-tab="scorecard">Scorecard</a>
       <a href="#drift" data-tab="drift">Drift</a>
+      <a href="#quality" data-tab="quality">Quality</a>
       <a href="#cost" data-tab="cost">Cost</a>
       <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
@@ -81,10 +82,13 @@
         </span>
       </h2>
       <div class="grid">
-        <div class="card"><div class="metric" id="c-total">$0.00</div><div class="label">total spend</div></div>
+        <div class="card"><div class="metric" id="c-total">$0.00</div><div class="label">metered spend</div></div>
+        <div class="card cost-savings"><div class="metric" id="c-savings">$0.00</div><div class="label">subscription savings</div></div>
         <div class="card"><div class="metric" id="c-calls">—</div><div class="label">calls</div></div>
         <div class="card"><div class="metric" id="c-avg">—</div><div class="label">avg / call</div></div>
         <div class="card"><div class="metric" id="c-tokens">—</div><div class="label">total tokens</div></div>
+        <div class="card"><div class="metric" id="c-empty">—</div><div class="label">empty responses</div></div>
+        <div class="card"><div class="metric" id="c-ratelimit">—</div><div class="label">rate-limited (429)</div></div>
       </div>
 
       <h3>Spend over time, by provider</h3>
@@ -93,11 +97,14 @@
       <div class="grid-2">
         <div>
           <h3>By provider</h3>
-          <table id="cost-provider"><thead><tr><th>provider</th><th>cost</th><th>calls</th></tr></thead><tbody></tbody></table>
+          <table id="cost-provider"><thead><tr><th>provider</th><th>metered</th><th>notional</th><th>calls</th></tr></thead><tbody></tbody></table>
         </div>
         <div>
           <h3>By model</h3>
-          <table id="cost-model"><thead><tr><th>model</th><th>cost</th><th>calls</th></tr></thead><tbody></tbody></table>
+          <p class="hint">Click any row for hourly drill-down.</p>
+          <table id="cost-model"><thead><tr>
+            <th>model</th><th>metered</th><th>notional</th><th>calls</th><th>$/call</th><th>tokens in/out</th><th>avg latency</th><th>empty</th>
+          </tr></thead><tbody></tbody></table>
         </div>
       </div>
 
@@ -168,6 +175,60 @@
           </tr>
         </thead>
         <tbody id="dr-baselines-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Quality (LLM-as-judge over the audit log) --------------------------->
+    <section id="tab-quality" class="tab">
+      <h2>Quality
+        <span class="window-buttons">
+          <button data-window="24" data-bucket="hour" class="active">24h</button>
+          <button data-window="168" data-bucket="hour">7d</button>
+          <button data-window="720" data-bucket="day">30d</button>
+        </span>
+        <span class="cost-agent-picker">
+          <label for="quality-model-filter">model:</label>
+          <select id="quality-model-filter">
+            <option value="*" selected>All models</option>
+          </select>
+        </span>
+      </h2>
+      <p class="hint">Post-hoc evaluations from the configured judge model. Anomalies (empty responses, errors, disconnects, high bloat) are always evaluated; everything else is sampled at the rate set in <a href="#settings" data-tab="settings">Settings</a>. Each call's eval is visible in the <a href="#audit" data-tab="audit">Audit Log</a> drawer under "Coach".</p>
+      <div class="grid">
+        <div class="card"><div class="metric" id="q-total">—</div><div class="label">evaluations</div></div>
+        <div class="card"><div class="metric" id="q-completion">—</div><div class="label">avg task completion (0-5)</div></div>
+        <div class="card"><div class="metric" id="q-failure-rate">—</div><div class="label">failure rate</div></div>
+        <div class="card"><div class="metric" id="q-judge-cost">—</div><div class="label">judge spend (window)</div></div>
+      </div>
+
+      <h3>Failure rate by model &amp; task complexity</h3>
+      <p class="hint">Per-model failure rate across complexity buckets of the inbound prompt (NautGate's classified_score). A row that's green at low scores and red at high scores tells you that model's ceiling.</p>
+      <table id="quality-heatmap">
+        <thead><tr>
+          <th>model</th>
+          <th>score 0–2</th><th>2–4</th><th>4–6</th><th>6–8</th><th>8–10</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Failure modes by model</h3>
+      <table id="quality-failure-modes">
+        <thead><tr>
+          <th>model</th><th>evals</th>
+          <th>over-thinking</th><th>off-task</th><th>looped</th>
+          <th>hallucination</th><th>partial</th><th>refusal</th><th>tool-misuse</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Worst recent calls</h3>
+      <p class="hint">Click any row to jump to it in the Audit Log.</p>
+      <table id="quality-worst">
+        <thead><tr>
+          <th>time</th><th>model</th><th>tier</th><th>completion</th>
+          <th>tags</th><th>coach note</th>
+        </tr></thead>
+        <tbody></tbody>
       </table>
     </section>
 
@@ -253,84 +314,140 @@
 
     <!-- Settings ------------------------------------------------------------>
     <section id="tab-settings" class="tab">
-      <h2>Profile</h2>
-      <p class="hint">These settings are stored on <code>nautgate.routing_preferences</code> for the agent your bearer token belongs to.</p>
-
-      <label>Banned models (comma-separated)
-        <input id="banned-models" type="text" placeholder="gpt-4o-mini, openrouter/free" />
-      </label>
-      <label>Preferred models (comma-separated)
-        <input id="preferred-models" type="text" placeholder="claude-haiku-4-5" />
-      </label>
-      <label>Notes
-        <textarea id="notes" rows="3" placeholder="Free-text notes for the agent"></textarea>
-      </label>
-      <button id="prefs-save">Save profile</button>
-      <span id="prefs-state" class="prefs-state"></span>
-
-      <h2>SecondBrain memory ingest</h2>
-      <p class="hint">When enabled, every completed request also writes a user-prompt + assistant-reply pair into a remote <code>memories</code> table — same shape FlowAI's flow-proxy used. This is what feeds your SecondBrain dashboard (pgvector / Neo4j / Qdrant). Toggle off if you don't run SB. Password is read from the gateway's <code>MEMORY_DB_PASSWORD</code> env var, not the UI.</p>
-
-      <div class="bk-config" id="sb-config-row">
-        <label>
-          <input type="checkbox" id="sb-enabled" />
-          Enable ingest
-        </label>
-        <label>Host (IP or DNS)
-          <input type="text" id="sb-host" placeholder="100.71.163.122 or stargate.local" style="width:18em" />
-        </label>
-        <label>Port
-          <input type="number" id="sb-port" min="1" max="65535" style="width:6em" />
-        </label>
-        <label>Database
-          <input type="text" id="sb-database" style="width:14em" />
-        </label>
-        <label>User
-          <input type="text" id="sb-user" style="width:10em" />
-        </label>
-        <button id="sb-save">Save</button>
-        <button id="sb-test" class="ghost">Test connection</button>
-        <span id="sb-state" class="hint"></span>
+      <div class="settings-subnav" id="settings-subnav">
+        <a href="#settings" data-subtab="profile" class="active">Profile</a>
+        <a href="#settings" data-subtab="engram">Engram-OSS</a>
+        <a href="#settings" data-subtab="quality">Quality</a>
+        <a href="#settings" data-subtab="backups">Backups</a>
+        <a href="#settings" data-subtab="keys">Keys</a>
       </div>
 
-      <h2>Backup <button class="reload" id="bk-reload" title="reload">↻</button></h2>
-      <p class="hint">Full snapshots of the <code>nautgate</code> schema (audit log, scorecard, drift baselines, keys, projects — everything). Stored on the gateway host under <code>~/.nautgate/backups/</code> as gzipped SQL. Scheduled backups run in the background; restore is destructive (drops the schema before reloading) and requires explicit confirmation.</p>
+      <!-- Profile sub-pane -->
+      <div class="settings-pane" data-pane="profile">
+        <h2>Profile</h2>
+        <p class="hint">These settings are stored on <code>nautgate.routing_preferences</code> for the agent your bearer token belongs to.</p>
 
-      <div class="bk-config">
-        <label>
-          <input type="checkbox" id="bk-enabled" />
-          Scheduled backups enabled
+        <label>Banned models (comma-separated)
+          <input id="banned-models" type="text" placeholder="gpt-4o-mini, openrouter/free" />
         </label>
-        <label>Every
-          <input type="number" id="bk-interval" min="1" max="168" step="1" style="width:5em" />
-          hours
+        <label>Preferred models (comma-separated)
+          <input id="preferred-models" type="text" placeholder="claude-haiku-4-5" />
         </label>
-        <label>Keep last
-          <input type="number" id="bk-retention" min="1" max="500" step="1" style="width:5em" />
-          backups (older are pruned)
+        <label>Notes
+          <textarea id="notes" rows="3" placeholder="Free-text notes for the agent"></textarea>
         </label>
-        <button id="bk-save-config">Save schedule</button>
-        <span id="bk-config-state" class="hint"></span>
+        <button id="prefs-save">Save profile</button>
+        <span id="prefs-state" class="prefs-state"></span>
       </div>
 
-      <div class="bk-actions">
-        <button id="bk-create-now">Create backup now</button>
-        <span id="bk-create-state" class="hint"></span>
+      <!-- Engram-OSS (formerly SecondBrain) sub-pane -->
+      <div class="settings-pane" data-pane="engram" hidden>
+        <h2>Engram-OSS memory ingest</h2>
+        <p class="hint">When enabled, every completed request also writes a user-prompt + assistant-reply pair into a remote <code>memories</code> table — same shape FlowAI's flow-proxy used. This feeds your Engram-OSS memory store (pgvector / Neo4j / Qdrant). Toggle off if you don't run it. Password is read from the gateway's <code>MEMORY_DB_PASSWORD</code> env var, not the UI.</p>
+
+        <div class="bk-config" id="sb-config-row">
+          <label>
+            <input type="checkbox" id="sb-enabled" />
+            Enable ingest
+          </label>
+          <label>Host (IP or DNS)
+            <input type="text" id="sb-host" placeholder="100.71.163.122 or stargate.local" style="width:18em" />
+          </label>
+          <label>Port
+            <input type="number" id="sb-port" min="1" max="65535" style="width:6em" />
+          </label>
+          <label>Database
+            <input type="text" id="sb-database" style="width:14em" />
+          </label>
+          <label>User
+            <input type="text" id="sb-user" style="width:10em" />
+          </label>
+          <button id="sb-save">Save</button>
+          <button id="sb-test" class="ghost">Test connection</button>
+          <span id="sb-state" class="hint"></span>
+        </div>
       </div>
 
-      <table id="bk-table">
-        <thead>
-          <tr>
-            <th>when</th><th>size</th><th>source</th>
-            <th>contents</th><th>status</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="bk-tbody"><tr><td colspan="6" class="hint">loading…</td></tr></tbody>
-      </table>
+      <!-- Quality sub-pane -->
+      <div class="settings-pane" data-pane="quality" hidden>
+        <h2>Quality eval (Prompt Coach)</h2>
+        <p class="hint">Each completed request can be reviewed by a cheap judge model. Anomalies (empty responses, errors, disconnects, high bloat) are always evaluated; everything else is sampled at the rate below. Daily cap caps the judge spend per UTC day. The judge call goes <i>direct</i> to the configured provider — never through NautRouter, so it doesn't pollute routing analytics. API key is read from the provider's env var (<code>OPENROUTER_API_KEY</code> for openrouter, <code>OPENAI_API_KEY</code> for openai, none for lmstudio).</p>
 
-      <h2>Provider keys</h2>
-      <p class="hint">Provider API keys (Anthropic, OpenAI, Gemini, …) live as environment variables on the gateway and require a container restart to rotate. Editing keys from the UI is on the v2 roadmap.</p>
-      <pre id="keys-status" class="code">checking…</pre>
+        <div class="bk-config" id="qe-config-row">
+          <label>
+            <input type="checkbox" id="qe-enabled" />
+            Enable quality eval
+          </label>
+          <label>Judge provider
+            <select id="qe-judge-provider" style="width:10em">
+              <option value="openrouter">openrouter</option>
+              <option value="openai">openai</option>
+              <option value="lmstudio">lmstudio</option>
+              <option value="custom">custom</option>
+            </select>
+          </label>
+          <label>Judge model
+            <select id="qe-judge-model" style="min-width:24em;max-width:32em"></select>
+            <button id="qe-models-reload" class="ghost" type="button" title="Reload models from provider">↻</button>
+          </label>
+          <label>Base URL
+            <input type="text" id="qe-judge-base-url" placeholder="https://openrouter.ai/api" style="width:20em" />
+          </label>
+          <label>Sample rate (%)
+            <input type="number" id="qe-sample-rate" min="0" max="100" step="1" style="width:6em" />
+          </label>
+          <label>Daily cap ($)
+            <input type="number" id="qe-daily-cap" min="0" step="0.50" style="width:6em" />
+          </label>
+          <button id="qe-save">Save</button>
+          <span id="qe-state" class="hint"></span>
+        </div>
+      </div>
+
+      <!-- Backups sub-pane -->
+      <div class="settings-pane" data-pane="backups" hidden>
+        <h2>Backups <button class="reload" id="bk-reload" title="reload">↻</button></h2>
+        <p class="hint">Full snapshots of the <code>nautgate</code> schema (audit log, scorecard, drift baselines, keys, projects — everything). Stored on the gateway host under <code>~/.nautgate/backups/</code> as gzipped SQL. Scheduled backups run in the background; restore is destructive (drops the schema before reloading) and requires explicit confirmation.</p>
+
+        <div class="bk-config">
+          <label>
+            <input type="checkbox" id="bk-enabled" />
+            Scheduled backups enabled
+          </label>
+          <label>Every
+            <input type="number" id="bk-interval" min="1" max="168" step="1" style="width:5em" />
+            hours
+          </label>
+          <label>Keep last
+            <input type="number" id="bk-retention" min="1" max="500" step="1" style="width:5em" />
+            backups (older are pruned)
+          </label>
+          <button id="bk-save-config">Save schedule</button>
+          <span id="bk-config-state" class="hint"></span>
+        </div>
+
+        <div class="bk-actions">
+          <button id="bk-create-now">Create backup now</button>
+          <span id="bk-create-state" class="hint"></span>
+        </div>
+
+        <table id="bk-table">
+          <thead>
+            <tr>
+              <th>when</th><th>size</th><th>source</th>
+              <th>contents</th><th>status</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="bk-tbody"><tr><td colspan="6" class="hint">loading…</td></tr></tbody>
+        </table>
+      </div>
+
+      <!-- Keys sub-pane -->
+      <div class="settings-pane" data-pane="keys" hidden>
+        <h2>Provider keys</h2>
+        <p class="hint">Provider API keys (Anthropic, OpenAI, Gemini, …) live as environment variables on the gateway and require a container restart to rotate. Editing keys from the UI is on the v2 roadmap.</p>
+        <pre id="keys-status" class="code">checking…</pre>
+      </div>
     </section>
   </main>
 

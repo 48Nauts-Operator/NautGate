@@ -309,27 +309,67 @@ def to_provider_model(tier: str, table: dict[str, dict]) -> tuple[str, str]:
     return (r.provider, r.model)
 
 
+# Models we will NEVER route to via the auto tier. The operator holds
+# Max-plan + ChatGPT subscriptions, so picking an Anthropic or OpenAI
+# model via OpenRouter charges twice. Explicit-model requests (Claude
+# Code → claude-opus-4-7, Codex → gpt-5.x) still flow through the
+# OAuth passthrough — those bypass `resolve_healthy` entirely.
+#
+# Match against the lowercased model id; substring is enough because the
+# id encodes provider/family (e.g. openrouter/anthropic/claude-sonnet,
+# openrouter/openai/gpt-4o-mini, gpt-4o, claude-opus-4-7).
+_SUBSCRIPTION_OWNED_TOKENS: tuple[str, ...] = (
+    "anthropic/", "claude-",
+    "openai/", "gpt-", "o1-", "o3-", "codex-",
+)
+
+
+def is_subscription_owned(model: str | None) -> bool:
+    if not model:
+        return False
+    m = model.lower()
+    return any(tok in m for tok in _SUBSCRIPTION_OWNED_TOKENS)
+
+
 def resolve_healthy(
     tier: str,
     table: dict[str, dict],
     is_unhealthy_fn,
     *,
     banned_models: list[str] | tuple[str, ...] = (),
+    enforce_subscription_ban: bool = True,
 ) -> ResolvedRoute:
-    """Like ``resolve`` but skips the primary if it's unhealthy OR banned.
+    """Like ``resolve`` but skips the primary if it's unhealthy, banned, or
+    points at a subscription-owned provider (Anthropic / OpenAI).
 
     Falls through to the fallback for the same reasons. If both primary and
-    fallback are unavailable, returns the primary anyway (don't strand the request).
+    fallback are unavailable, returns the primary anyway (don't strand the
+    request — the post-outcome path will log it and the brain layer will
+    demote the offending model on the next attempt).
+
+    ``enforce_subscription_ban`` exists so unit tests that exercise routing
+    mechanics with claude-/gpt-shaped fixtures can opt out. Production
+    callers should never pass False.
     """
     banned = set(banned_models or ())
     primary = resolve(tier, table)
-    primary_blocked = primary.model in banned or is_unhealthy_fn(primary.provider, primary.model)
-    if not primary_blocked:
+
+    def _blocked(route_model: str) -> bool:
+        return (
+            route_model in banned
+            or (enforce_subscription_ban and is_subscription_owned(route_model))
+            or is_unhealthy_fn(primary.provider, route_model)
+        )
+
+    if not _blocked(primary.model):
         return primary
     if primary.fallback is None:
         return primary
     fb_provider, fb_model = primary.fallback
-    if fb_model in banned:
+    if _blocked(fb_model):
+        # Both blocked — return primary so we don't strand the request, and
+        # the upstream call site can log it. Better to fail fast on a real
+        # provider than silently swap to one the operator banned.
         return primary
     return ResolvedRoute(provider=fb_provider, model=fb_model, fallback=None)
 

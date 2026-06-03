@@ -113,6 +113,8 @@ async def write_outcome(
     tool_calls_made: list[dict] | None = None,
     actual_model: str | None = None,
     actual_provider: str | None = None,
+    notional_cost_usd: float | None = None,
+    rate_limited_429: bool = False,
 ) -> None:
     tool_calls_json = json.dumps(tool_calls_made) if tool_calls_made else None
     async with pool.acquire() as conn:
@@ -125,9 +127,10 @@ async def write_outcome(
                  was_truncated, truncated_at_byte,
                  response_body, response_body_truncated_at_byte,
                  response_size_bytes, tool_calls_made,
-                 actual_model, actual_provider)
+                 actual_model, actual_provider,
+                 notional_cost_usd, rate_limited_429)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                    $18::jsonb, $19, $20)
+                    $18::jsonb, $19, $20, $21, $22)
             """,
             decision_id,
             status_code,
@@ -149,6 +152,8 @@ async def write_outcome(
             tool_calls_json,
             actual_model,
             actual_provider,
+            notional_cost_usd,
+            rate_limited_429,
         )
 
 
@@ -249,8 +254,13 @@ async def get_cost_summary(
             f"""
             SELECT COUNT(*)                          AS total_calls,
                    SUM(o.cost_usd)::FLOAT            AS total_cost_usd,
+                   SUM(o.notional_cost_usd)::FLOAT   AS subscription_savings_usd,
                    SUM(o.prompt_tokens)::BIGINT      AS total_prompt_tokens,
-                   SUM(o.completion_tokens)::BIGINT  AS total_completion_tokens
+                   SUM(o.completion_tokens)::BIGINT  AS total_completion_tokens,
+                   SUM(CASE WHEN o.rate_limited_429 THEN 1 ELSE 0 END)
+                       AS rate_limited_count,
+                   SUM(CASE WHEN o.was_empty THEN 1 ELSE 0 END)
+                       AS empty_count
               FROM nautgate.route_decisions d
               LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
              WHERE {where}
@@ -263,14 +273,17 @@ async def get_cost_summary(
                 f"""
                 SELECT {field_sql}                   AS k,
                        SUM(o.cost_usd)::FLOAT        AS cost_usd,
+                       SUM(o.notional_cost_usd)::FLOAT AS notional_cost_usd,
                        COUNT(*)                       AS calls,
                        SUM(o.prompt_tokens)::BIGINT  AS prompt_tokens,
-                       SUM(o.completion_tokens)::BIGINT AS completion_tokens
+                       SUM(o.completion_tokens)::BIGINT AS completion_tokens,
+                       AVG(o.duration_ms)::FLOAT     AS avg_latency_ms,
+                       SUM(CASE WHEN o.was_empty THEN 1 ELSE 0 END) AS empty_count
                   FROM nautgate.route_decisions d
                   LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
                  WHERE {where}
                  GROUP BY {field_sql}
-                 ORDER BY cost_usd DESC NULLS LAST
+                 ORDER BY COALESCE(SUM(o.cost_usd), 0) + COALESCE(SUM(o.notional_cost_usd), 0) DESC NULLS LAST
                 """,
                 *base_params,
             )
@@ -278,9 +291,14 @@ async def get_cost_summary(
                 {
                     "key": r["k"],
                     "cost_usd": r["cost_usd"],
+                    "notional_cost_usd": r["notional_cost_usd"],
                     "calls": int(r["calls"]),
                     "prompt_tokens": int(r["prompt_tokens"] or 0),
                     "completion_tokens": int(r["completion_tokens"] or 0),
+                    "avg_latency_ms": (
+                        int(r["avg_latency_ms"]) if r["avg_latency_ms"] is not None else None
+                    ),
+                    "empty_count": int(r["empty_count"] or 0),
                 }
                 for r in rows
             ]
@@ -299,8 +317,11 @@ async def get_cost_summary(
         "window_hours": hours,
         "total_calls": int((totals or {}).get("total_calls") or 0),
         "total_cost_usd": (totals or {}).get("total_cost_usd"),
+        "subscription_savings_usd": (totals or {}).get("subscription_savings_usd"),
         "total_prompt_tokens": int((totals or {}).get("total_prompt_tokens") or 0),
         "total_completion_tokens": int((totals or {}).get("total_completion_tokens") or 0),
+        "rate_limited_count": int((totals or {}).get("rate_limited_count") or 0),
+        "empty_count": int((totals or {}).get("empty_count") or 0),
         "by_provider": by_provider,
         "by_model": by_model,
         "by_tier": by_tier,
@@ -892,6 +913,267 @@ async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
         "cost_usd_total": (totals or {}).get("cost_usd_total"),
         "requests_by_tier": {r["k"]: int(r["n"]) for r in by_tier},
         "requests_by_inbound_format": {r["k"]: int(r["n"]) for r in by_format},
+    }
+
+
+# ── Quality eval (LLM-as-judge over the audit log) ─────────────────────────
+# Backs the Quality tab and the Coach accordion in the Audit drawer. Inserts
+# are fire-and-forget from the post-outcome hook; reads serve the dashboard.
+
+async def insert_quality_eval(
+    pool: asyncpg.Pool,
+    *,
+    decision_id: UUID | str,
+    judge_provider: str,
+    judge_model: str,
+    judge_cost_usd: float | None,
+    judge_latency_ms: int | None,
+    rubric: dict | None,
+    failure_tags: list[str] | None,
+    suggested_prompt: str | None,
+    coach_notes: str | None,
+    trigger: str,
+) -> None:
+    rubric_json = json.dumps(rubric) if rubric is not None else None
+    tags = list(failure_tags or [])
+    did = decision_id if isinstance(decision_id, UUID) else UUID(str(decision_id))
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO nautgate.quality_evals
+                (decision_id, judge_provider, judge_model, judge_cost_usd,
+                 judge_latency_ms, rubric, failure_tags, suggested_prompt,
+                 coach_notes, trigger)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+            ON CONFLICT (decision_id) DO UPDATE SET
+                ts = now(),
+                judge_provider = EXCLUDED.judge_provider,
+                judge_model = EXCLUDED.judge_model,
+                judge_cost_usd = EXCLUDED.judge_cost_usd,
+                judge_latency_ms = EXCLUDED.judge_latency_ms,
+                rubric = EXCLUDED.rubric,
+                failure_tags = EXCLUDED.failure_tags,
+                suggested_prompt = EXCLUDED.suggested_prompt,
+                coach_notes = EXCLUDED.coach_notes,
+                trigger = EXCLUDED.trigger
+            """,
+            did, judge_provider, judge_model, judge_cost_usd, judge_latency_ms,
+            rubric_json, tags, suggested_prompt, coach_notes, trigger,
+        )
+
+
+async def get_quality_eval(pool: asyncpg.Pool, decision_id: str | UUID) -> dict | None:
+    did = decision_id if isinstance(decision_id, UUID) else UUID(str(decision_id))
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT q.decision_id, q.ts, q.judge_provider, q.judge_model,
+                   q.judge_cost_usd, q.judge_latency_ms, q.rubric, q.failure_tags,
+                   q.suggested_prompt, q.coach_notes, q.trigger, q.user_feedback,
+                   d.decision_model, d.decision_provider, d.classified_tier,
+                   d.classified_score, d.prompt_excerpt
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE q.decision_id = $1
+            """,
+            did,
+        )
+    if row is None:
+        return None
+    out = dict(row)
+    out["decision_id"] = str(out["decision_id"])
+    if isinstance(out.get("rubric"), str):
+        try:
+            out["rubric"] = json.loads(out["rubric"])
+        except (ValueError, TypeError):
+            pass
+    if out.get("judge_cost_usd") is not None:
+        out["judge_cost_usd"] = float(out["judge_cost_usd"])
+    if out.get("classified_score") is not None:
+        out["classified_score"] = float(out["classified_score"])
+    return out
+
+
+async def get_daily_judge_spend(pool: asyncpg.Pool) -> float:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT COALESCE(SUM(judge_cost_usd), 0)::FLOAT AS spend "
+            "FROM nautgate.quality_evals WHERE date(ts) = current_date"
+        )
+    return float((row or {}).get("spend") or 0.0)
+
+
+# Known failure tags surfaced in the UI heatmap. Keep the set fixed so the
+# table layout stays stable; new tags emitted by the judge that aren't in
+# this list still get stored, they just don't get their own column.
+QUALITY_FAILURE_TAGS = [
+    "over_thinking", "off_task", "looped", "hallucination",
+    "partial_answer", "refusal", "tool_misuse",
+]
+
+
+async def get_quality_summary(
+    pool: asyncpg.Pool, *, hours: int, model_filter: str | None = None,
+) -> dict:
+    """Aggregate quality_evals for the Quality tab.
+
+    Returns:
+        totals: {evaluations, avg_task_completion, failure_rate, judge_spend_usd}
+        by_model: [{model, evaluations, avg_completion, failure_rate}, …]
+        failure_modes: [{model, <tag>: count, …}, …]
+        heatmap: [{model, buckets: {0_2, 2_4, 4_6, 6_8, 8_10}, …}, …]
+            bucket value is the failure rate (0.0-1.0) inside that
+            classified_score bucket for that model.
+        worst_recent: [{decision_id, ts, model, tier, completion, tags, note}]
+    """
+    conds: list[str] = ["q.ts > NOW() - make_interval(hours => $1)"]
+    params: list = [hours]
+    if model_filter and model_filter != "*":
+        params.append(model_filter)
+        conds.append(f"d.decision_model = ${len(params)}")
+    where = " AND ".join(conds)
+
+    # A "failure" is any failure_tag present OR a task_completion score below 3.
+    failure_expr = (
+        "(coalesce(array_length(q.failure_tags, 1), 0) > 0 "
+        "OR coalesce((q.rubric->>'task_completion')::numeric, 5) < 3)"
+    )
+
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            f"""
+            SELECT COUNT(*) AS evaluations,
+                   AVG((q.rubric->>'task_completion')::numeric)::FLOAT
+                       AS avg_task_completion,
+                   AVG(CASE WHEN {failure_expr} THEN 1 ELSE 0 END)::FLOAT
+                       AS failure_rate,
+                   COALESCE(SUM(q.judge_cost_usd), 0)::FLOAT AS judge_spend_usd
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE {where}
+            """,
+            *params,
+        )
+
+        by_model_rows = await conn.fetch(
+            f"""
+            SELECT d.decision_model AS model,
+                   COUNT(*) AS evaluations,
+                   AVG((q.rubric->>'task_completion')::numeric)::FLOAT AS avg_completion,
+                   AVG(CASE WHEN {failure_expr} THEN 1 ELSE 0 END)::FLOAT AS failure_rate
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE {where}
+             GROUP BY d.decision_model
+             ORDER BY failure_rate DESC NULLS LAST, evaluations DESC
+            """,
+            *params,
+        )
+
+        # Failure-modes breakdown — one column per known tag.
+        # Tag names come from a hard-coded Python enum, so string-inlining is
+        # safe; no SQL injection surface.
+        tag_cols = ", ".join(
+            f"SUM(CASE WHEN '{t}' = ANY(q.failure_tags) THEN 1 ELSE 0 END) AS {t}"
+            for t in QUALITY_FAILURE_TAGS
+        )
+        failure_modes_rows = await conn.fetch(
+            f"""
+            SELECT d.decision_model AS model,
+                   COUNT(*) AS evaluations,
+                   {tag_cols}
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE {where}
+             GROUP BY d.decision_model
+             ORDER BY evaluations DESC
+            """,
+            *params,
+        )
+
+        # Heatmap: per-model failure rate per classified_score bucket.
+        heatmap_rows = await conn.fetch(
+            f"""
+            SELECT d.decision_model AS model,
+                   width_bucket(coalesce(d.classified_score::numeric, 0), 0, 10, 5)
+                       AS bucket_idx,
+                   COUNT(*) AS evaluations,
+                   AVG(CASE WHEN {failure_expr} THEN 1 ELSE 0 END)::FLOAT AS failure_rate
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE {where}
+             GROUP BY d.decision_model, bucket_idx
+            """,
+            *params,
+        )
+
+        worst_rows = await conn.fetch(
+            f"""
+            SELECT q.decision_id, q.ts, d.decision_model AS model,
+                   d.classified_tier AS tier,
+                   (q.rubric->>'task_completion')::numeric AS completion,
+                   q.failure_tags, q.coach_notes
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE {where} AND {failure_expr}
+             ORDER BY (q.rubric->>'task_completion')::numeric ASC NULLS FIRST,
+                      q.ts DESC
+             LIMIT 25
+            """,
+            *params,
+        )
+
+    bucket_labels = ["0_2", "2_4", "4_6", "6_8", "8_10"]
+    heatmap_by_model: dict[str, dict] = {}
+    for r in heatmap_rows:
+        m = r["model"]
+        slot = heatmap_by_model.setdefault(
+            m, {"model": m, "buckets": {b: None for b in bucket_labels}, "counts": {b: 0 for b in bucket_labels}}
+        )
+        # width_bucket(value, 0, 10, 5) returns 1..5 for in-range, 0 for <0, 6 for >=10
+        idx = max(1, min(5, int(r["bucket_idx"] or 1)))
+        label = bucket_labels[idx - 1]
+        slot["buckets"][label] = float(r["failure_rate"] or 0.0)
+        slot["counts"][label] = int(r["evaluations"] or 0)
+
+    return {
+        "window_hours": hours,
+        "totals": {
+            "evaluations": int((totals or {}).get("evaluations") or 0),
+            "avg_task_completion": (totals or {}).get("avg_task_completion"),
+            "failure_rate": (totals or {}).get("failure_rate"),
+            "judge_spend_usd": (totals or {}).get("judge_spend_usd"),
+        },
+        "by_model": [
+            {
+                "model": r["model"],
+                "evaluations": int(r["evaluations"]),
+                "avg_completion": float(r["avg_completion"]) if r["avg_completion"] is not None else None,
+                "failure_rate": float(r["failure_rate"]) if r["failure_rate"] is not None else None,
+            }
+            for r in by_model_rows
+        ],
+        "failure_modes": [
+            {
+                "model": r["model"],
+                "evaluations": int(r["evaluations"]),
+                **{t: int(r[t] or 0) for t in QUALITY_FAILURE_TAGS},
+            }
+            for r in failure_modes_rows
+        ],
+        "heatmap": list(heatmap_by_model.values()),
+        "worst_recent": [
+            {
+                "decision_id": str(r["decision_id"]),
+                "ts": r["ts"].isoformat() if r["ts"] else None,
+                "model": r["model"],
+                "tier": r["tier"],
+                "completion": float(r["completion"]) if r["completion"] is not None else None,
+                "failure_tags": list(r["failure_tags"] or []),
+                "coach_notes": r["coach_notes"],
+            }
+            for r in worst_rows
+        ],
     }
 
 
