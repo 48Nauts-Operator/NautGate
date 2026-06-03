@@ -1822,6 +1822,78 @@ async def drift_report(request: Request) -> Response:
     return JSONResponse(out)
 
 
+@router.get("/cost/openrouter-balance")
+async def openrouter_balance(request: Request) -> Response:
+    """Live OpenRouter credit balance + projected burn rate.
+
+    Pulls from https://openrouter.ai/api/v1/credits (returns total_credits
+    and total_usage), computes remaining = total_credits - total_usage,
+    then derives a 7-day average daily burn from local audit-log spend on
+    any decision_provider beginning with 'openrouter' (or actual_provider
+    when set by the upstream).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    import os as _os
+    api_key = _os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return JSONResponse(
+            {"error": "OPENROUTER_API_KEY not configured on the gateway."},
+            status_code=503,
+        )
+
+    client = getattr(request.app.state, "quality_judge", None)
+    if client is None:
+        raise HTTPException(status_code=503, detail="upstream_client_unavailable")
+    try:
+        resp = await client.get(
+            "https://openrouter.ai/api/v1/credits",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=8.0,
+        )
+    except Exception as exc:
+        return JSONResponse({"error": f"openrouter_unreachable: {exc}"}, status_code=502)
+    if resp.status_code != 200:
+        return JSONResponse(
+            {"error": f"http_{resp.status_code}", "detail": resp.text[:200]},
+            status_code=502,
+        )
+    data = resp.json().get("data") or {}
+    total_credits = float(data.get("total_credits") or 0.0)
+    total_usage = float(data.get("total_usage") or 0.0)
+    remaining = max(0.0, total_credits - total_usage)
+
+    async with pool.acquire() as conn:
+        spend_row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(o.cost_usd), 0)::FLOAT AS spend
+              FROM nautgate.route_decisions d
+              JOIN nautgate.route_outcomes  o ON o.decision_id = d.id
+             WHERE d.ts > NOW() - INTERVAL '7 days'
+               AND (d.decision_provider = 'openrouter'
+                    OR o.actual_provider = 'openrouter')
+            """,
+        )
+    spend_7d = float((spend_row or {}).get("spend") or 0.0)
+    daily_burn = spend_7d / 7.0 if spend_7d else None
+    days_left = (
+        remaining / daily_burn
+        if daily_burn and daily_burn > 0 and remaining > 0
+        else None
+    )
+    return JSONResponse({
+        "total_credits": total_credits,
+        "total_usage": total_usage,
+        "remaining_usd": remaining,
+        "spend_7d_usd": spend_7d,
+        "daily_burn_usd": daily_burn,
+        "days_left_at_current_burn": days_left,
+    })
+
+
 @router.get("/notifications")
 async def notifications(request: Request) -> Response:
     """Cross-tab notification feed for the global header strip.

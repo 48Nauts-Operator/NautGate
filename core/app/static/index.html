@@ -95,6 +95,30 @@
         <div class="card"><div class="metric" id="c-ratelimit">—</div><div class="label">rate-limited (429)</div></div>
       </div>
 
+      <!-- OpenRouter live credit balance — live from openrouter.ai/api/v1/credits.
+           Days-left uses 7-day local audit-log spend as the burn projection. -->
+      <div class="or-credits-card" id="or-credits-card" hidden>
+        <div class="or-credits-header">
+          <span class="or-credits-title">OpenRouter credits</span>
+          <button class="reload" id="or-credits-reload" title="reload">↻</button>
+        </div>
+        <div class="or-credits-grid">
+          <div>
+            <div class="or-credits-big" id="or-credits-remaining">—</div>
+            <div class="or-credits-sub" id="or-credits-remaining-sub">remaining of —</div>
+          </div>
+          <div>
+            <div class="or-credits-mid" id="or-credits-burn">—</div>
+            <div class="or-credits-sub">daily burn (7d avg)</div>
+          </div>
+          <div>
+            <div class="or-credits-mid" id="or-credits-days-left">—</div>
+            <div class="or-credits-sub">days left at current rate</div>
+          </div>
+        </div>
+        <div class="or-credits-bar"><div class="or-credits-bar-fill" id="or-credits-bar-fill"></div></div>
+      </div>
+
       <h3>Spend over time, by provider</h3>
       <div class="chart-wrap"><canvas id="cost-chart"></canvas></div>
 

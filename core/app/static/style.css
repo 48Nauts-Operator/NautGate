@@ -1055,6 +1055,72 @@ table.clickable tbody tr { cursor: pointer; }
 .dr-canary-table td { padding: 2px 6px; font-variant-numeric: tabular-nums; }
 .dr-investigation-meta { margin-top: 6px; font-size: 11px; }
 
+/* --- OpenRouter credits card ----------------------------------------- */
+.or-credits-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  margin: 16px 0 24px;
+}
+.or-credits-card[data-level="warn"] {
+  border-color: rgba(240, 177, 50, 0.5);
+  background: rgba(240, 177, 50, 0.04);
+}
+.or-credits-card[data-level="critical"] {
+  border-color: rgba(255, 92, 92, 0.6);
+  background: rgba(255, 92, 92, 0.05);
+}
+.or-credits-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.or-credits-title {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.or-credits-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 14px;
+}
+.or-credits-big {
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.or-credits-mid {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.or-credits-card[data-level="warn"] .or-credits-mid:last-of-type,
+.or-credits-card[data-level="warn"] #or-credits-days-left { color: #f0b132; }
+.or-credits-card[data-level="critical"] .or-credits-mid:last-of-type,
+.or-credits-card[data-level="critical"] #or-credits-days-left { color: #ff5c5c; }
+.or-credits-sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.or-credits-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.or-credits-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.5s ease;
+}
+.or-credits-card[data-level="warn"] .or-credits-bar-fill { background: #f0b132; }
+.or-credits-card[data-level="critical"] .or-credits-bar-fill { background: #ff5c5c; }
+
 /* --- Cost page extensions -------------------------------------------- */
 .cost-savings { border-left: 3px solid var(--accent); background: rgba(194, 65, 12, 0.04); }
 .cost-savings .metric { color: var(--accent); }

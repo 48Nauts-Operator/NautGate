@@ -1830,10 +1830,57 @@
       </tr>`;
   }
 
+  // --- OpenRouter credits (Cost tab) ---------------------------------
+  document.getElementById("or-credits-reload")?.addEventListener("click", () => loadOpenRouterCredits());
+
+  async function loadOpenRouterCredits() {
+    const card = document.getElementById("or-credits-card");
+    if (!card) return;
+    try {
+      const data = await api("/v1/cost/openrouter-balance");
+      if (data.error) {
+        card.hidden = true;
+        return;
+      }
+      card.hidden = false;
+      const remaining = Number(data.remaining_usd || 0);
+      const total = Number(data.total_credits || 0);
+      const burn = data.daily_burn_usd != null ? Number(data.daily_burn_usd) : null;
+      const days = data.days_left_at_current_burn != null ? Number(data.days_left_at_current_burn) : null;
+      document.getElementById("or-credits-remaining").textContent = "$" + remaining.toFixed(2);
+      document.getElementById("or-credits-remaining-sub").textContent =
+        total > 0 ? `remaining of $${total.toFixed(2)} purchased` : "remaining";
+      document.getElementById("or-credits-burn").textContent =
+        burn != null ? "$" + burn.toFixed(2) + "/d" : "—";
+      const daysEl = document.getElementById("or-credits-days-left");
+      if (days != null && isFinite(days)) {
+        daysEl.textContent = days >= 1
+          ? Math.round(days) + " days"
+          : "<1 day";
+      } else {
+        daysEl.textContent = "—";
+      }
+      // Severity colouring on the days-left + bar.
+      const ratio = total > 0 ? (remaining / total) : 0;
+      const fill = document.getElementById("or-credits-bar-fill");
+      fill.style.width = (ratio * 100).toFixed(1) + "%";
+      let level = "ok";
+      if (days != null && days < 7) level = "warn";
+      if (days != null && days < 3) level = "critical";
+      if (ratio < 0.1) level = "critical";
+      card.dataset.level = level;
+    } catch (_e) {
+      const card = document.getElementById("or-credits-card");
+      if (card) card.hidden = true;
+    }
+  }
+
   async function loadCost() {
     if (!getToken()) return;
     // Refresh dropdowns on every load so new keys/projects appear.
     await Promise.all([loadCostAgentOptions(), loadCostProjectOptions()]);
+    // Fire-and-forget: OpenRouter balance refreshes independently.
+    loadOpenRouterCredits();
     const scope = costAgent || "*";
     const project = costProject || "*";
     const qs = `&agent_id=${encodeURIComponent(scope)}&project_id=${encodeURIComponent(project)}`;
