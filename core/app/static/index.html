@@ -30,6 +30,10 @@
     </div>
   </header>
 
+  <!-- Global notification strip: open drift alerts, budget warnings,
+       subscription savings, rate-limit events. Polls every 60s. -->
+  <div id="notif-strip" class="notif-strip" hidden></div>
+
   <main>
     <!-- Overview ------------------------------------------------------------>
     <section id="tab-overview" class="tab active">
@@ -147,7 +151,10 @@
 
     <!-- Drift (behavior-change detection) ----------------------------------->
     <section id="tab-drift" class="tab">
-      <h2>Behavior Drift <button class="reload" id="dr-reload">↻</button></h2>
+      <h2>Behavior Drift
+        <button class="reload" id="dr-reload">↻</button>
+        <button class="dr-report-btn" id="dr-report-btn" title="Run tokenizer canaries across every drifting model + generate a one-page report you can share">📄 Generate report</button>
+      </h2>
       <p class="hint">Catches silent provider-side changes. Per (provider, model, metric) we maintain an EWMA baseline and z-score every new sample. <b>3+ consecutive |z| &gt; 3 anomalies</b> raise an alert. Tracked: <code>input_tokens_per_byte</code> (tokenizer/cache change), <code>response_size_bytes</code> (verbosity drift), <code>first_byte_ms</code>, <code>duration_ms</code>, and <code>messages_count_delta</code> (compaction events). Compaction fires immediately on a sharp drop, not after warmup.</p>
 
       <h3>Open alerts</h3>

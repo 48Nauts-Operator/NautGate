@@ -318,6 +318,39 @@
     }
   }
 
+  // --- Global notification strip --------------------------------------
+  async function loadNotifications() {
+    const stripEl = document.getElementById("notif-strip");
+    if (!stripEl) return;
+    try {
+      const data = await api("/v1/notifications");
+      const items = (data && data.items) || [];
+      if (!items.length) {
+        stripEl.hidden = true;
+        stripEl.innerHTML = "";
+        return;
+      }
+      stripEl.hidden = false;
+      stripEl.innerHTML = items.map((n) => {
+        const cls = "notif-" + (n.level || "info");
+        const icon = ({warning: "⚠", error: "✗", success: "✓", info: "ℹ"})[n.level] || "•";
+        const href = n.href ? `href="${esc(n.href)}"` : "";
+        const tag = n.href ? "a" : "span";
+        return `<${tag} class="notif ${cls}" ${href}><span class="notif-icon">${icon}</span>${esc(n.text)}</${tag}>`;
+      }).join("");
+      // Wire any hash-based hrefs to actually switch tabs.
+      stripEl.querySelectorAll('a[href^="#"]').forEach((a) => {
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          const tab = a.getAttribute("href").slice(1);
+          if (document.getElementById("tab-" + tab)) activateTab(tab);
+        });
+      });
+    } catch (_e) {
+      stripEl.hidden = true;
+    }
+  }
+
   function refreshActive() {
     if (activeTab === "overview") loadOverview();
     else if (activeTab === "audit") loadAudit();
@@ -1426,6 +1459,87 @@
   // --- Drift (behavior-change detection) ---------------------------------
 
   document.getElementById("dr-reload").addEventListener("click", () => loadDrift());
+  document.getElementById("dr-report-btn")?.addEventListener("click", () => _generateDriftReport(false));
+
+  async function _generateDriftReport(forceRerun) {
+    const btn = document.getElementById("dr-report-btn");
+    if (!btn) return;
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = "running canaries…";
+    try {
+      const res = await fetch("/v1/drift/report", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify({ force_rerun: !!forceRerun }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error("http_" + res.status + ": " + txt.slice(0, 200));
+      }
+      const data = await res.json();
+      _showReportModal(data);
+    } catch (e) {
+      alert("Report generation failed: " + (e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  }
+
+  function _showReportModal(data) {
+    document.getElementById("dr-report-modal")?.remove();
+    const md = data.markdown || "";
+    const cost = data.total_canary_cost_usd != null
+      ? "$" + Number(data.total_canary_cost_usd).toFixed(4)
+      : "$0.0000";
+    const wrap = document.createElement("div");
+    wrap.id = "dr-report-modal";
+    wrap.className = "dr-report-modal";
+    wrap.innerHTML = `
+      <div class="dr-report-content">
+        <div class="dr-report-head">
+          <span>Drift report · ${(data.items || []).length} models probed · canary cost ${esc(cost)}</span>
+          <div class="dr-report-actions">
+            <button class="ghost dr-share-btn" id="dr-report-share" title="Open the Twitter-ready HTML report in a new tab — screenshot it from there">🖼 share view (HTML)</button>
+            <button class="ghost" id="dr-report-rerun" title="Re-run canaries (ignore cached 24h investigations)">↻ rerun</button>
+            <button class="ghost" id="dr-report-copy">📋 copy markdown</button>
+            <button class="ghost" id="dr-report-download">💾 download</button>
+            <button class="ghost" id="dr-report-close">✕ close</button>
+          </div>
+        </div>
+        <textarea class="dr-report-md" readonly>${esc(md)}</textarea>
+      </div>`;
+    document.body.appendChild(wrap);
+    document.getElementById("dr-report-close").addEventListener("click", () => wrap.remove());
+    document.getElementById("dr-report-copy").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(md); } catch (_e) {}
+      const b = document.getElementById("dr-report-copy");
+      const t = b.textContent;
+      b.textContent = "✓ copied";
+      setTimeout(() => { b.textContent = t; }, 1500);
+    });
+    document.getElementById("dr-report-download").addEventListener("click", () => {
+      const blob = new Blob([md], { type: "text/markdown" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const stamp = (data.generated_at || "").replace(/[:T]/g, "-").slice(0, 16);
+      a.download = `nautgate-drift-report-${stamp}.md`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+    document.getElementById("dr-report-rerun").addEventListener("click", () => {
+      wrap.remove();
+      _generateDriftReport(true);
+    });
+    document.getElementById("dr-report-share").addEventListener("click", () => {
+      const token = getToken();
+      const url = "/v1/drift/report.html?token=" + encodeURIComponent(token);
+      window.open(url, "_blank", "noopener");
+    });
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) wrap.remove(); });
+  }
 
   function fmtNum(v) {
     if (v == null) return "—";
@@ -1464,6 +1578,11 @@
         alertsEl.innerHTML = '<p class="hint">No open alerts. Drift detection needs ~10 samples per (provider, model, metric) to warm up.</p>';
       } else {
         alertsEl.innerHTML = open.map(renderOpenAlert).join("");
+        _wireInvestigateButtons();
+        // Auto-load the latest investigation for EVERY open alert (incl.
+        // compaction events). Without this, results disappear when you
+        // switch tabs and come back.
+        _autoLoadLatestInvestigations(open.map(a => a.id));
       }
 
       // History table — all alerts.
@@ -1493,11 +1612,183 @@
     const detail = compaction
       ? `${a.sample_count} compaction event${a.sample_count === 1 ? "" : "s"} since ${fmtAge(a.started_at)}`
       : `observed <b>${fmtNum(a.peak_observed)}</b> vs baseline <b>${fmtNum(a.baseline_at_alert)}</b> · ${a.sample_count} samples since ${fmtAge(a.started_at)}`;
+    const aid = esc(a.id || "");
+    const provider = esc(a.provider || "");
+    const model = esc(a.model || "");
+    const metric = esc(a.metric || "");
+    // Compaction events get a tagged note instead of an Investigate button.
+    // Compaction events are client-side, but the Investigate button can
+    // still reveal routing changes / tokenizer drift on the same model —
+    // so we always render it, with a tag when compaction is the trigger.
+    const compactionTag = compaction
+      ? '<span class="dr-tag">client-side event</span> '
+      : "";
+    const actions = `${compactionTag}<button class="dr-investigate ghost" data-alert="${aid}" data-provider="${provider}" data-model="${model}" data-metric="${metric}">🔍 Investigate</button>`;
     return `
-      <div class="dr-alert dr-alert-${esc(a.direction)}">
+      <div class="dr-alert dr-alert-${esc(a.direction)}" data-alert-id="${aid}">
         <div class="dr-alert-head">${arrow} ${headline}</div>
         <div class="dr-alert-detail">${detail}</div>
+        <div class="dr-alert-actions">${actions}</div>
+        <div class="dr-investigation-slot" id="dr-inv-slot-${aid}"></div>
       </div>`;
+  }
+
+  // After alerts render, attach click handlers + auto-load recent investigations.
+  function _wireInvestigateButtons() {
+    document.querySelectorAll(".dr-investigate").forEach((btn) => {
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const aid = btn.dataset.alert;
+        const provider = btn.dataset.provider;
+        const model = btn.dataset.model;
+        const metric = btn.dataset.metric;
+        const slot = document.getElementById("dr-inv-slot-" + aid);
+        btn.disabled = true;
+        btn.textContent = "running…";
+        slot.innerHTML = '<div class="dr-investigation loading">Running canary suite — usually 5-15 seconds…</div>';
+        try {
+          const res = await fetch("/v1/drift/investigate", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+            body: JSON.stringify({ alert_id: aid, provider, model, metric_name: metric }),
+          });
+          if (!res.ok) {
+            const txt = await res.text();
+            throw new Error("http_" + res.status + ": " + txt.slice(0, 120));
+          }
+          const j = await res.json();
+          await _pollInvestigation(j.investigation_id, slot);
+        } catch (e) {
+          slot.innerHTML = `<div class="dr-investigation error">eval failed: ${esc(e.message || e)}</div>`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "🔍 Investigate again";
+        }
+      });
+    });
+  }
+
+  async function _pollInvestigation(iid, slot) {
+    for (let i = 0; i < 40; i++) {  // up to ~60s
+      try {
+        const inv = await api("/v1/drift/investigations/" + encodeURIComponent(iid));
+        if (inv.status === "complete" || inv.status === "failed" || inv.status === "skipped") {
+          slot.innerHTML = _renderInvestigation(inv);
+          return;
+        }
+      } catch (_e) {}
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    slot.innerHTML = '<div class="dr-investigation error">timed out waiting for verdict</div>';
+  }
+
+  function _renderInvestigation(inv) {
+    if (inv.status === "skipped") {
+      return `<div class="dr-investigation skipped">Skipped: ${esc(inv.skip_reason || "unknown")}</div>`;
+    }
+    if (inv.status === "failed") {
+      return `<div class="dr-investigation error">Failed: ${esc(inv.verdict_text || "")}</div>`;
+    }
+    const findings = inv.findings || {};
+    const canaries = findings.canaries || [];
+    const labelClass = (inv.verdict_label || "").startsWith("matches_baseline")
+      ? "ok"
+      : (inv.verdict_label || "") === "inconclusive" ? "neutral" : "bad";
+    let extras = "";
+    if (findings.tokenizer) {
+      const t = findings.tokenizer;
+      const base = findings.baseline_tokens_per_byte;
+      extras += `
+        <div class="dr-finding-row">
+          <span class="dr-finding-label">tokens/byte (now)</span>
+          <span class="dr-finding-value">${t.current.toFixed(3)}</span>
+        </div>
+        <div class="dr-finding-row">
+          <span class="dr-finding-label">tokens/byte (baseline)</span>
+          <span class="dr-finding-value">${base != null ? base.toFixed(3) : "—"}</span>
+        </div>`;
+      if (findings.delta_pct != null) {
+        extras += `
+          <div class="dr-finding-row">
+            <span class="dr-finding-label">change</span>
+            <span class="dr-finding-value">${findings.delta_pct >= 0 ? "+" : ""}${findings.delta_pct.toFixed(1)}%</span>
+          </div>`;
+      }
+    }
+    if (findings.verbosity) {
+      extras += `
+        <div class="dr-finding-row">
+          <span class="dr-finding-label">avg response (bytes)</span>
+          <span class="dr-finding-value">${findings.verbosity.avg_response_bytes.toFixed(0)}</span>
+        </div>`;
+    }
+    if (findings.refusal) {
+      extras += `
+        <div class="dr-finding-row">
+          <span class="dr-finding-label">refusal rate</span>
+          <span class="dr-finding-value">${(findings.refusal.refusal_rate * 100).toFixed(0)}% (${findings.refusal.refused_count}/${findings.refusal.samples})</span>
+        </div>`;
+    }
+    if (findings.latency) {
+      const l = findings.latency;
+      extras += `
+        <div class="dr-finding-row">
+          <span class="dr-finding-label">first byte p50/p95</span>
+          <span class="dr-finding-value">${l.first_byte_ms_p50}ms / ${l.first_byte_ms_p95}ms</span>
+        </div>`;
+    }
+    if (findings.routing) {
+      extras += '<div class="dr-finding-row"><span class="dr-finding-label">routing comparison</span><span class="dr-finding-value">';
+      for (const [via, stats] of Object.entries(findings.routing)) {
+        extras += `<div>${esc(via)}: tokens/byte ${stats.avg_tokens_per_byte != null ? stats.avg_tokens_per_byte.toFixed(3) : "—"}</div>`;
+      }
+      extras += "</span></div>";
+    }
+    const canaryRows = canaries.slice(0, 6).map(c => `
+      <tr>
+        <td>${esc(c.canary)}</td>
+        <td>${esc(c.via)}</td>
+        <td>${c.prompt_bytes || "—"}</td>
+        <td>${c.prompt_tokens != null ? c.prompt_tokens : "—"}</td>
+        <td>${c.completion_tokens != null ? c.completion_tokens : "—"}</td>
+        <td>${c.duration_ms != null ? c.duration_ms + "ms" : "—"}</td>
+        <td>${c.cost_usd != null ? "$" + c.cost_usd.toFixed(4) : (c.via.endsWith("oauth") ? "$0 (Max)" : "—")}</td>
+        <td title="${esc(c.error || c.response_excerpt || "")}">${c.error ? "✗" : "✓"}</td>
+      </tr>`).join("");
+    return `
+      <div class="dr-investigation complete">
+        <div class="dr-verdict dr-verdict-${labelClass}">
+          <div class="dr-verdict-label">${esc(inv.verdict_label || "inconclusive")}</div>
+          <div class="dr-verdict-text">${esc(inv.verdict_text || "")}</div>
+        </div>
+        <div class="dr-findings">${extras}</div>
+        <details class="dr-canary-details"><summary>canary runs (${canaries.length})</summary>
+          <table class="dr-canary-table">
+            <thead><tr><th>canary</th><th>via</th><th>bytes</th><th>in tk</th><th>out tk</th><th>dur</th><th>cost</th><th></th></tr></thead>
+            <tbody>${canaryRows}</tbody>
+          </table>
+        </details>
+        <div class="hint dr-investigation-meta">
+          suite: ${esc(inv.canary_suite || "")} · trigger: ${esc(inv.triggered_by || "")} · total cost: ${inv.total_cost_usd != null ? "$" + inv.total_cost_usd.toFixed(4) : "$0.0000"}
+        </div>
+      </div>`;
+  }
+
+  async function _autoLoadLatestInvestigations(alertIds) {
+    if (!alertIds.length) return;
+    for (const aid of alertIds) {
+      try {
+        const data = await api("/v1/drift/investigations?alert_id=" + encodeURIComponent(aid) + "&limit=1");
+        if (!data.items || !data.items.length) continue;
+        const latest = data.items[0];
+        if (latest.status === "complete") {
+          // Fetch full row for findings.
+          const full = await api("/v1/drift/investigations/" + encodeURIComponent(latest.id));
+          const slot = document.getElementById("dr-inv-slot-" + aid);
+          if (slot) slot.innerHTML = _renderInvestigation(full);
+        }
+      } catch (_e) {}
+    }
   }
 
   function renderAlertHistoryRow(a) {
@@ -2417,6 +2708,9 @@
   }
   renderAuth();
   renderSessions();
+  // Start notification poller — runs every 60s while the tab is open.
+  loadNotifications();
+  setInterval(loadNotifications, 60_000);
   if (importedLabel) {
     // Tiny toast: 4s pinned banner on the Overview Sessions section.
     const banner = document.createElement("div");

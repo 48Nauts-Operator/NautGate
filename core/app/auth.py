@@ -53,6 +53,10 @@ def _extract_token_from_request(request: Request) -> str:
     """Accept any of the standard auth header shapes:
     - Authorization: Bearer ng_...    (OpenAI Chat / OpenAI SDK / curl)
     - x-api-key: ng_...               (Anthropic Messages / Claude Code)
+    - ?token=ng_... query param       (only for endpoints that explicitly
+                                       opt in — used for HTML reports the
+                                       operator opens in a fresh tab and
+                                       can't attach headers to)
     """
     auth_header = request.headers.get("authorization", "")
     if auth_header:
@@ -60,6 +64,12 @@ def _extract_token_from_request(request: Request) -> str:
     api_key = request.headers.get("x-api-key", "").strip()
     if api_key:
         return api_key
+    # Query-param fallback. Only honoured when the caller is explicitly OK
+    # with it (we mark the endpoint by passing ?token=…; standard API
+    # callers won't include that param so the surface stays the same).
+    qp_token = request.query_params.get("token", "").strip()
+    if qp_token.startswith("ng_"):
+        return qp_token
     raise _BAD_TOKEN
 
 

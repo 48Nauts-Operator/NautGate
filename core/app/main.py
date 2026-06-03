@@ -8,10 +8,18 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
     _here = Path(__file__).resolve().parent.parent  # → core/
-    for _p in (_here / ".env", _here.parent / ".env"):
+    # Search core/.env, repo-root .env, deploy/.env — apply ALL that exist
+    # (no break), with later ones not overriding earlier so the explicit
+    # one wins. Provider keys (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+    # OPENROUTER_API_KEY) typically live in deploy/.env alongside the
+    # docker-compose definition that needs them.
+    for _p in (
+        _here / ".env",
+        _here.parent / ".env",
+        _here.parent / "deploy" / ".env",
+    ):
         if _p.is_file():
             load_dotenv(_p, override=False)
-            break
 except ImportError:
     pass
 

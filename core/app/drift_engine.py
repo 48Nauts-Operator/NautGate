@@ -242,12 +242,13 @@ async def _maybe_raise_alert(
         provider, model, metric_name,
     )
     if open_alert is None:
-        await pool.execute(
+        new_alert_id = await pool.fetchval(
             """
             INSERT INTO nautgate.drift_alerts
                 (provider, model, metric_name, direction,
                  peak_z_score, peak_observed, baseline_at_alert, sample_count)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
+            RETURNING id
             """,
             provider, model, metric_name, direction,
             z_score, observed, baseline_mean,
@@ -258,6 +259,16 @@ async def _maybe_raise_alert(
             direction=direction, z=round(z_score, 2),
             observed=observed, baseline=round(baseline_mean, 4),
         )
+        # Fire-and-forget: investigator decides whether to actually run
+        # based on cooldown + daily budget + enabled flag.
+        try:
+            from app.drift_investigator import maybe_auto_investigate
+            await maybe_auto_investigate(
+                pool, alert_id=new_alert_id,
+                provider=provider, model=model, metric_name=metric_name,
+            )
+        except Exception as exc:
+            log.warning("drift_invest_dispatch_failed", error=str(exc))
     else:
         # Update peak if this z is more extreme.
         if abs(z_score) > abs(float(open_alert["peak_z_score"])):

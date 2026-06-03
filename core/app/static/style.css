@@ -887,6 +887,174 @@ table.clickable tbody tr { cursor: pointer; }
 .settings-pane[hidden] { display: none !important; }
 .settings-pane { padding-top: 4px; }
 
+/* --- Global notification strip --------------------------------------- */
+.notif-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.notif {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 14px;
+  text-decoration: none;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: opacity 0.12s, border-color 0.12s;
+}
+.notif:hover { opacity: 0.9; }
+.notif-icon { font-size: 14px; }
+.notif-warning {
+  background: rgba(240, 177, 50, 0.12);
+  color: #f0b132;
+  border-color: rgba(240, 177, 50, 0.35);
+}
+.notif-error {
+  background: rgba(255, 92, 92, 0.12);
+  color: #ff5c5c;
+  border-color: rgba(255, 92, 92, 0.35);
+}
+.notif-success {
+  background: rgba(76, 175, 80, 0.12);
+  color: #4caf50;
+  border-color: rgba(76, 175, 80, 0.35);
+}
+.notif-info {
+  background: rgba(194, 65, 12, 0.10);
+  color: var(--accent);
+  border-color: rgba(194, 65, 12, 0.30);
+}
+
+/* --- Drift report (modal) -------------------------------------------- */
+.dr-report-btn {
+  margin-left: 8px;
+  font-size: 13px;
+  padding: 4px 12px;
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.dr-report-btn:disabled { opacity: 0.6; cursor: default; }
+.dr-report-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dr-report-content {
+  width: min(900px, 92vw);
+  height: min(80vh, 800px);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.dr-report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.dr-report-actions { display: flex; gap: 6px; }
+.dr-report-actions button { font-size: 12px; padding: 4px 10px; }
+.dr-report-md {
+  flex: 1;
+  width: 100%;
+  border: none;
+  resize: none;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* --- Drift Investigator ---------------------------------------------- */
+.dr-alert-actions { margin-top: 8px; }
+.dr-investigate {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.dr-tag {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-dim);
+}
+.dr-investigation-slot { margin-top: 10px; }
+.dr-investigation {
+  border-left: 3px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  padding: 10px 12px;
+  border-radius: 0 6px 6px 0;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.dr-investigation.loading { color: var(--text-dim); font-style: italic; }
+.dr-investigation.error { border-left-color: #ff5c5c; color: #ff5c5c; }
+.dr-investigation.skipped { border-left-color: #f0b132; color: #f0b132; }
+.dr-verdict-ok      { border-left: 3px solid #4caf50; padding-left: 10px; }
+.dr-verdict-bad     { border-left: 3px solid #ff5c5c; padding-left: 10px; }
+.dr-verdict-neutral { border-left: 3px solid var(--text-dim); padding-left: 10px; }
+.dr-verdict-label {
+  font-family: monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.dr-verdict-text { color: var(--text); line-height: 1.4; }
+.dr-findings {
+  margin: 10px 0 4px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.dr-finding-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.dr-finding-label { color: var(--text-dim); }
+.dr-finding-value { font-variant-numeric: tabular-nums; }
+.dr-canary-details { margin-top: 8px; }
+.dr-canary-details summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.dr-canary-table {
+  font-size: 11px;
+  margin-top: 6px;
+  width: 100%;
+}
+.dr-canary-table th { text-align: left; color: var(--text-dim); font-weight: normal; }
+.dr-canary-table td { padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.dr-investigation-meta { margin-top: 6px; font-size: 11px; }
+
 /* --- Cost page extensions -------------------------------------------- */
 .cost-savings { border-left: 3px solid var(--accent); background: rgba(194, 65, 12, 0.04); }
 .cost-savings .metric { color: var(--accent); }

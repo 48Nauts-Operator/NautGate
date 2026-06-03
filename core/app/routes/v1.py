@@ -1682,6 +1682,232 @@ async def drift_anomalies(provider: str, model_path: str, request: Request) -> R
     return JSONResponse({"items": items, "count": len(items)})
 
 
+# ── Drift Investigator ─────────────────────────────────────────────────────
+
+
+@router.post("/drift/investigate")
+async def drift_investigate(request: Request) -> Response:
+    """Trigger a drift investigation. Body: {alert_id, provider, model,
+    metric_name, suite (optional)}. Returns the investigation_id once
+    started — the actual canary suite runs asynchronously; the client
+    polls GET /v1/drift/investigations/{id} until status='complete'.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    provider = body.get("provider")
+    model = body.get("model")
+    if not provider or not model:
+        raise HTTPException(status_code=400, detail="provider + model required")
+    alert_id_raw = body.get("alert_id")
+    alert_id: uuid.UUID | None = None
+    if alert_id_raw:
+        try:
+            alert_id = uuid.UUID(str(alert_id_raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad alert_id") from None
+    metric = body.get("metric_name")
+    suite = body.get("suite")
+    from app.drift_investigator import run_investigation
+    iid = await run_investigation(
+        pool, alert_id=alert_id, provider=provider, model=model,
+        metric_name=metric, suite=suite, triggered_by="manual",
+    )
+    if iid is None:
+        raise HTTPException(status_code=422, detail="investigation_skipped_or_unsupported")
+    return JSONResponse({"investigation_id": str(iid)})
+
+
+@router.get("/drift/investigations")
+async def drift_investigations_list(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        limit = min(100, max(1, int(request.query_params.get("limit", "30"))))
+    except ValueError:
+        limit = 30
+    alert_id: uuid.UUID | None = None
+    aid_raw = request.query_params.get("alert_id")
+    if aid_raw:
+        try:
+            alert_id = uuid.UUID(aid_raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad alert_id") from None
+    from app.drift_investigator import list_investigations
+    items = await list_investigations(pool, limit=limit, alert_id=alert_id)
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@router.get("/drift/investigations/{investigation_id}")
+async def drift_investigation_get(investigation_id: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        iid = uuid.UUID(investigation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad investigation_id") from None
+    from app.drift_investigator import get_investigation
+    row = await get_investigation(pool, iid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse(row)
+
+
+@router.get("/drift/report.html")
+async def drift_report_html(request: Request) -> Response:
+    """Render the drift report as a standalone HTML page — opened in a
+    new tab, screenshotted, attached to a tweet.
+
+    Auth accepted via the standard Authorization header OR via a ?token=…
+    query parameter (see auth._extract_token_from_request). The query
+    fallback exists specifically for this endpoint: the operator opens it
+    in a fresh browser tab and can't attach headers.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from fastapi.responses import HTMLResponse as _HTMLResponse
+
+    from app.drift_investigator import generate_report
+    out = await generate_report(pool)
+    return _HTMLResponse(out["html"])
+
+
+@router.post("/drift/report")
+async def drift_report(request: Request) -> Response:
+    """Generate a one-page drift report across every model with detected
+    drift activity. Designed for paste-into-blog/Twitter/Obsidian.
+
+    Body (all optional):
+      - force_rerun (bool): re-run canaries even if a fresh investigation exists
+      - models (list[[provider, model]]): explicit override of which to probe
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    if not isinstance(body, dict):
+        body = {}
+    force_rerun = bool(body.get("force_rerun", False))
+    models_override: list[tuple[str, str]] | None = None
+    if isinstance(body.get("models"), list):
+        models_override = []
+        for m in body["models"]:
+            if isinstance(m, list | tuple) and len(m) == 2:
+                models_override.append((str(m[0]), str(m[1])))
+            elif isinstance(m, dict) and "provider" in m and "model" in m:
+                models_override.append((str(m["provider"]), str(m["model"])))
+
+    from app.drift_investigator import generate_report
+    out = await generate_report(
+        pool, force_rerun=force_rerun, models=models_override,
+    )
+    return JSONResponse(out)
+
+
+@router.get("/notifications")
+async def notifications(request: Request) -> Response:
+    """Cross-tab notification feed for the global header strip.
+
+    Surfaces things the operator should know about regardless of which tab
+    they're on — open drift alerts, subscription savings, rate-limit events
+    today, daily-budget warnings. Polled every ~60s by the dashboard.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    items: list[dict] = []
+    async with pool.acquire() as conn:
+        # Open drift alerts — counted ex-compaction since those are routine.
+        alerts_row = await conn.fetchrow(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE metric_name <> 'messages_count_delta') AS real_drift,
+              COUNT(*) FILTER (WHERE metric_name  = 'messages_count_delta') AS compactions
+              FROM nautgate.drift_alerts
+             WHERE resolved_at IS NULL
+            """,
+        )
+        # Today's spend + savings (Europe/Berlin so it matches the dashboard).
+        today_row = await conn.fetchrow(
+            """
+            SELECT
+              COALESCE(SUM(o.cost_usd), 0)::FLOAT          AS metered,
+              COALESCE(SUM(o.notional_cost_usd), 0)::FLOAT AS saved,
+              SUM(CASE WHEN o.rate_limited_429 THEN 1 ELSE 0 END) AS rate_limited
+              FROM nautgate.route_decisions d
+              JOIN nautgate.route_outcomes  o ON o.decision_id = d.id
+             WHERE date(d.ts AT TIME ZONE 'Europe/Berlin') = (CURRENT_DATE AT TIME ZONE 'Europe/Berlin')::date
+            """,
+        )
+
+    real_drift = int((alerts_row or {}).get("real_drift") or 0)
+    compactions = int((alerts_row or {}).get("compactions") or 0)
+    if real_drift > 0:
+        items.append({
+            "level": "warning",
+            "text": (f"{real_drift} open drift alert{'s' if real_drift != 1 else ''} — "
+                     "click to investigate"),
+            "href": "#drift",
+        })
+    elif compactions > 0:
+        # Routine but worth surfacing so the operator knows the detector
+        # is actually running. Lower priority than real drift.
+        items.append({
+            "level": "info",
+            "text": (f"{compactions} active compaction event{'s' if compactions != 1 else ''} "
+                     "(routine — long sessions auto-compacting)"),
+            "href": "#drift",
+        })
+
+    metered = float((today_row or {}).get("metered") or 0.0)
+    saved = float((today_row or {}).get("saved") or 0.0)
+    if saved > 1.00:
+        items.append({
+            "level": "success",
+            "text": f"Subscription saved ${saved:.2f} today",
+            "href": "#cost",
+        })
+    # Daily budget alert: hardcoded $50/day informational threshold for now.
+    # Real per-scope budgets land when budgets.py is wired up.
+    if metered > 50.0:
+        items.append({
+            "level": "warning",
+            "text": f"Today's metered spend is ${metered:.2f}",
+            "href": "#cost",
+        })
+
+    rate_limited = int((today_row or {}).get("rate_limited") or 0)
+    if rate_limited > 0:
+        items.append({
+            "level": "info",
+            "text": (f"{rate_limited} rate-limit (429) event{'s' if rate_limited != 1 else ''} "
+                     "today — subscription cap hit"),
+            "href": "#cost",
+        })
+
+    return JSONResponse({"items": items})
+
+
 @router.get("/stats")
 async def stats(request: Request) -> Response:
     """Aggregate stats for the authenticated agent over the last `hours` (default 24).
