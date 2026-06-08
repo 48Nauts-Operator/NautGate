@@ -933,6 +933,7 @@ async def insert_quality_eval(
     suggested_prompt: str | None,
     coach_notes: str | None,
     trigger: str,
+    anti_pattern: str | None = None,
 ) -> None:
     rubric_json = json.dumps(rubric) if rubric is not None else None
     tags = list(failure_tags or [])
@@ -943,8 +944,8 @@ async def insert_quality_eval(
             INSERT INTO nautgate.quality_evals
                 (decision_id, judge_provider, judge_model, judge_cost_usd,
                  judge_latency_ms, rubric, failure_tags, suggested_prompt,
-                 coach_notes, trigger)
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+                 coach_notes, trigger, anti_pattern)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
             ON CONFLICT (decision_id) DO UPDATE SET
                 ts = now(),
                 judge_provider = EXCLUDED.judge_provider,
@@ -955,10 +956,11 @@ async def insert_quality_eval(
                 failure_tags = EXCLUDED.failure_tags,
                 suggested_prompt = EXCLUDED.suggested_prompt,
                 coach_notes = EXCLUDED.coach_notes,
-                trigger = EXCLUDED.trigger
+                trigger = EXCLUDED.trigger,
+                anti_pattern = EXCLUDED.anti_pattern
             """,
             did, judge_provider, judge_model, judge_cost_usd, judge_latency_ms,
-            rubric_json, tags, suggested_prompt, coach_notes, trigger,
+            rubric_json, tags, suggested_prompt, coach_notes, trigger, anti_pattern,
         )
 
 

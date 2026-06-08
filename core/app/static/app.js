@@ -2355,7 +2355,277 @@
     return `hsla(${hue}, 70%, 35%, ${0.25 + r * 0.55})`;
   }
 
+  // ---- Judge health card --------------------------------------------------
+  document.getElementById("qe-health-reload")?.addEventListener("click", () => loadQualityHealth());
+
+  async function loadQualityHealth() {
+    const card = document.getElementById("qe-health-card");
+    if (!card) return;
+    try {
+      const h = await api("/v1/quality/health");
+      card.hidden = false;
+      const last24 = h.last_24h || {};
+      const ok = h.enabled && h.api_key_configured && (last24.success_rate == null || last24.success_rate >= 0.9);
+      const noKey = h.enabled && !h.api_key_configured;
+      const disabled = !h.enabled;
+      let statusLabel = "● healthy";
+      let level = "ok";
+      if (disabled) { statusLabel = "○ disabled"; level = "warn"; }
+      else if (noKey) { statusLabel = "✗ no API key"; level = "bad"; }
+      else if (last24.success_rate != null && last24.success_rate < 0.9) {
+        statusLabel = `! ${(last24.success_rate * 100).toFixed(0)}% success`;
+        level = "warn";
+      }
+      const pill = document.getElementById("qe-health-status");
+      pill.textContent = statusLabel;
+      pill.dataset.level = level;
+      document.getElementById("qe-health-judge").textContent =
+        (h.judge_provider || "?") + "/" + (h.judge_model || "?");
+      document.getElementById("qe-health-rate").textContent =
+        ((h.sample_rate || 0) * 100).toFixed(0) + "%";
+      document.getElementById("qe-health-attempts").textContent = (last24.attempts || 0).toLocaleString();
+      document.getElementById("qe-health-success").textContent =
+        last24.success_rate != null ? (last24.success_rate * 100).toFixed(0) + "%" : "—";
+      document.getElementById("qe-health-latency").textContent =
+        last24.avg_latency_ms != null ? last24.avg_latency_ms + "ms" : "—";
+      document.getElementById("qe-health-spend").textContent =
+        "$" + Number(h.spend_today_usd || 0).toFixed(4);
+      document.getElementById("qe-health-cap").textContent =
+        "$" + Number(h.daily_cost_cap_usd || 0).toFixed(2);
+      document.getElementById("qe-health-total").textContent =
+        (h.total_evaluations_ever || 0).toLocaleString();
+    } catch (_e) {
+      card.hidden = true;
+    }
+  }
+
+  // ---- Anti-pattern leaderboard ------------------------------------------
+  document.getElementById("qe-anti-reload")?.addEventListener("click", () => loadAntiPatterns());
+  document.getElementById("qe-anti-copy")?.addEventListener("click", () => copyAntiPatternsMarkdown());
+
+  let _antiPatternsCache = null;
+
+  async function loadAntiPatterns() {
+    const list = document.getElementById("qe-anti-list");
+    if (!list) return;
+    list.innerHTML = '<p class="hint">loading…</p>';
+    try {
+      const data = await api("/v1/quality/anti-patterns?days=30");
+      _antiPatternsCache = data;
+      if (!data.items || !data.items.length) {
+        list.innerHTML = '<p class="hint">No anti-patterns yet — once you have ~50 quality evals across a few prompts, patterns will start to surface here.</p>';
+        return;
+      }
+      list.innerHTML = data.items.slice(0, 20).map((it, idx) => {
+        const score = it.avg_completion != null ? it.avg_completion.toFixed(1) : "—";
+        const sev = (it.avg_completion != null && it.avg_completion < 2.0) ? "bad"
+                  : (it.avg_completion != null && it.avg_completion < 3.0) ? "warn"
+                  : "neutral";
+        const rewrite = (it.sample_rewrites && it.sample_rewrites[0]) || null;
+        const promptEx = (it.sample_prompts && it.sample_prompts[0]) || "";
+        const modelTags = (it.sample_models || []).slice(0, 2)
+          .map(m => `<span class="qe-anti-model">${esc(m)}</span>`).join("");
+        return `
+          <details class="qe-anti-item qe-anti-${sev}">
+            <summary>
+              <span class="qe-anti-rank">${idx + 1}</span>
+              <span class="qe-anti-count">${it.occurrences}×</span>
+              <span class="qe-anti-pattern">${esc(it.anti_pattern)}</span>
+              <span class="qe-anti-score">avg ${score}/5</span>
+            </summary>
+            <div class="qe-anti-body">
+              <div class="qe-anti-models">seen with: ${modelTags}</div>
+              ${promptEx ? `
+                <div class="qe-anti-section">
+                  <div class="qe-anti-label">Example prompt</div>
+                  <div class="qe-anti-text qe-anti-prompt">${esc(promptEx)}</div>
+                </div>` : ""}
+              ${rewrite ? `
+                <div class="qe-anti-section">
+                  <div class="qe-anti-label">Suggested rewrite</div>
+                  <div class="qe-anti-text qe-anti-rewrite">${esc(rewrite)}</div>
+                  <button class="ghost qe-anti-copy-btn" data-text="${esc(rewrite)}">📋 copy</button>
+                </div>` : ""}
+            </div>
+          </details>`;
+      }).join("");
+      // Wire per-item copy buttons.
+      list.querySelectorAll(".qe-anti-copy-btn").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          try { await navigator.clipboard.writeText(btn.dataset.text || ""); } catch (_e) {}
+          const t = btn.textContent;
+          btn.textContent = "✓ copied";
+          setTimeout(() => { btn.textContent = t; }, 1200);
+        });
+      });
+    } catch (e) {
+      list.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  function copyAntiPatternsMarkdown() {
+    if (!_antiPatternsCache || !_antiPatternsCache.items) return;
+    const items = _antiPatternsCache.items.slice(0, 15);
+    const lines = [
+      "# Prompt Anti-Patterns",
+      "",
+      `*Aggregated from ${_antiPatternsCache.window_days} days of LLM call evaluations · NautGate Quality Eval*`,
+      "",
+      "| # | Frequency | Avg score | Anti-pattern | Suggested rewrite |",
+      "|---:|---:|---:|---|---|",
+    ];
+    items.forEach((it, idx) => {
+      const score = it.avg_completion != null ? it.avg_completion.toFixed(1) : "—";
+      const rewrite = (it.sample_rewrites && it.sample_rewrites[0])
+        ? it.sample_rewrites[0].replace(/\|/g, "\\|").slice(0, 200)
+        : "—";
+      const pat = it.anti_pattern.replace(/\|/g, "\\|");
+      lines.push(`| ${idx + 1} | ${it.occurrences}× | ${score}/5 | ${pat} | ${rewrite} |`);
+    });
+    const md = lines.join("\n");
+    navigator.clipboard.writeText(md).then(() => {
+      const b = document.getElementById("qe-anti-copy");
+      const t = b.textContent;
+      b.textContent = "✓ copied";
+      setTimeout(() => { b.textContent = t; }, 1500);
+    });
+  }
+
+  // ---- Per-agent, per-session, edge-graph views -------------------------
+  document.getElementById("qe-byagent-reload")?.addEventListener("click", () => loadAntiPatternsByAgent());
+  document.getElementById("qe-bysession-reload")?.addEventListener("click", () => loadAntiPatternsBySession());
+  document.getElementById("qe-edges-reload")?.addEventListener("click", () => loadDelegationEdges());
+
+  async function loadAntiPatternsByAgent() {
+    const list = document.getElementById("qe-byagent-list");
+    if (!list) return;
+    list.innerHTML = '<p class="hint">loading…</p>';
+    try {
+      const d = await api("/v1/quality/anti-patterns-by-agent?days=30");
+      if (!d.items || !d.items.length) {
+        list.innerHTML = '<p class="hint">No per-agent data yet.</p>';
+        return;
+      }
+      list.innerHTML = d.items.map((it) => {
+        const sev = (it.avg_completion != null && it.avg_completion < 2.0) ? "bad"
+                  : (it.avg_completion != null && it.avg_completion < 3.0) ? "warn"
+                  : "neutral";
+        const score = it.avg_completion != null ? it.avg_completion.toFixed(1) : "—";
+        const topRows = (it.top_patterns || []).map(p =>
+          `<div class="qe-agent-pattern-row">
+             <span class="qe-agent-pattern-count">${p.count}×</span>
+             <span class="qe-agent-pattern-name">${esc(p.pattern)}</span>
+           </div>`).join("");
+        return `
+          <details class="qe-byagent-item qe-anti-${sev}">
+            <summary>
+              <span class="qe-agent-id"><code>${esc(it.agent_id)}</code></span>
+              <span class="qe-agent-total">${it.total_anti_patterns}× total</span>
+              <span class="qe-agent-score">avg ${score}/5</span>
+            </summary>
+            <div class="qe-anti-body">${topRows}</div>
+          </details>`;
+      }).join("");
+    } catch (e) {
+      list.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  async function loadAntiPatternsBySession() {
+    const list = document.getElementById("qe-bysession-list");
+    if (!list) return;
+    list.innerHTML = '<p class="hint">loading…</p>';
+    try {
+      const d = await api("/v1/quality/anti-patterns-by-session?days=30&min_calls=5");
+      if (!d.items || !d.items.length) {
+        list.innerHTML = '<p class="hint">No sessions with ≥5 anti-patterns yet.</p>';
+        return;
+      }
+      list.innerHTML = `
+        <table class="qe-session-table">
+          <thead><tr>
+            <th>session</th><th>agent</th><th>anti-patterns</th>
+            <th>avg score</th><th>top pattern</th><th>span</th>
+          </tr></thead>
+          <tbody>
+            ${d.items.map(it => {
+              const sev = (it.avg_completion != null && it.avg_completion < 2.0) ? "bad"
+                        : (it.avg_completion != null && it.avg_completion < 3.0) ? "warn"
+                        : "neutral";
+              const score = it.avg_completion != null ? it.avg_completion.toFixed(1) : "—";
+              const top = (it.top_patterns && it.top_patterns[0])
+                ? `${it.top_patterns[0].count}× ${esc(it.top_patterns[0].pattern)}` : "—";
+              const span = (it.first_seen && it.last_seen)
+                ? `${tsShort(it.first_seen)} → ${tsShort(it.last_seen)}` : "—";
+              return `
+                <tr class="qe-session-row qe-anti-${sev}">
+                  <td><code>${esc((it.session_id || "").slice(0, 16))}</code></td>
+                  <td>${esc(it.agent_id || "—")}</td>
+                  <td><b>${it.anti_pattern_count}</b></td>
+                  <td>${score}/5</td>
+                  <td>${top}</td>
+                  <td class="hint">${span}</td>
+                </tr>`;
+            }).join("")}
+          </tbody>
+        </table>`;
+    } catch (e) {
+      list.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  async function loadDelegationEdges() {
+    const list = document.getElementById("qe-edges-list");
+    if (!list) return;
+    list.innerHTML = '<p class="hint">loading…</p>';
+    try {
+      const d = await api("/v1/quality/delegation-edges?days=30");
+      if (!d.edges || !d.edges.length) {
+        list.innerHTML = '<p class="hint">No delegation calls detected (looks for coms_send / Task / dispatch tool calls in your audit log).</p>';
+        return;
+      }
+      list.innerHTML = `
+        <table class="qe-edges-table">
+          <thead><tr>
+            <th>master</th><th></th><th>sub-agent</th><th>calls</th>
+            <th>avg score</th><th>failure rate</th><th>top issue</th>
+          </tr></thead>
+          <tbody>
+            ${d.edges.map(e => {
+              const fr = e.failure_rate;
+              const sev = (fr != null && fr > 0.5) ? "bad"
+                        : (fr != null && fr > 0.25) ? "warn"
+                        : "neutral";
+              const score = e.avg_completion != null ? e.avg_completion.toFixed(1) : "—";
+              const frStr = fr != null ? (fr * 100).toFixed(0) + "%" : "—";
+              const top = (e.top_anti_patterns && e.top_anti_patterns[0])
+                ? `${e.top_anti_patterns[0].count}× ${esc(e.top_anti_patterns[0].pattern)}` : "—";
+              return `
+                <tr class="qe-edges-row qe-anti-${sev}">
+                  <td><code>${esc(e.source)}</code></td>
+                  <td class="qe-edge-arrow">→</td>
+                  <td><code>${esc(e.target)}</code></td>
+                  <td><b>${e.calls}</b></td>
+                  <td>${score}/5</td>
+                  <td><b class="qe-edge-failure">${frStr}</b></td>
+                  <td>${top}</td>
+                </tr>`;
+            }).join("")}
+          </tbody>
+        </table>`;
+    } catch (e) {
+      list.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
   async function loadQuality() {
+    // Health + anti-patterns load independently of the summary.
+    loadQualityHealth();
+    loadAntiPatterns();
+    loadAntiPatternsByAgent();
+    loadAntiPatternsBySession();
+    loadDelegationEdges();
     try {
       const qs = `?hours=${qualityWindow.hours}` +
         (qualityModelFilter && qualityModelFilter !== "*" ? `&model=${encodeURIComponent(qualityModelFilter)}` : "");

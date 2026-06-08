@@ -225,6 +225,55 @@
         </span>
       </h2>
       <p class="hint">Post-hoc evaluations from the configured judge model. Anomalies (empty responses, errors, disconnects, high bloat) are always evaluated; everything else is sampled at the rate set in <a href="#settings" data-tab="settings">Settings</a>. Each call's eval is visible in the <a href="#audit" data-tab="audit">Audit Log</a> drawer under "Coach".</p>
+
+      <!-- Judge health card — shows whether the judge is alive, recent
+           success rate, daily spend vs cap, sample rate, etc. -->
+      <div class="qe-health-card" id="qe-health-card" hidden>
+        <div class="qe-health-row">
+          <span class="qe-health-pill" id="qe-health-status">—</span>
+          <span class="qe-health-meta">
+            <span id="qe-health-judge">—</span> ·
+            sample rate <span id="qe-health-rate">—</span>
+          </span>
+          <span class="qe-health-stats">
+            <span class="qe-health-stat"><b id="qe-health-attempts">—</b> attempts (24h)</span>
+            <span class="qe-health-stat"><b id="qe-health-success">—</b> success</span>
+            <span class="qe-health-stat"><b id="qe-health-latency">—</b> avg latency</span>
+            <span class="qe-health-stat"><b id="qe-health-spend">—</b> today / <span id="qe-health-cap">—</span> cap</span>
+            <span class="qe-health-stat"><b id="qe-health-total">—</b> total ever</span>
+          </span>
+          <button class="reload" id="qe-health-reload" title="reload">↻</button>
+        </div>
+      </div>
+
+      <!-- Anti-pattern leaderboard: "what NOT to say to your LLM".
+           Aggregated from quality_evals.anti_pattern; shows prompt the
+           user sent + the judge's concrete rewrite. -->
+      <h3>Prompt Anti-Patterns — what not to say to your LLM
+        <button class="reload" id="qe-anti-reload" title="reload">↻</button>
+        <button class="dr-report-btn" id="qe-anti-copy" title="Copy markdown of these anti-patterns to clipboard">📋 copy markdown</button>
+      </h3>
+      <p class="hint">Recurring patterns the judge identified in YOUR prompts. Each row aggregates many calls with the same underlying mistake — sorted by frequency, worst-scoring first. The rewrite is the judge's concrete suggestion for what to send instead.</p>
+      <div class="qe-anti-list" id="qe-anti-list"></div>
+
+      <h3>Per-Agent breakdown
+        <button class="reload" id="qe-byagent-reload" title="reload">↻</button>
+      </h3>
+      <p class="hint">Which agent (or master agent in your workflow) is producing the most underspecified prompts. Fix one master agent's system prompt → cascades to all its sub-agent calls.</p>
+      <div class="qe-byagent-list" id="qe-byagent-list"></div>
+
+      <h3>Per-Session breakdown
+        <button class="reload" id="qe-bysession-reload" title="reload">↻</button>
+      </h3>
+      <p class="hint">Sessions ranked by anti-pattern density. Loop pathologies surface here — one session sending dozens of vague prompts is a runaway agent loop, not normal usage.</p>
+      <div class="qe-bysession-list" id="qe-bysession-list"></div>
+
+      <h3>Master → Sub-agent Delegation Graph
+        <button class="reload" id="qe-edges-reload" title="reload">↻</button>
+      </h3>
+      <p class="hint">When one agent dispatches work to another (via <code>coms_send</code>, <code>Task</code>, <code>dispatch</code>, etc.), this captures the edge. Failure rate = % of those calls scored &lt; 3/5 by the judge. The edge with the worst failure rate is where to focus the next system-prompt edit.</p>
+      <div class="qe-edges-list" id="qe-edges-list"></div>
+
       <div class="grid">
         <div class="card"><div class="metric" id="q-total">—</div><div class="label">evaluations</div></div>
         <div class="card"><div class="metric" id="q-completion">—</div><div class="label">avg task completion (0-5)</div></div>

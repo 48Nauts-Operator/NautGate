@@ -349,6 +349,26 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         actual_model=meta.get("actual_model") or requested_model,
                         actual_provider="anthropic-oauth",
                     )
+                    # Quality eval — same fire-and-forget pattern as the
+                    # main routing path. Captures Claude Code's actual prompts
+                    # so the anti-pattern leaderboard sees real usage, not
+                    # just whatever Pi sends through openrouter.
+                    try:
+                        from app.quality_eval import (
+                            process_quality as _process_quality,
+                        )
+                        await _process_quality(
+                            pool,
+                            decision_id=decision_id,
+                            judge_client=getattr(
+                                request.app.state, "quality_judge", None,
+                            ),
+                            pricing=pricing,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "anthropic_oauth_quality_failed", error=str(exc),
+                        )
                 except Exception as exc:
                     log.warning("anthropic_oauth_outcome_failed", error=str(exc))
 

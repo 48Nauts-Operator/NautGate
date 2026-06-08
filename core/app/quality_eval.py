@@ -46,8 +46,9 @@ You always respond with valid JSON matching this exact schema. Do not include an
   "task_completion":      0-5,   // Did the model actually do the task? 5 = complete + correct, 3 = partial, 0 = nothing useful produced.
   "reasoning_efficiency": 0-5,   // Was the reasoning proportional to the task? 5 = tight, 3 = some bloat, 0 = thought forever then produced little.
   "prompt_clarity":       0-5,   // Was the user's prompt clear enough? 5 = unambiguous, 3 = needed inference, 0 = vague/missing context.
-  "failure_tags":         [...], // Zero or more of: "looped", "hallucination", "off_task", "over_thinking", "under_thinking", "refusal", "partial_answer", "wrong_answer", "tool_misuse", "truncated". Empty array if the response was good.
-  "suggested_prompt":     "...", // If prompt_clarity < 4, propose a rewritten prompt that would have unblocked the model. ≤200 chars. Empty string if the prompt was fine.
+  "failure_tags":         [...], // Zero or more of: "looped", "hallucination", "off_task", "over_thinking", "under_thinking", "refusal", "partial_answer", "wrong_answer", "tool_misuse", "truncated", "multi_task_drop", "vague_scope". Empty array if the response was good.
+  "anti_pattern":         "...", // What the user did WRONG in their prompt that caused this response, in ≤80 chars. Examples: "Asked for 3 things in one prompt without ordering", "Used 'check' without saying what to verify", "No success criteria provided". Empty string when the prompt was good and the model failed on its own.
+  "suggested_prompt":     "...", // A concrete rewritten prompt the user SHOULD have sent. ≤300 chars. MANDATORY when task_completion < 4 OR prompt_clarity < 4 — produce a real rewrite, not "be clearer". Empty string ONLY when both scores are ≥ 4 (i.e. the prompt was fine).
   "coach_notes":          "..."  // 1-2 sentences explaining the scores. Be specific about what the model did or failed to do.
 }
 
@@ -57,7 +58,12 @@ Scoring guidance:
 - Use "looped" when the response restates the question, repeats itself, or stalls.
 - Use "off_task" when the response addresses something other than what was asked.
 - Use "hallucination" when the response asserts something demonstrably wrong about the code/API/tool/context provided.
-- "suggested_prompt" should be concrete and actionable, not generic advice like "be clearer". Example: "Refactor only the auth() function in src/auth.py — keep the public signature, split internal logic into 3 helpers."
+- Use "multi_task_drop" when the user asked for N things and the model did <N — partial execution on multi-task prompts is the most common failure mode.
+- Use "vague_scope" when the user asked something open-ended ("review this", "check this") without saying what specifically to look at.
+
+suggested_prompt MUST be concrete and actionable. Bad: "Be more specific". Good: "Refactor only the auth() function in src/auth.py — keep the public signature, split internal logic into 3 helpers (parse, validate, persist). Return the diff only." If you can't think of a real rewrite, then `prompt_clarity` should be ≥ 4 and you can leave it empty.
+
+anti_pattern should describe the SHAPE of the user's mistake in one short phrase, suitable for aggregating across many evals to find recurring habits. Match an existing pattern phrasing when one fits.
 
 If the response is empty or the request errored, score everything 0 and add the appropriate failure_tag (e.g. "refusal" if the model declined, "truncated" if the response was cut off mid-sentence).
 
@@ -305,6 +311,7 @@ async def _persist(
     }
     suggested = rubric.get("suggested_prompt") if isinstance(rubric, dict) else None
     notes = rubric.get("coach_notes") if isinstance(rubric, dict) else None
+    anti = rubric.get("anti_pattern") if isinstance(rubric, dict) else None
     await queries.insert_quality_eval(
         pool,
         decision_id=decision_id,
@@ -317,6 +324,7 @@ async def _persist(
         suggested_prompt=(suggested or None) if isinstance(suggested, str) else None,
         coach_notes=(notes or None) if isinstance(notes, str) else None,
         trigger=trigger,
+        anti_pattern=(anti or None) if isinstance(anti, str) else None,
     )
 
 

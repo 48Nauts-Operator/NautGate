@@ -931,6 +931,195 @@ table.clickable tbody tr { cursor: pointer; }
   border-color: rgba(194, 65, 12, 0.30);
 }
 
+/* --- Quality eval: Judge health card + Anti-patterns ----------------- */
+.qe-health-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 12px 0 16px;
+  font-size: 12px;
+}
+.qe-health-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.qe-health-pill {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.qe-health-pill[data-level="ok"]   { background: rgba(76,175,80,0.12); color: #4caf50; border: 1px solid rgba(76,175,80,0.35); }
+.qe-health-pill[data-level="warn"] { background: rgba(240,177,50,0.12); color: #f0b132; border: 1px solid rgba(240,177,50,0.35); }
+.qe-health-pill[data-level="bad"]  { background: rgba(255,92,92,0.12); color: #ff5c5c; border: 1px solid rgba(255,92,92,0.35); }
+.qe-health-meta { color: var(--text-dim); }
+.qe-health-stats {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.qe-health-stat { color: var(--text-dim); }
+.qe-health-stat b { color: var(--text); font-weight: 500; }
+
+.qe-anti-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.qe-anti-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-dim);
+  border-radius: 4px;
+  padding: 0;
+}
+.qe-anti-item.qe-anti-bad  { border-left-color: #ff5c5c; }
+.qe-anti-item.qe-anti-warn { border-left-color: #f0b132; }
+.qe-anti-item summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+}
+.qe-anti-item summary::-webkit-details-marker { display: none; }
+.qe-anti-rank {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  min-width: 22px;
+}
+.qe-anti-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 50px;
+  color: var(--accent);
+}
+.qe-anti-pattern { flex: 1; color: var(--text); }
+.qe-anti-score {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.qe-anti-body {
+  padding: 8px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+.qe-anti-models {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.qe-anti-model {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  margin-right: 4px;
+}
+.qe-anti-section { margin-top: 8px; }
+.qe-anti-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+.qe-anti-text {
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: 4px;
+}
+.qe-anti-prompt {
+  background: rgba(255,92,92,0.05);
+  border: 1px solid rgba(255,92,92,0.2);
+  color: #e8e8e8;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+}
+.qe-anti-rewrite {
+  background: rgba(76,175,80,0.05);
+  border: 1px solid rgba(76,175,80,0.2);
+  color: #e8e8e8;
+}
+.qe-anti-copy-btn {
+  margin-top: 6px;
+  font-size: 11px;
+  padding: 3px 10px;
+}
+
+/* --- Per-agent / per-session / edge graph ---------------------------- */
+.qe-byagent-list, .qe-bysession-list, .qe-edges-list { margin-top: 8px; }
+.qe-byagent-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-dim);
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+.qe-byagent-item.qe-anti-bad  { border-left-color: #ff5c5c; }
+.qe-byagent-item.qe-anti-warn { border-left-color: #f0b132; }
+.qe-byagent-item summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.qe-byagent-item summary::-webkit-details-marker { display: none; }
+.qe-agent-id code { font-size: 13px; }
+.qe-agent-total { font-weight: 600; color: var(--accent); }
+.qe-agent-score { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+.qe-agent-pattern-row {
+  display: flex;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 13px;
+}
+.qe-agent-pattern-row:last-child { border-bottom: none; }
+.qe-agent-pattern-count {
+  min-width: 40px;
+  font-weight: 500;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.qe-session-table, .qe-edges-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 6px;
+}
+.qe-session-table th, .qe-edges-table th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.qe-session-table td, .qe-edges-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.qe-session-row.qe-anti-bad  td:nth-child(3), .qe-edges-row.qe-anti-bad  td:nth-child(6) { color: #ff5c5c; }
+.qe-session-row.qe-anti-warn td:nth-child(3), .qe-edges-row.qe-anti-warn td:nth-child(6) { color: #f0b132; }
+.qe-edge-arrow { color: var(--text-dim); font-weight: 700; }
+.qe-edge-failure { font-variant-numeric: tabular-nums; }
+
 /* --- Drift report (modal) -------------------------------------------- */
 .dr-report-btn {
   margin-left: 8px;

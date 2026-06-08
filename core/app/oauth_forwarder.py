@@ -199,6 +199,24 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         actual_provider="chatgpt-oauth",
                         actual_model="codex-subscription",
                     )
+                    # Quality eval — captures Codex prompts so the anti-pattern
+                    # leaderboard sees them. Fire-and-forget; never blocks.
+                    try:
+                        from app.quality_eval import (
+                            process_quality as _process_quality,
+                        )
+                        await _process_quality(
+                            pool,
+                            decision_id=decision_id,
+                            judge_client=getattr(
+                                request.app.state, "quality_judge", None,
+                            ),
+                            pricing=getattr(
+                                request.app.state, "pricing", None,
+                            ),
+                        )
+                    except Exception as exc:
+                        log.warning("oauth_quality_failed", error=str(exc))
                 except Exception as exc:
                     log.warning("oauth_outcome_persist_failed", error=str(exc))
 

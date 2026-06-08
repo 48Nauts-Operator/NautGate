@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -1533,6 +1534,606 @@ async def quality_models(request: Request) -> Response:
         "base_url": base_url,
         "model_count": len(out),
         "models": out,
+    })
+
+
+@router.get("/quality/health")
+async def quality_health(request: Request) -> Response:
+    """Judge health snapshot — succeeded vs failed evaluations, avg latency,
+    spend today vs daily cap, last error. Surfaced at the top of the Quality
+    tab so the operator can see at a glance whether the judge is alive.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    from app.app_config import quality_eval_config
+    cfg = await quality_eval_config(pool)
+
+    async with pool.acquire() as conn:
+        # 24h activity from the evals table itself.
+        row24 = await conn.fetchrow(
+            """
+            SELECT COUNT(*)                                                 AS attempts,
+                   SUM(CASE WHEN rubric IS NOT NULL THEN 1 ELSE 0 END)::int AS succeeded,
+                   AVG(judge_latency_ms)::int                              AS avg_latency_ms,
+                   MAX(ts)                                                  AS last_eval_at
+              FROM nautgate.quality_evals
+             WHERE ts > NOW() - INTERVAL '24 hours'
+            """,
+        )
+        # Today's spend (UTC day, matches the cap window).
+        spend_today_row = await conn.fetchrow(
+            "SELECT COALESCE(SUM(judge_cost_usd), 0)::FLOAT AS s "
+            "FROM nautgate.quality_evals WHERE date(ts) = current_date",
+        )
+        # Distribution by trigger so operator sees where evals are coming from.
+        by_trigger = await conn.fetch(
+            """
+            SELECT trigger, COUNT(*) AS n
+              FROM nautgate.quality_evals
+             WHERE ts > NOW() - INTERVAL '7 days'
+             GROUP BY trigger
+             ORDER BY n DESC
+            """,
+        )
+        total_evals_row = await conn.fetchrow(
+            "SELECT COUNT(*) AS n FROM nautgate.quality_evals",
+        )
+
+    attempts = int((row24 or {}).get("attempts") or 0)
+    succeeded = int((row24 or {}).get("succeeded") or 0)
+    success_rate = (succeeded / attempts) if attempts else None
+    spend_today = float((spend_today_row or {}).get("s") or 0.0)
+    cap = float(cfg.get("daily_cost_cap_usd") or 0.0)
+
+    return JSONResponse({
+        "enabled": bool(cfg.get("enabled", True)),
+        "judge_provider": cfg.get("judge_provider"),
+        "judge_model": cfg.get("judge_model"),
+        "judge_base_url": cfg.get("judge_base_url"),
+        "api_key_configured": bool(cfg.get("api_key")),
+        "sample_rate": float(cfg.get("sample_rate") or 0.0),
+        "daily_cost_cap_usd": cap,
+        "spend_today_usd": spend_today,
+        "spend_today_pct_of_cap": (spend_today / cap * 100.0) if cap > 0 else None,
+        "last_24h": {
+            "attempts": attempts,
+            "succeeded": succeeded,
+            "failed": attempts - succeeded,
+            "success_rate": success_rate,
+            "avg_latency_ms": (row24 or {}).get("avg_latency_ms"),
+            "last_eval_at": (row24 or {}).get("last_eval_at").isoformat()
+                if (row24 or {}).get("last_eval_at") else None,
+        },
+        "by_trigger_7d": [{"trigger": r["trigger"], "n": int(r["n"])} for r in by_trigger],
+        "total_evaluations_ever": int((total_evals_row or {}).get("n") or 0),
+    })
+
+
+# Rule-based clustering of raw anti_pattern strings into canonical buckets.
+# The judge emits free-form one-phrase descriptions; many of them are
+# variants of the same underlying mistake ("Misunderstood the task context",
+# "Misunderstood the request requirements", "Misunderstood the focus").
+# Rather than embedding-clustering live, we use keyword heuristics that the
+# operator can edit. Each cluster has a list of trigger keywords; first
+# match wins. Unmatched patterns stay visible under "Other (raw)".
+#
+# Order matters: more-specific clusters MUST come before more-general ones.
+
+_ANTI_PATTERN_CLUSTERS: list[tuple[str, list[str]]] = [
+    (
+        "Multi-task prompt — model executed part, dropped the rest",
+        ["multi_task", "multiple things", "asked for n ", "three things",
+         "two things", "first part but", "did one but", "partial execution"],
+    ),
+    (
+        'Vague scope — said "check"/"review" without saying what to inspect',
+        ["vague request", "without specifics", "without specifying",
+         "without details", "no clear scope", "no specific scope",
+         "without explicit"],
+    ),
+    (
+        "No specific task or action requested — open-ended ask",
+        ["no specific task", "no specific action", "no clear task",
+         "no clear action", "unspecified task", "open-ended"],
+    ),
+    (
+        "Prompt missing explicit requirements / success criteria",
+        ["misunderstood the task", "misunderstood the request",
+         "misunderstood the specific", "misinterpreted the task",
+         "misunderstood the focus", "misunderstood the requirements",
+         "misunderstood the update", "misunderstood the verification",
+         "missing requirements", "no success criteria"],
+    ),
+    (
+        "Off-topic response — model addressed a different subject",
+        ["unrelated information", "different topic", "wrong topic",
+         "off-topic", "off topic", "different subject",
+         "responded to a different", "addressed unrelated"],
+    ),
+    (
+        "Verification request without acceptance criteria",
+        ["verification without", "verify without", "without defining",
+         "no acceptance criteria"],
+    ),
+    (
+        "Build / implementation request without spec",
+        ["build without", "without specifying details", "without spec",
+         "asked for a build", "asked for implementation"],
+    ),
+    (
+        "News / summary request without specifying source",
+        ["news without", "summary without source", "without specifying source",
+         "current news without"],
+    ),
+]
+
+
+def _cluster_anti_pattern(raw: str | None) -> str:
+    if not raw:
+        return "Other (unspecified)"
+    low = raw.lower()
+    for canonical, keywords in _ANTI_PATTERN_CLUSTERS:
+        for kw in keywords:
+            if kw in low:
+                return canonical
+    return f"Other: {raw[:60]}"
+
+
+# Tool/function names that indicate one agent delegating work to another.
+# When a prompt or response contains a tool_call with one of these names,
+# we treat it as evidence of a master → sub-agent edge for the graph.
+_DELEGATION_TOOL_NAMES = (
+    "coms_send", "comms_send", "Task", "task",
+    "dispatch", "delegate", "subagent", "sub_agent",
+    "agent_dispatch", "agent_call", "spawn_agent",
+    "Agent", "query_experts", "ask_user_question",
+)
+
+
+_TARGET_KEYS_RE = re.compile(
+    r'"(target|agent|expert|subagent_type|to|agent_id|recipient)"'
+    r'\s*:\s*"([^"\\]{1,60})"'
+)
+
+
+def _extract_targets_regex_fallback(args_str: str) -> list[str]:
+    """When the tool-call ``arguments`` string is truncated mid-JSON (we cap
+    at 200 bytes for storage), the structured parser fails. Fall back to a
+    regex that scans for the first key/value pair we care about — works even
+    when the rest of the JSON is missing.
+    """
+    out: list[str] = []
+    for m in _TARGET_KEYS_RE.finditer(args_str):
+        val = m.group(2).strip()
+        if val:
+            out.append(val[:60])
+    return out
+
+
+def _extract_targets(tool_calls: list) -> list[str]:
+    """Return every delegation target found in this list of tool calls.
+
+    Handles three storage cases:
+      1. ``arguments`` is a fully-valid JSON string  → parse it
+      2. ``arguments`` is truncated JSON             → regex-scan the prefix
+      3. ``arguments`` is already a dict             → use directly
+
+    Different agent stacks use different shapes:
+      - Pi:        ``subagent {"agent": "discovery-scout"}`` or chain form
+                   ``subagent {"chain": [{"agent": "scout"}, …]}``
+      - Pi:        ``coms_send {"target": "documenter"}``
+      - Pi:        ``query_experts {"queries": [{"expert": "config-expert"}, …]}``
+      - Claude:    ``Agent {"subagent_type": "code-reviewer"}`` or
+                   ``Agent {"description": "Plan SecretManager"}``
+    """
+    if not tool_calls:
+        return []
+    import json as _json
+    out: list[str] = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        name = (tc.get("name") or "").strip()
+        if name not in _DELEGATION_TOOL_NAMES:
+            continue
+        raw_args = tc.get("arguments")
+        args: dict | None = None
+        if isinstance(raw_args, str):
+            try:
+                args = _json.loads(raw_args)
+            except (ValueError, TypeError):
+                # Truncated JSON — fall back to regex.
+                out.extend(_extract_targets_regex_fallback(raw_args))
+                args = None
+        elif isinstance(raw_args, dict):
+            args = raw_args
+
+        if args is not None:
+            # Direct single-target keys.
+            for key in ("target", "subagent_type", "agent", "to",
+                        "agent_id", "recipient"):
+                v = args.get(key)
+                if isinstance(v, str) and v.strip():
+                    out.append(v.strip()[:60])
+
+            # Chain form: subagent {"chain": [{"agent": "X"}, …]}.
+            chain = args.get("chain")
+            if isinstance(chain, list):
+                for step in chain:
+                    if isinstance(step, dict):
+                        a = step.get("agent")
+                        if isinstance(a, str) and a.strip():
+                            out.append(a.strip()[:60])
+
+            # Multi-expert form: query_experts {"queries": [{"expert": "X"}, …]}.
+            queries = args.get("queries")
+            if isinstance(queries, list):
+                for q in queries:
+                    if isinstance(q, dict):
+                        e = q.get("expert") or q.get("agent")
+                        if isinstance(e, str) and e.strip():
+                            out.append(e.strip()[:60])
+
+            # Claude's Task tool with a description but no subagent_type — use
+            # a short identifier from the description so we can still graph it.
+            if name in ("Agent", "Task") and not args.get("subagent_type"):
+                desc = args.get("description")
+                if isinstance(desc, str) and desc.strip():
+                    short = "-".join(desc.lower().split()[:3])[:40]
+                    if short:
+                        out.append(f"task:{short}")
+
+    return out
+
+
+def _extract_target_agent(tool_calls: list) -> str | None:
+    """Single-target compat wrapper for older callers."""
+    targets = _extract_targets(tool_calls)
+    return targets[0] if targets else None
+
+
+@router.get("/quality/anti-patterns-by-agent")
+async def quality_anti_patterns_by_agent(request: Request) -> Response:
+    """Per-agent anti-pattern leaderboard. For each agent_id, show its top
+    clustered patterns. Answers "which master agent is sending the most
+    vague-scope delegations?"
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        days = 30
+    days = max(1, min(days, 365))
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT q.anti_pattern, q.ts,
+                   d.agent_id,
+                   (q.rubric->>'task_completion')::numeric AS completion
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE q.anti_pattern IS NOT NULL
+               AND q.anti_pattern <> ''
+               AND q.ts > NOW() - make_interval(days => $1)
+            """,
+            days,
+        )
+
+    # agent_id → {canonical_cluster → count, completions [...]}
+    per_agent: dict[str, dict] = {}
+    for r in rows:
+        agent = r["agent_id"] or "(unknown)"
+        cluster = _cluster_anti_pattern(r["anti_pattern"])
+        slot = per_agent.setdefault(agent, {
+            "patterns": {}, "completions": [], "total": 0,
+        })
+        slot["total"] += 1
+        slot["patterns"][cluster] = slot["patterns"].get(cluster, 0) + 1
+        if r["completion"] is not None:
+            slot["completions"].append(float(r["completion"]))
+
+    items: list[dict] = []
+    for agent, slot in per_agent.items():
+        top = sorted(slot["patterns"].items(), key=lambda x: -x[1])[:5]
+        avg = (sum(slot["completions"]) / len(slot["completions"])
+               if slot["completions"] else None)
+        items.append({
+            "agent_id": agent,
+            "total_anti_patterns": slot["total"],
+            "avg_completion": avg,
+            "top_patterns": [{"pattern": p, "count": c} for (p, c) in top],
+        })
+    items.sort(key=lambda x: -x["total_anti_patterns"])
+
+    return JSONResponse({"window_days": days, "items": items[:30]})
+
+
+@router.get("/quality/anti-patterns-by-session")
+async def quality_anti_patterns_by_session(request: Request) -> Response:
+    """Per-session anti-pattern view. Surfaces loop pathologies (one
+    session sending 50 bad prompts) and individual bad runs.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+        min_calls = int(request.query_params.get("min_calls", "5"))
+    except ValueError:
+        days, min_calls = 30, 5
+    days = max(1, min(days, 365))
+    min_calls = max(1, min(min_calls, 100))
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT q.anti_pattern, q.ts,
+                   d.session_id, d.agent_id, d.decision_model,
+                   (q.rubric->>'task_completion')::numeric AS completion
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE q.anti_pattern IS NOT NULL
+               AND q.anti_pattern <> ''
+               AND d.session_id IS NOT NULL
+               AND q.ts > NOW() - make_interval(days => $1)
+            """,
+            days,
+        )
+
+    per_session: dict[str, dict] = {}
+    for r in rows:
+        sid = r["session_id"]
+        slot = per_session.setdefault(sid, {
+            "patterns": {}, "completions": [], "models": set(),
+            "agent_id": r["agent_id"], "first_seen": r["ts"], "last_seen": r["ts"],
+        })
+        cluster = _cluster_anti_pattern(r["anti_pattern"])
+        slot["patterns"][cluster] = slot["patterns"].get(cluster, 0) + 1
+        if r["completion"] is not None:
+            slot["completions"].append(float(r["completion"]))
+        if r["decision_model"]:
+            slot["models"].add(r["decision_model"])
+        if r["ts"] and (slot["first_seen"] is None or r["ts"] < slot["first_seen"]):
+            slot["first_seen"] = r["ts"]
+        if r["ts"] and (slot["last_seen"] is None or r["ts"] > slot["last_seen"]):
+            slot["last_seen"] = r["ts"]
+
+    items: list[dict] = []
+    for sid, slot in per_session.items():
+        total = sum(slot["patterns"].values())
+        if total < min_calls:
+            continue
+        top = sorted(slot["patterns"].items(), key=lambda x: -x[1])[:3]
+        avg = (sum(slot["completions"]) / len(slot["completions"])
+               if slot["completions"] else None)
+        items.append({
+            "session_id": sid,
+            "agent_id": slot["agent_id"],
+            "anti_pattern_count": total,
+            "avg_completion": avg,
+            "first_seen": slot["first_seen"].isoformat() if slot["first_seen"] else None,
+            "last_seen": slot["last_seen"].isoformat() if slot["last_seen"] else None,
+            "models": list(slot["models"])[:3],
+            "top_patterns": [{"pattern": p, "count": c} for (p, c) in top],
+        })
+    items.sort(key=lambda x: -x["anti_pattern_count"])
+
+    return JSONResponse({
+        "window_days": days,
+        "min_calls_threshold": min_calls,
+        "items": items[:30],
+    })
+
+
+@router.get("/quality/delegation-edges")
+async def quality_delegation_edges(request: Request) -> Response:
+    """Master → sub-agent delegation graph. Extracts target agent from
+    tool_calls_made entries where the tool name matches a known delegation
+    pattern (coms_send, Task, dispatch, etc.). Each edge carries call
+    count, average task_completion of the SUB-AGENT side, and recent
+    failure rate — so the operator can see "Pi → reviewer is producing
+    80% partial answers".
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        days = 30
+    days = max(1, min(days, 365))
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT d.id AS decision_id,
+                   d.agent_id,
+                   o.tool_calls_made,
+                   (q.rubric->>'task_completion')::numeric AS completion,
+                   q.anti_pattern
+              FROM nautgate.route_decisions d
+              JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+              LEFT JOIN nautgate.quality_evals q ON q.decision_id = d.id
+             WHERE d.ts > NOW() - make_interval(days => $1)
+               AND o.tool_calls_made IS NOT NULL
+            """,
+            days,
+        )
+
+    import json as _json
+
+    # edge → {count, completion_sum, completion_n, failed (low_score) count}
+    edges: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        source = r["agent_id"] or "(unknown)"
+        raw_tcs = r["tool_calls_made"]
+        if isinstance(raw_tcs, str):
+            try:
+                tcs = _json.loads(raw_tcs)
+            except (ValueError, TypeError):
+                tcs = []
+        elif isinstance(raw_tcs, list):
+            tcs = raw_tcs
+        else:
+            tcs = []
+        targets = _extract_targets(tcs)
+        if not targets:
+            continue
+        for target in targets:
+            key = (source, target)
+            slot = edges.setdefault(key, {
+                "count": 0, "completion_sum": 0.0, "completion_n": 0,
+                "low_score_count": 0, "anti_patterns": {},
+            })
+            slot["count"] += 1
+            if r["completion"] is not None:
+                slot["completion_sum"] += float(r["completion"])
+                slot["completion_n"] += 1
+                if float(r["completion"]) < 3.0:
+                    slot["low_score_count"] += 1
+            if r["anti_pattern"]:
+                canonical = _cluster_anti_pattern(r["anti_pattern"])
+                slot["anti_patterns"][canonical] = slot["anti_patterns"].get(canonical, 0) + 1
+
+    items: list[dict] = []
+    nodes_seen: set[str] = set()
+    for (source, target), slot in edges.items():
+        nodes_seen.add(source)
+        nodes_seen.add(target)
+        avg = (slot["completion_sum"] / slot["completion_n"]
+               if slot["completion_n"] > 0 else None)
+        failure_rate = (slot["low_score_count"] / slot["completion_n"]
+                        if slot["completion_n"] > 0 else None)
+        top_pat = sorted(slot["anti_patterns"].items(), key=lambda x: -x[1])[:2]
+        items.append({
+            "source": source,
+            "target": target,
+            "calls": slot["count"],
+            "avg_completion": avg,
+            "failure_rate": failure_rate,
+            "top_anti_patterns": [
+                {"pattern": p, "count": c} for (p, c) in top_pat
+            ],
+        })
+    items.sort(key=lambda x: -x["calls"])
+
+    return JSONResponse({
+        "window_days": days,
+        "nodes": [{"id": n} for n in sorted(nodes_seen)],
+        "edges": items,
+    })
+
+
+@router.get("/quality/anti-patterns")
+async def quality_anti_patterns(request: Request) -> Response:
+    """Aggregate by clustered ``anti_pattern`` — "what NOT to say to your LLM".
+
+    The judge emits free-form one-phrase descriptions; we cluster them via
+    rule-based heuristics (``_ANTI_PATTERN_CLUSTERS``) so variants like
+    "Misunderstood the task context" and "Misunderstood the requirements"
+    fold into a single canonical bucket the operator can act on.
+
+    Each bucket carries: total occurrences, avg task-completion score, an
+    example prompt, the judge's suggested rewrite, and the 3 most common
+    raw variants the judge actually emitted (so the operator can spot-check
+    the clustering).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        days = 30
+    days = max(1, min(days, 365))
+
+    async with pool.acquire() as conn:
+        # Pull every eval with an anti_pattern in the window. We'll cluster
+        # in Python so the cluster definitions stay in source, not SQL.
+        rows = await conn.fetch(
+            """
+            SELECT q.anti_pattern,
+                   q.decision_id,
+                   q.ts,
+                   q.suggested_prompt,
+                   q.coach_notes,
+                   (q.rubric->>'task_completion')::numeric AS completion,
+                   (q.rubric->>'prompt_clarity')::numeric  AS clarity,
+                   d.prompt_excerpt,
+                   d.decision_model
+              FROM nautgate.quality_evals q
+              JOIN nautgate.route_decisions d ON d.id = q.decision_id
+             WHERE q.anti_pattern IS NOT NULL
+               AND q.anti_pattern <> ''
+               AND q.ts > NOW() - make_interval(days => $1)
+            """,
+            days,
+        )
+
+    # Bucket rows by canonical cluster.
+    buckets: dict[str, list[dict]] = {}
+    raw_variant_counts: dict[str, dict[str, int]] = {}
+    for r in rows:
+        canonical = _cluster_anti_pattern(r["anti_pattern"])
+        buckets.setdefault(canonical, []).append(r)
+        raw_variant_counts.setdefault(canonical, {})
+        raw_variant_counts[canonical][r["anti_pattern"]] = (
+            raw_variant_counts[canonical].get(r["anti_pattern"], 0) + 1
+        )
+
+    items: list[dict] = []
+    for canonical, rs in buckets.items():
+        # Sort within bucket by worst completion first → 3 examples.
+        rs_sorted = sorted(
+            rs,
+            key=lambda x: (
+                float(x["completion"]) if x["completion"] is not None else -1.0,
+                -x["ts"].timestamp() if x["ts"] else 0,
+            ),
+        )
+        examples = rs_sorted[:3]
+        completions = [float(x["completion"]) for x in rs if x["completion"] is not None]
+        clarities  = [float(x["clarity"]) for x in rs if x["clarity"] is not None]
+        # Top 5 raw variants, sorted by frequency.
+        raw_variants = sorted(
+            raw_variant_counts[canonical].items(), key=lambda x: -x[1],
+        )[:5]
+        items.append({
+            "anti_pattern":    canonical,
+            "occurrences":     len(rs),
+            "avg_completion":  sum(completions) / len(completions) if completions else None,
+            "avg_clarity":     sum(clarities) / len(clarities) if clarities else None,
+            "distinct_models": len({x["decision_model"] for x in rs if x["decision_model"]}),
+            "sample_prompts":  [x["prompt_excerpt"] for x in examples if x["prompt_excerpt"]],
+            "sample_rewrites": [x["suggested_prompt"] for x in examples
+                                if x["suggested_prompt"]],
+            "sample_models":   list({x["decision_model"] for x in examples
+                                     if x["decision_model"]})[:3],
+            "sample_coach":    [x["coach_notes"] for x in examples if x["coach_notes"]],
+            "raw_variants":    [{"phrase": p, "count": c} for (p, c) in raw_variants],
+        })
+
+    # Sort by occurrences DESC, then worst completion first.
+    items.sort(
+        key=lambda x: (-x["occurrences"],
+                       x["avg_completion"] if x["avg_completion"] is not None else 99),
+    )
+    items = items[:25]
+
+    return JSONResponse({
+        "window_days": days,
+        "total_patterns": len(items),
+        "items": items,
     })
 
 
