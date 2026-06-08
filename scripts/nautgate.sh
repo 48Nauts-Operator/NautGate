@@ -40,6 +40,19 @@ if [[ "${NAUTGATE_RELOAD:-0}" == "1" ]]; then
 fi
 
 # Default the DB URL to the local docker-compose Postgres. This matches what
+# Load API keys + sidecar config from deploy/.env so things like the
+# quality_eval judge and the behavioral canary suite can reach OpenRouter
+# without the operator having to also export the keys in their shell.
+# `set -a` exports any vars assigned by the sourced file; `set +a` restores
+# normal scoping immediately after. Silent no-op if the file isn't there.
+_NG_DEPLOY_ENV="$(cd "$(dirname "$0")/.." && pwd)/deploy/.env"
+if [[ -f "$_NG_DEPLOY_ENV" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$_NG_DEPLOY_ENV"
+    set +a
+fi
+
 # deploy/docker-compose.yml exposes on 127.0.0.1:5432 (user/pass: nautgate,
 # db: nautgate). Override via env or core/.env if you point at a different DB.
 export NAUTGATE_DB_URL="${NAUTGATE_DB_URL:-postgres://nautgate:nautgate@127.0.0.1:5432/nautgate}"

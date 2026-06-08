@@ -15,6 +15,7 @@
       <a href="#scorecard" data-tab="scorecard">Scorecard</a>
       <a href="#drift" data-tab="drift">Drift</a>
       <a href="#quality" data-tab="quality">Quality</a>
+      <a href="#behavior" data-tab="behavior">Behavior</a>
       <a href="#cost" data-tab="cost">Cost</a>
       <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
@@ -310,6 +311,54 @@
         </tr></thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <!-- Behavior — prompt→action compliance ───────────────────────────────── -->
+    <section id="tab-behavior" class="tab">
+      <h2>Behavior — did the model do what you asked?
+        <span class="window-buttons">
+          <button data-bh-window="24">24h</button>
+          <button data-bh-window="168" class="active">7d</button>
+          <button data-bh-window="720">30d</button>
+        </span>
+      </h2>
+      <p class="hint">Each row aggregates quality_eval rubric scores for one model. <code>action_compliance</code> measures whether the model's tool sequence matched what you asked for; the four rate columns count how often each agentic anti-pattern fired. To pick up "Opus 4.8 is shooting first" or "doesn't read documents", look for high <code>premature_action_rate</code> + low <code>action_compliance</code> on the 4-8 row vs 4-7.</p>
+      <p class="hint">Until you've accumulated ~10 evals on a model after the rubric update, scores show as <code>—</code>. Send a few normal claudeps prompts and reload.</p>
+
+      <h3>Per-model behavioral profile</h3>
+      <table id="behavior-per-model">
+        <thead><tr>
+          <th>model</th>
+          <th>evals</th>
+          <th title="0-5; how well tool sequence matched the user's intent">action compliance</th>
+          <th title="0-5; did the model complete the task">task completion</th>
+          <th title="0-5; reasoning proportional to task">efficiency</th>
+          <th title="avg ms per call">duration</th>
+          <th title="user named a doc/file; Read/Grep never fired on it">skipped doc</th>
+          <th title="Edit/Write fired on a file with no prior Read in the sequence">edit w/o read</th>
+          <th title="user asked to investigate/understand; first tool was action not discovery">premature action</th>
+          <th title="same tool called with very similar args >2× in a row">retry loop</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Apples-to-apples model comparison</h3>
+      <p class="hint">Runs the same 5 cowboy-probing prompts through 2+ models via OpenRouter (default: <code>anthropic/claude-opus-4-7</code> vs <code>anthropic/claude-opus-4-8</code>) and scores each with the same judge + rubric. One click = ~30s and ~$0.05. Requires <code>OPENROUTER_API_KEY</code> in the gateway env.</p>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <input type="text" id="bh-compare-models" placeholder="comma-separated OpenRouter model ids" value="anthropic/claude-opus-4-7,anthropic/claude-opus-4-8" style="flex:1; max-width:48em" />
+        <button id="bh-compare-run">Run comparison now</button>
+        <button id="bh-compare-reload" class="ghost">↻ Reload latest</button>
+        <span id="bh-compare-status" class="hint"></span>
+      </div>
+      <div id="bh-compare-result"></div>
+
+      <h3>Inspect a single trace</h3>
+      <p class="hint">Paste a <code>decision_id</code> from the Audit Log to see the prompt → tool-sequence trace side by side with the judge's verdict.</p>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <input type="text" id="behavior-trace-id" placeholder="decision_id (uuid)" style="flex:1; max-width:30em" />
+        <button id="behavior-trace-load">Load trace</button>
+      </div>
+      <div id="behavior-trace-result"></div>
     </section>
 
     <!-- Privacy (Lighthouse audit) ------------------------------------------>

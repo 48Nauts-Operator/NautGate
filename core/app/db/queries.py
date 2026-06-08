@@ -1047,6 +1047,120 @@ QUALITY_FAILURE_TAGS = [
 ]
 
 
+async def get_behavior_per_model(
+    pool: asyncpg.Pool, *, hours: int = 168,
+) -> list[dict]:
+    """Per-model behavioral analytics for the Behavior tab.
+
+    For each model with quality_evals in the window, returns:
+      - evals: how many quality evals
+      - avg_action_compliance: mean rubric.action_compliance (0-5)
+      - avg_task_completion: mean rubric.task_completion (0-5)
+      - avg_reasoning_efficiency
+      - avg_reasoning_tokens: from route_outcomes
+      - avg_duration_ms
+      - skipped_doc_rate / edit_without_read_rate / premature_action_rate
+        / retry_loop_rate: fraction of evals carrying that tag
+
+    Backbone of the cowboy comparison. NULL action_compliance values
+    fall out of the average — old evals from before the rubric change
+    don't poison newer scores.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT d.model_requested AS model,
+               COUNT(*)                                                   AS evals,
+               AVG((q.rubric->>'action_compliance')::numeric)             AS avg_action_compliance,
+               AVG((q.rubric->>'task_completion')::numeric)               AS avg_task_completion,
+               AVG((q.rubric->>'reasoning_efficiency')::numeric)          AS avg_reasoning_efficiency,
+               AVG(o.reasoning_tokens)::numeric                           AS avg_reasoning_tokens,
+               AVG(o.duration_ms)::numeric                                AS avg_duration_ms,
+               AVG(CASE WHEN 'skipped_doc'        = ANY(q.failure_tags) THEN 1.0 ELSE 0.0 END) AS skipped_doc_rate,
+               AVG(CASE WHEN 'edit_without_read'  = ANY(q.failure_tags) THEN 1.0 ELSE 0.0 END) AS edit_without_read_rate,
+               AVG(CASE WHEN 'premature_action'   = ANY(q.failure_tags) THEN 1.0 ELSE 0.0 END) AS premature_action_rate,
+               AVG(CASE WHEN 'retry_loop'         = ANY(q.failure_tags) THEN 1.0 ELSE 0.0 END) AS retry_loop_rate
+          FROM nautgate.quality_evals q
+          JOIN nautgate.route_decisions d ON d.id = q.decision_id
+          LEFT JOIN nautgate.route_outcomes o ON o.decision_id = q.decision_id
+         WHERE q.ts > NOW() - make_interval(hours => $1)
+         GROUP BY d.model_requested
+        HAVING COUNT(*) >= 1
+         ORDER BY evals DESC
+        """,
+        hours,
+    )
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        for k in (
+            "avg_action_compliance", "avg_task_completion",
+            "avg_reasoning_efficiency", "avg_reasoning_tokens",
+            "avg_duration_ms", "skipped_doc_rate", "edit_without_read_rate",
+            "premature_action_rate", "retry_loop_rate",
+        ):
+            if d.get(k) is not None:
+                d[k] = float(d[k])
+        out.append(d)
+    return out
+
+
+async def get_behavior_trace(
+    pool: asyncpg.Pool, *, decision_id: str | UUID,
+) -> dict | None:
+    """Full prompt-action trace for a single decision.
+
+    Returns:
+      decision_id, ts, model, agent_id,
+      prompt_body (the user's last message — for verb/target extraction
+                   on the frontend), tool_calls_made (the raw JSONB
+                   sequence), reasoning_tokens, duration_ms, first_byte_ms,
+      quality_eval (the rubric scores + tags + coach_notes, or None).
+    """
+    did = decision_id if isinstance(decision_id, UUID) else UUID(str(decision_id))
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT d.id::text                AS decision_id,
+                   d.ts                      AS ts,
+                   d.agent_id                AS agent_id,
+                   d.model_requested         AS model,
+                   d.decision_provider       AS provider,
+                   d.prompt_body             AS prompt_body,
+                   d.tools_count             AS tools_count,
+                   o.tool_calls_made         AS tool_calls_made,
+                   o.reasoning_tokens        AS reasoning_tokens,
+                   o.duration_ms             AS duration_ms,
+                   o.first_byte_ms           AS first_byte_ms,
+                   o.status_code             AS status_code,
+                   q.rubric                  AS rubric,
+                   q.failure_tags            AS failure_tags,
+                   q.coach_notes             AS coach_notes,
+                   q.suggested_prompt        AS suggested_prompt
+              FROM nautgate.route_decisions d
+              LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+              LEFT JOIN nautgate.quality_evals   q ON q.decision_id = d.id
+             WHERE d.id = $1
+            """,
+            did,
+        )
+    if row is None:
+        return None
+    d = dict(row)
+    if d.get("ts"):
+        d["ts"] = d["ts"].isoformat()
+    if isinstance(d.get("tool_calls_made"), str):
+        try:
+            d["tool_calls_made"] = json.loads(d["tool_calls_made"])
+        except (ValueError, TypeError):
+            d["tool_calls_made"] = None
+    if isinstance(d.get("rubric"), str):
+        try:
+            d["rubric"] = json.loads(d["rubric"])
+        except (ValueError, TypeError):
+            d["rubric"] = None
+    return d
+
+
 async def get_quality_summary(
     pool: asyncpg.Pool, *, hours: int, model_filter: str | None = None,
 ) -> dict:

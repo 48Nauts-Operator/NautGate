@@ -37,7 +37,7 @@ log = structlog.get_logger()
 # exceeds 1024 tokens, so we keep this verbose on purpose. Same rubric for
 # every call means high cache-hit rate.
 
-RUBRIC_SYSTEM_PROMPT = """You are NautGate's quality auditor. You read one prompt/response pair from a real LLM call and rate the response on a fixed rubric. Your job is forensic: be specific about what went wrong, not generic.
+RUBRIC_SYSTEM_PROMPT = """You are NautGate's quality auditor. You read one prompt/response pair from a real LLM call (often Claude Code / agentic) and rate the response on a fixed rubric. Your job is forensic: be specific about what went wrong, not generic.
 
 You always respond with valid JSON matching this exact schema. Do not include any prose outside the JSON.
 
@@ -45,8 +45,9 @@ You always respond with valid JSON matching this exact schema. Do not include an
   "task_understanding":   0-5,   // Did the model grasp what was being asked? 5 = fully, 0 = totally missed it.
   "task_completion":      0-5,   // Did the model actually do the task? 5 = complete + correct, 3 = partial, 0 = nothing useful produced.
   "reasoning_efficiency": 0-5,   // Was the reasoning proportional to the task? 5 = tight, 3 = some bloat, 0 = thought forever then produced little.
+  "action_compliance":    0-5,   // Did the TOOL SEQUENCE match what the user asked for? 5 = did exactly what was requested in the right order, 3 = mostly aligned with one shortcut, 0 = ignored instructions entirely (e.g. user said "read foo.md then implement" and the model edited without reading). Score 0 if no tools were used AND the task required them. Score 5 if no tools were needed and the model correctly answered inline.
   "prompt_clarity":       0-5,   // Was the user's prompt clear enough? 5 = unambiguous, 3 = needed inference, 0 = vague/missing context.
-  "failure_tags":         [...], // Zero or more of: "looped", "hallucination", "off_task", "over_thinking", "under_thinking", "refusal", "partial_answer", "wrong_answer", "tool_misuse", "truncated", "multi_task_drop", "vague_scope". Empty array if the response was good.
+  "failure_tags":         [...], // Zero or more of: "looped", "hallucination", "off_task", "over_thinking", "under_thinking", "refusal", "partial_answer", "wrong_answer", "tool_misuse", "truncated", "multi_task_drop", "vague_scope", "skipped_doc", "edit_without_read", "premature_action", "retry_loop". Empty array if the response was good.
   "anti_pattern":         "...", // What the user did WRONG in their prompt that caused this response, in ≤80 chars. Examples: "Asked for 3 things in one prompt without ordering", "Used 'check' without saying what to verify", "No success criteria provided". Empty string when the prompt was good and the model failed on its own.
   "suggested_prompt":     "...", // A concrete rewritten prompt the user SHOULD have sent. ≤300 chars. MANDATORY when task_completion < 4 OR prompt_clarity < 4 — produce a real rewrite, not "be clearer". Empty string ONLY when both scores are ≥ 4 (i.e. the prompt was fine).
   "coach_notes":          "..."  // 1-2 sentences explaining the scores. Be specific about what the model did or failed to do.
@@ -54,12 +55,19 @@ You always respond with valid JSON matching this exact schema. Do not include an
 
 Scoring guidance:
 - task_completion is the most important score. Be strict. A response that says "I'll help with that" but doesn't actually do the work is a 1, not a 3.
+- action_compliance is the SECOND most important score for agentic / tool-using calls. The metadata block contains the tool_sequence — the chronological list of tool calls the model made. Compare it against what the user asked for. The user prompt usually contains verbs ("read", "understand", "check", "fix", "implement", "run", "investigate") that imply a sequence; action_compliance measures how well the tool sequence matches.
 - Use "over_thinking" when the model used substantial reasoning tokens (you'll see this in the metadata) but produced thin or unfocused output.
 - Use "looped" when the response restates the question, repeats itself, or stalls.
 - Use "off_task" when the response addresses something other than what was asked.
 - Use "hallucination" when the response asserts something demonstrably wrong about the code/API/tool/context provided.
 - Use "multi_task_drop" when the user asked for N things and the model did <N — partial execution on multi-task prompts is the most common failure mode.
 - Use "vague_scope" when the user asked something open-ended ("review this", "check this") without saying what specifically to look at.
+
+Agentic / tool-sequence anti-patterns (score these from the tool_sequence in metadata):
+- Use "skipped_doc" when the user named a specific file or document (e.g. "read docs/foo.md", "look at handler.ts") and Read/Grep was NEVER called on that target.
+- Use "edit_without_read" when an Edit, Write, or NotebookEdit call appears for a file that was NEVER preceded by a Read call on that same file in the captured sequence.
+- Use "premature_action" when the user asked the model to investigate / understand / read FIRST, but the first tool call was an action tool (Bash, Edit, Write, mcp__*) instead of a discovery tool (Read, Grep, Glob).
+- Use "retry_loop" when the same tool was called with very similar arguments more than twice in a row (suggesting the model isn't learning from failures).
 
 suggested_prompt MUST be concrete and actionable. Bad: "Be more specific". Good: "Refactor only the auth() function in src/auth.py — keep the public signature, split internal logic into 3 helpers (parse, validate, persist). Return the diff only." If you can't think of a real rewrite, then `prompt_clarity` should be ≥ 4 and you can leave it empty.
 
@@ -179,10 +187,52 @@ def _strip_fences(text: str) -> str:
     return _FENCE_RE.sub("", text).strip()
 
 
+def _summarize_tool_sequence(tool_calls: Any) -> list[dict]:
+    """Collapse tool_calls_made into a compact sequence the judge can read.
+
+    Each entry: {name, target} where target is a best-effort extraction of
+    the most identifying argument (file_path for Read/Edit/Write, command
+    head for Bash, pattern for Grep, etc). Truncated to first 20 calls so
+    we don't blow the judge's context window on long agentic sessions.
+    """
+    if not isinstance(tool_calls, list):
+        return []
+    out: list[dict] = []
+    for call in tool_calls[:20]:
+        if not isinstance(call, dict):
+            continue
+        name = call.get("name") or ""
+        args_raw = call.get("arguments")
+        # arguments is usually a JSON string; sometimes already a dict.
+        args: dict = {}
+        if isinstance(args_raw, str):
+            # Tool args are stored truncated at 200 bytes → JSON parse may
+            # fail. Fall back to a regex-light grab of file_path / command.
+            try:
+                args = json.loads(args_raw)
+            except (ValueError, TypeError):
+                args = {}
+                for key in ("file_path", "path", "command", "pattern", "query", "url"):
+                    m = re.search(rf'"{key}"\s*:\s*"([^"]{{1,160}})"', args_raw)
+                    if m:
+                        args[key] = m.group(1)
+                        break
+        elif isinstance(args_raw, dict):
+            args = args_raw
+        target = (
+            args.get("file_path") or args.get("path")
+            or (args.get("command") or "")[:80]
+            or args.get("pattern") or args.get("query") or args.get("url") or ""
+        )
+        out.append({"name": name, "target": target[:160]})
+    return out
+
+
 def _make_user_message(decision: dict, outcome: dict) -> str:
     """Assemble the judge's user-turn from captured bodies + key metadata."""
     pb = (decision.get("prompt_body") or decision.get("prompt_excerpt") or "")[:8000]
     rb = (outcome.get("response_body") or "")[:8000]
+    tool_sequence = _summarize_tool_sequence(outcome.get("tool_calls_made"))
     meta = {
         "model": decision.get("decision_model"),
         "provider": decision.get("decision_provider"),
@@ -197,7 +247,8 @@ def _make_user_message(decision: dict, outcome: dict) -> str:
         "was_truncated": outcome.get("was_truncated"),
         "client_disconnected": outcome.get("client_disconnected"),
         "tools_count": decision.get("tools_count") or 0,
-        "tool_calls_made": len(outcome.get("tool_calls_made") or []),
+        "tool_calls_made_count": len(outcome.get("tool_calls_made") or []),
+        "tool_sequence": tool_sequence,
     }
     return (
         f"### Call metadata\n{json.dumps(meta, indent=2)}\n\n"
@@ -302,11 +353,14 @@ async def _persist(
         failure_tags = [str(t) for t in failure_tags]
     else:
         failure_tags = []
-    # Keep only the 4 numeric scores in `rubric` JSON so the column shape is
+    # Keep the 5 numeric scores in `rubric` JSON so the column shape is
     # stable; suggested_prompt + coach_notes are top-level columns.
+    # action_compliance added in the behavioral-analytics work — measures
+    # whether the model's tool sequence matched what the user asked for.
     rubric_payload = {
         k: rubric.get(k) for k in
-        ("task_understanding", "task_completion", "reasoning_efficiency", "prompt_clarity")
+        ("task_understanding", "task_completion", "reasoning_efficiency",
+         "action_compliance", "prompt_clarity")
         if isinstance(rubric, dict)
     }
     suggested = rubric.get("suggested_prompt") if isinstance(rubric, dict) else None

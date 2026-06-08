@@ -2254,6 +2254,147 @@ async def quality_evaluation_run(decision_id: str, request: Request) -> Response
     return JSONResponse(row)
 
 
+# ── Behavioral analytics — "did the model do what the user asked?" ──────────
+
+
+@router.get("/behavior/per-model")
+async def behavior_per_model(request: Request) -> Response:
+    """Per-model behavioral metrics derived from quality_evals.
+
+    Surfaces the cowboy comparison: which model skips Read, edits without
+    reading, jumps to action before investigation, retries the same tool.
+    Defaults to last 168h (7 days), max 720h (30 days).
+
+    Includes only models with quality evals (so a model still accumulating
+    will appear as soon as it has 1 eval; meaningful comparisons need 10+).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    rows = await queries.get_behavior_per_model(pool, hours=hours)
+    return JSONResponse({"hours": hours, "data": rows})
+
+
+@router.post("/behavior/compare")
+async def behavior_compare_run(request: Request) -> Response:
+    """Run the behavioral canary suite through 2+ models via OpenRouter.
+
+    Body (optional):
+      {"models": ["anthropic/claude-opus-4-7", "anthropic/claude-opus-4-8"]}
+    Defaults to opus-4-7 + opus-4-8.
+
+    Each canary prompt is sent to each model, judge scores each response
+    on the new rubric (action_compliance + 4 anti-pattern tags), all rows
+    share a comparison_id. Apples-to-apples. Returns the comparison_id;
+    poll GET /v1/behavior/compare/latest for results.
+    """
+    import os as _os
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    models = ["anthropic/claude-opus-4-7", "anthropic/claude-opus-4-8"]
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and isinstance(body.get("models"), list):
+            models = [str(m) for m in body["models"] if isinstance(m, str) and m]
+    except Exception:
+        pass
+    if len(models) < 1:
+        raise HTTPException(status_code=400, detail="need at least one model")
+
+    or_key = _os.environ.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENROUTER_API_KEY not set in NautGate env",
+        )
+
+    from app.behavioral_canary import (
+        run_comparison, quality_eval_config_or_default,
+    )
+    judge_config = await quality_eval_config_or_default(pool)
+    judge_client = getattr(request.app.state, "quality_judge", None)
+    try:
+        comparison_id = await run_comparison(
+            pool=pool,
+            openrouter_api_key=or_key,
+            judge_client=judge_client,
+            judge_config=judge_config,
+            models=models,
+        )
+    except Exception as exc:
+        log.error("behavior_compare_failed", error=str(exc))
+        raise HTTPException(status_code=502, detail=f"comparison_failed: {exc}") from None
+    return JSONResponse({
+        "comparison_id": str(comparison_id),
+        "models": models,
+        "status": "completed",
+    })
+
+
+@router.get("/behavior/compare/latest")
+async def behavior_compare_latest(request: Request) -> Response:
+    """Latest comparison run grouped by canary name; one entry per model.
+
+    Returned shape::
+
+        {
+          "comparison_id": "<uuid>",
+          "ts": "ISO8601",
+          "canaries": [
+            {"name": "read_before_answer",
+             "results": [
+               {"target_model": "anthropic/claude-opus-4-7",
+                "response_text": "...", "rubric": {...},
+                "failure_tags": [...], "coach_notes": "..."},
+               {"target_model": "anthropic/claude-opus-4-8", ...}
+             ]},
+            ...
+          ]
+        }
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.behavioral_canary import get_latest_comparison
+    payload = await get_latest_comparison(pool)
+    return JSONResponse(payload)
+
+
+@router.get("/behavior/trace/{decision_id}")
+async def behavior_trace(decision_id: str, request: Request) -> Response:
+    """Full prompt-action trace for one decision.
+
+    Returns the user prompt, the captured tool_calls_made sequence (in
+    order), timing (first_byte_ms, duration_ms, reasoning_tokens), and
+    the quality_eval verdict (rubric scores + failure tags + coach notes)
+    if one exists. The dashboard renders this as the side-by-side
+    "prompt → action" timeline.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+    row = await queries.get_behavior_trace(pool, decision_id=decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse(row)
+
+
 @router.get("/whoami")
 async def whoami(request: Request) -> Response:
     """Identity for the bearer token in this request.

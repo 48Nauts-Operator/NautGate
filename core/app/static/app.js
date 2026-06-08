@@ -445,6 +445,7 @@
     else if (activeTab === "scorecard") loadScorecard();
     else if (activeTab === "drift") loadDrift();
     else if (activeTab === "quality") loadQuality();
+    else if (activeTab === "behavior") loadBehavior();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
   }
@@ -2803,6 +2804,248 @@
     } catch (e) {
       console.error("loadQuality failed", e);
     }
+  }
+
+  // --- Behavior tab — prompt→action compliance ---------------------------
+  // Mirrors the cowboy analysis: per-model action_compliance + the four
+  // agentic anti-pattern rates, plus a one-decision trace inspector.
+
+  let behaviorWindowH = 168;
+
+  function fmt5(v) {
+    if (v === null || v === undefined) return '<span class="hint">—</span>';
+    return (Math.round(v * 100) / 100).toFixed(2);
+  }
+  function fmtPct(v) {
+    if (v === null || v === undefined) return '<span class="hint">—</span>';
+    return (v * 100).toFixed(1) + "%";
+  }
+  function fmtMs(v) {
+    if (v === null || v === undefined) return '<span class="hint">—</span>';
+    if (v < 1000) return Math.round(v) + "ms";
+    return (v / 1000).toFixed(1) + "s";
+  }
+
+  async function loadBehavior() {
+    const tbody = document.querySelector("#behavior-per-model tbody");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="10" class="hint">loading…</td></tr>';
+    try {
+      const r = await api("/v1/behavior/per-model?hours=" + behaviorWindowH);
+      const rows = r.data || [];
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="10" class="hint">No quality evals in window.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(m => `
+        <tr>
+          <td><b>${esc(m.model || "—")}</b></td>
+          <td>${m.evals}</td>
+          <td>${fmt5(m.avg_action_compliance)}</td>
+          <td>${fmt5(m.avg_task_completion)}</td>
+          <td>${fmt5(m.avg_reasoning_efficiency)}</td>
+          <td>${fmtMs(m.avg_duration_ms)}</td>
+          <td>${fmtPct(m.skipped_doc_rate)}</td>
+          <td>${fmtPct(m.edit_without_read_rate)}</td>
+          <td>${fmtPct(m.premature_action_rate)}</td>
+          <td>${fmtPct(m.retry_loop_rate)}</td>
+        </tr>
+      `).join("");
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="10" class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</td></tr>`;
+      console.error("loadBehavior failed", e);
+    }
+    // Also surface any prior comparison run so the user doesn't have to click reload.
+    loadBehaviorComparisonLatest().catch(() => {});
+  }
+
+  document.querySelectorAll("[data-bh-window]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-bh-window]").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      behaviorWindowH = parseInt(btn.getAttribute("data-bh-window"), 10) || 168;
+      loadBehavior();
+    });
+  });
+
+  async function loadBehaviorTrace() {
+    const idInput = document.getElementById("behavior-trace-id");
+    const out = document.getElementById("behavior-trace-result");
+    if (!idInput || !out) return;
+    const id = (idInput.value || "").trim();
+    if (!id) { out.innerHTML = '<p class="hint">paste a decision_id first</p>'; return; }
+    out.innerHTML = '<p class="hint">loading…</p>';
+    try {
+      const t = await api("/v1/behavior/trace/" + encodeURIComponent(id));
+      out.innerHTML = renderBehaviorTrace(t);
+    } catch (e) {
+      out.innerHTML = `<p class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</p>`;
+    }
+  }
+  document.getElementById("behavior-trace-load")?.addEventListener("click", loadBehaviorTrace);
+  document.getElementById("behavior-trace-id")?.addEventListener("keydown", e => {
+    if (e.key === "Enter") loadBehaviorTrace();
+  });
+
+  // --- Comparison runner -----------------------------------------------
+  async function runBehaviorComparison() {
+    const status = document.getElementById("bh-compare-status");
+    const result = document.getElementById("bh-compare-result");
+    const input = document.getElementById("bh-compare-models");
+    const btn = document.getElementById("bh-compare-run");
+    if (!status || !result || !input || !btn) return;
+    const models = (input.value || "")
+      .split(",").map(s => s.trim()).filter(Boolean);
+    if (!models.length) {
+      status.textContent = "need at least one model";
+      return;
+    }
+    btn.disabled = true;
+    status.textContent = "running (≈30s)…";
+    result.innerHTML = "";
+    try {
+      const t = getToken();
+      const res = await fetch("/v1/behavior/compare", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + t,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({models}),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        status.textContent = "failed: " + text.slice(0, 200);
+        return;
+      }
+      status.textContent = "done — fetching results…";
+      await loadBehaviorComparisonLatest();
+      status.textContent = "complete.";
+    } catch (e) {
+      status.textContent = "failed: " + (e.message || String(e));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function loadBehaviorComparisonLatest() {
+    const result = document.getElementById("bh-compare-result");
+    if (!result) return;
+    try {
+      const r = await api("/v1/behavior/compare/latest");
+      result.innerHTML = renderBehaviorComparison(r);
+    } catch (e) {
+      result.innerHTML = `<p class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</p>`;
+    }
+  }
+
+  function renderBehaviorComparison(r) {
+    if (!r || !r.comparison_id) {
+      return '<p class="hint">No comparison runs yet. Click "Run comparison now".</p>';
+    }
+    const blocks = (r.canaries || []).map(c => {
+      const models = c.results.map(res => {
+        const ru = res.rubric || {};
+        const tags = Array.isArray(res.failure_tags) ? res.failure_tags : [];
+        const err = res.error
+          ? `<div style="color:#ff5c5c">error: ${esc(String(res.error).slice(0, 200))}</div>`
+          : "";
+        return `
+          <div style="border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:4px;">
+            <div><b>${esc(res.target_model)}</b> <span class="hint">${fmtMs(res.duration_ms)} · ${res.prompt_tokens ?? "—"}→${res.completion_tokens ?? "—"} tok</span></div>
+            <div style="margin-top:6px; font-size:13px;">
+              action_compliance: <b>${fmt5(ru.action_compliance)}</b> ·
+              task_completion: <b>${fmt5(ru.task_completion)}</b> ·
+              efficiency: <b>${fmt5(ru.reasoning_efficiency)}</b>
+            </div>
+            ${tags.length ? `<div style="margin-top:4px">tags: ${tags.map(t => `<code style="margin-right:6px">${esc(t)}</code>`).join("")}</div>` : ""}
+            ${res.coach_notes ? `<div style="margin-top:6px; font-style:italic; color:#bbb">${esc(res.coach_notes)}</div>` : ""}
+            ${err}
+            <details style="margin-top:8px"><summary class="hint">response (click to expand)</summary>
+              <pre style="white-space:pre-wrap; max-height:200px; overflow:auto; font-size:12px; margin-top:6px">${esc(res.response_text || "(empty)")}</pre>
+            </details>
+          </div>
+        `;
+      }).join("");
+      return `
+        <div style="margin-bottom:16px">
+          <h4 style="margin-bottom:6px">${esc(c.name)}</h4>
+          <div style="display:grid; grid-template-columns: repeat(${c.results.length}, 1fr); gap:12px">${models}</div>
+        </div>
+      `;
+    }).join("");
+    return `
+      <p class="hint">Comparison <code>${esc(r.comparison_id.slice(0, 8))}…</code> · ${tsFull(r.ts)}</p>
+      ${blocks || '<p class="hint">no canaries in this run</p>'}
+    `;
+  }
+
+  document.getElementById("bh-compare-run")?.addEventListener("click", runBehaviorComparison);
+  document.getElementById("bh-compare-reload")?.addEventListener("click", loadBehaviorComparisonLatest);
+
+  function renderBehaviorTrace(t) {
+    // Extract user prompt — prompt_body is JSON of messages; pull the last user message text.
+    let userText = "";
+    try {
+      const msgs = typeof t.prompt_body === "string" ? JSON.parse(t.prompt_body) : t.prompt_body;
+      if (Array.isArray(msgs)) {
+        const lastUser = [...msgs].reverse().find(m => m.role === "user");
+        if (lastUser) {
+          if (typeof lastUser.content === "string") userText = lastUser.content;
+          else if (Array.isArray(lastUser.content)) {
+            userText = lastUser.content
+              .filter(b => b && b.type === "text")
+              .map(b => b.text || "")
+              .join("\n");
+          }
+        }
+      }
+    } catch (e) { userText = "(prompt_body not parseable as messages JSON)"; }
+
+    const tools = Array.isArray(t.tool_calls_made) ? t.tool_calls_made : [];
+    const seqHtml = tools.length
+      ? tools.map((c, i) => {
+          let target = "";
+          try {
+            const a = typeof c.arguments === "string" ? JSON.parse(c.arguments) : (c.arguments || {});
+            target = a.file_path || a.path || a.pattern || a.query || a.url
+              || (a.command ? a.command.slice(0, 100) : "");
+          } catch (e) {
+            // Tool arg JSON is truncated at 200 bytes — degrade gracefully.
+            const raw = typeof c.arguments === "string" ? c.arguments : "";
+            const m = raw.match(/"(?:file_path|path|command|pattern)"\s*:\s*"([^"]{1,100})"/);
+            if (m) target = m[1];
+          }
+          return `<li><b>${i + 1}.</b> <code>${esc(c.name || "?")}</code> ${target ? `→ <span class="hint">${esc(target)}</span>` : ""}</li>`;
+        }).join("")
+      : '<li class="hint">no tool calls captured</li>';
+
+    const rubric = t.rubric || {};
+    const tags = Array.isArray(t.failure_tags) ? t.failure_tags : [];
+    const verdictHtml = (t.rubric || tags.length || t.coach_notes) ? `
+      <div style="margin-top:12px; padding:8px; border-left:3px solid #888; background:rgba(255,255,255,0.03)">
+        <div><b>Judge verdict</b></div>
+        <div>action_compliance: <b>${fmt5(rubric.action_compliance)}</b> · task_completion: <b>${fmt5(rubric.task_completion)}</b> · efficiency: <b>${fmt5(rubric.reasoning_efficiency)}</b></div>
+        ${tags.length ? `<div>tags: ${tags.map(t => `<code style="margin-right:6px">${esc(t)}</code>`).join("")}</div>` : ""}
+        ${t.coach_notes ? `<div style="margin-top:6px"><i>${esc(t.coach_notes)}</i></div>` : ""}
+        ${t.suggested_prompt ? `<div style="margin-top:6px"><b>Suggested prompt:</b> <code>${esc(t.suggested_prompt)}</code></div>` : ""}
+      </div>
+    ` : '<p class="hint" style="margin-top:8px">no quality eval has run on this decision yet</p>';
+
+    return `
+      <div class="behavior-trace" style="display:grid; grid-template-columns: 1fr 1fr; gap:16px">
+        <div>
+          <h4>USER PROMPT</h4>
+          <pre style="white-space:pre-wrap; word-break:break-word; max-height:400px; overflow:auto; padding:8px; background:rgba(255,255,255,0.04)">${esc(userText || "(empty)")}</pre>
+          <div class="hint">model: <code>${esc(t.model || "?")}</code> · ${tools.length} tool calls · ${fmtMs(t.duration_ms)} · reasoning: ${t.reasoning_tokens ?? "—"} tok</div>
+        </div>
+        <div>
+          <h4>MODEL TOOL SEQUENCE</h4>
+          <ol style="padding-left:24px; line-height:1.7">${seqHtml}</ol>
+        </div>
+      </div>
+      ${verdictHtml}
+    `;
   }
 
   // --- Backup (Settings → Backup section) --------------------------------
