@@ -18,12 +18,30 @@ from app.spool import OutcomeSpool
 log = structlog.get_logger()
 
 
+def _strip_nul_bytes(s: str | None) -> str | None:
+    """Postgres TEXT columns reject \\x00 — strip NUL bytes from any
+    response body before insert. SSE responses from Anthropic/OpenAI
+    occasionally contain stray NULs inside tool-call argument JSON or
+    binary-ish chunks; without this every such call would silently lose
+    its outcome row. Cheap (.replace) and idempotent.
+    """
+    if s is None:
+        return None
+    return s.replace("\x00", "") if "\x00" in s else s
+
+
 async def persist_outcome(pool, spool: OutcomeSpool | None, **kwargs) -> None:
     """Try the DB; spool the kwargs on failure if a spool is configured.
 
     If the spool itself is unwritable we log and swallow — the audit log already
     has route_decisions (synchronous), so we never block the request path.
     """
+    # Sanitize the only TEXT column that's bytes-derived. tool_calls_made
+    # is jsonb (Postgres allows \\x00 in jsonb strings via json escapes),
+    # everything else is integer/bool/numeric.
+    if "response_body" in kwargs:
+        kwargs["response_body"] = _strip_nul_bytes(kwargs["response_body"])
+
     try:
         await queries.write_outcome(pool, **kwargs)
         return

@@ -773,6 +773,39 @@ def _token_breakdown_from_body(body: str | None, content_fn, est_fn) -> dict | N
     }
 
 
+async def get_discovered_agents(
+    pool: asyncpg.Pool,
+    *,
+    hours: int = 168,
+) -> list[dict]:
+    """Distinct agent_ids that have produced traffic in the last <hours>.
+
+    Used by the dashboard for auto-discovery so OAuth-derived sessions
+    (claude-oauth-…, codex-…) appear in the session picker without the
+    operator having to mint and paste an ng_ token.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT d.agent_id,
+               MAX(d.ts)   AS last_seen_at,
+               COUNT(*)    AS request_count
+          FROM nautgate.route_decisions d
+         WHERE d.ts > now() - ($1 || ' hours')::interval
+           AND d.agent_id IS NOT NULL
+         GROUP BY d.agent_id
+         ORDER BY last_seen_at DESC
+        """,
+        str(hours),
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("last_seen_at"):
+            d["last_seen_at"] = d["last_seen_at"].isoformat()
+        out.append(d)
+    return out
+
+
 async def get_recent_decisions(
     pool: asyncpg.Pool,
     *,

@@ -1132,14 +1132,21 @@ async def cost_timeseries(request: Request) -> Response:
 
 @router.get("/decisions/recent")
 async def decisions_recent(request: Request) -> Response:
-    """Recent route_decisions joined with outcomes for the authenticated agent.
+    """Recent route_decisions joined with outcomes.
 
-    Default ?limit=50, max 200. Used by the dashboard's live decision stream.
+    By default scopes to the authenticated agent. An optional
+    ``?agent_id=<x>`` query param overrides the scope so the dashboard
+    can view auto-discovered OAuth sessions (claude-oauth-…, codex-…)
+    that have no ng_ token of their own to authenticate with. Any valid
+    ng_ token may request any agent_id — single-tenant assumption.
+
+    Default ?limit=50, max 200.
     """
     pool = getattr(request.app.state, "db", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
-    agent_id = await authenticate(pool, request)
+    caller_agent = await authenticate(pool, request)
+    target_agent = request.query_params.get("agent_id", "").strip() or caller_agent
 
     try:
         limit = int(request.query_params.get("limit", "50"))
@@ -1148,8 +1155,34 @@ async def decisions_recent(request: Request) -> Response:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be in 1..200")
 
-    rows = await queries.get_recent_decisions(pool, agent_id=agent_id, limit=limit)
-    return JSONResponse({"agent_id": agent_id, "limit": limit, "data": rows})
+    rows = await queries.get_recent_decisions(pool, agent_id=target_agent, limit=limit)
+    return JSONResponse({"agent_id": target_agent, "limit": limit, "data": rows})
+
+
+@router.get("/agents/discovered")
+async def agents_discovered(request: Request) -> Response:
+    """List of agent_ids that have produced traffic recently.
+
+    The dashboard calls this on startup and merges any unseen agent_id
+    into its localStorage session list as a discovered entry (no token,
+    scope-only). That's how OAuth-derived sessions (Claude Max,
+    ChatGPT Max) show up in the picker without manual setup.
+
+    Default ?hours=168 (7 days), max 720 (30 days).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+
+    rows = await queries.get_discovered_agents(pool, hours=hours)
+    return JSONResponse({"hours": hours, "data": rows})
 
 
 @router.get("/decisions/{decision_id}")
@@ -1157,18 +1190,24 @@ async def decision_detail(decision_id: str, request: Request) -> Response:
     """Full metadata for a single decision: classification, score, signals,
     brain hints, prompt + response bodies (subject to capture policy),
     outcome metrics, cost.
+
+    Same scope rules as /decisions/recent: defaults to the authenticated
+    caller's agent_id; an optional ?agent_id=<x> overrides so the
+    dashboard can open detail drawers for rows in discovered OAuth
+    sessions that don't own an ng_ token.
     """
     pool = getattr(request.app.state, "db", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
-    agent_id = await authenticate(pool, request)
+    caller_agent = await authenticate(pool, request)
+    target_agent = request.query_params.get("agent_id", "").strip() or caller_agent
 
     try:
         uuid.UUID(decision_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="bad decision_id") from None
 
-    row = await queries.get_decision_detail(pool, agent_id=agent_id, decision_id=decision_id)
+    row = await queries.get_decision_detail(pool, agent_id=target_agent, decision_id=decision_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
     return JSONResponse(row)

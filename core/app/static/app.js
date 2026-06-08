@@ -86,11 +86,26 @@
   }
 
   function getToken() {
+    // Working auth token. Prefers the active session's own token; falls
+    // back to any owned ng_ token in the list so a "discovered" session
+    // (no token of its own — e.g. claude-oauth-…) can still authenticate
+    // and view its traffic via the ?agent_id=… scope override.
     const active = getActiveSession();
-    if (active) return active.token;
-    // Fallback: server-injected meta token (single-token install).
+    if (active?.token) return active.token;
+    const owned = loadSessions().find(s => s.token);
+    if (owned) return owned.token;
     const meta = document.querySelector('meta[name="nautgate-token"]');
     return meta ? meta.getAttribute("content") || "" : "";
+  }
+
+  function getActiveAgentScope() {
+    // When the active session is a discovered (token-less) entry, return
+    // its agent_id so callers can pass ?agent_id=… to scope queries to
+    // that agent without owning its token. Returns null otherwise —
+    // server then naturally scopes to the caller's own agent_id.
+    const active = getActiveSession();
+    if (active && active.discovered && active.agent_id) return active.agent_id;
+    return null;
   }
 
   function renderAuth() {
@@ -139,21 +154,26 @@
     list.innerHTML = '<table class="sessions-table"><thead><tr><th></th><th>label</th><th>agent</th><th>token</th><th>last used</th><th></th></tr></thead><tbody>'
       + sessions.map(s => {
         const isActive = s.id === activeId;
-        const tail = (s.token || "").slice(-6);
         const labelText = s.label || (s.agent_id || "(unlabeled)");
         const agentText = s.agent_id ? esc(s.agent_id) : '<span class="hint">unknown — click Verify</span>';
+        const tokenCell = s.discovered
+          ? '<span class="hint" title="OAuth-derived; no ng_ token. Scope-only.">discovered</span>'
+          : `<code>ng_…${esc((s.token || "").slice(-6))}</code>`;
+        const verifyBtn = s.discovered
+          ? ''
+          : `<button data-sess-verify="${esc(s.id)}" class="ghost">Verify</button>`;
         return `
           <tr class="${isActive ? "session-row-active" : ""}">
             <td>${isActive ? '<span class="sess-active-dot" title="active session"></span>' : ''}</td>
             <td><b>${esc(labelText)}</b></td>
             <td>${agentText}</td>
-            <td><code>ng_…${esc(tail)}</code></td>
+            <td>${tokenCell}</td>
             <td>${fmtAgo(s.last_seen_at)}</td>
             <td>
               ${isActive
                 ? '<span class="hint">active</span>'
                 : `<button data-sess-activate="${esc(s.id)}">Activate</button>`}
-              <button data-sess-verify="${esc(s.id)}" class="ghost">Verify</button>
+              ${verifyBtn}
               <button data-sess-delete="${esc(s.id)}" class="ghost danger">×</button>
             </td>
           </tr>`;
@@ -180,6 +200,71 @@
       await verifySession(id);
       renderSessions();
     }));
+  }
+
+  async function discoverAgents() {
+    // Pulls /v1/agents/discovered and auto-adds any agent_id that's not
+    // already in the localStorage session list. New entries are flagged
+    // {discovered: true, token: null} so the rest of the UI knows they're
+    // scope-only — when active, audit queries go through with
+    // ?agent_id=<x> using a fallback owned token for auth.
+    if (!getToken()) return;
+    try {
+      const res = await fetch("/v1/agents/discovered?hours=168",
+        { headers: { Authorization: "Bearer " + getToken() } });
+      if (!res.ok) return;
+      const r = await res.json();
+      const sessions = loadSessions();
+      let changed = false;
+      let freshlyAddedId = null;
+      let freshlyAddedSeenAt = null;
+      for (const agent of (r.data || [])) {
+        const existing = sessions.find(s => s.agent_id === agent.agent_id);
+        if (existing) {
+          if (!existing.last_seen_at
+              || agent.last_seen_at > existing.last_seen_at) {
+            existing.last_seen_at = agent.last_seen_at;
+            changed = true;
+          }
+        } else {
+          const id = cryptoId();
+          sessions.push({
+            id,
+            label: agent.agent_id,
+            token: null,
+            agent_id: agent.agent_id,
+            key_id: null,
+            last_seen_at: agent.last_seen_at,
+            discovered: true,
+            request_count: agent.request_count,
+          });
+          changed = true;
+          // Track the freshly-added entry with the most recent activity so
+          // we can auto-activate it below.
+          if (!freshlyAddedSeenAt || agent.last_seen_at > freshlyAddedSeenAt) {
+            freshlyAddedId = id;
+            freshlyAddedSeenAt = agent.last_seen_at;
+          }
+        }
+      }
+      if (changed) {
+        saveSessions(sessions);
+        // Auto-activate the freshest newly-discovered session — covers the
+        // common "I just ran claudeps, show me my new traffic" case. We
+        // also auto-activate on the boot-with-no-active path. Existing
+        // sessions whose last_seen merely got bumped don't trigger a
+        // switch — the user keeps control of which view they're on.
+        if (freshlyAddedId) {
+          setActiveSessionId(freshlyAddedId);
+        } else if (!getActiveSessionId() && sessions.length) {
+          setActiveSessionId(sessions[0].id);
+        }
+        renderAuth();
+        renderSessions();
+      }
+    } catch (e) {
+      console.warn("agent discovery failed", e);
+    }
   }
 
   async function verifySession(id) {
@@ -473,7 +558,10 @@
     document.getElementById("detail-body").innerHTML =
       '<p class="hint">loading…</p>';
     try {
-      const d = await api("/v1/decisions/" + encodeURIComponent(decisionId));
+      const scope = getActiveAgentScope();
+      const url = "/v1/decisions/" + encodeURIComponent(decisionId)
+        + (scope ? "?agent_id=" + encodeURIComponent(scope) : "");
+      const d = await api(url);
       document.getElementById("detail-body").innerHTML = renderDetail(d);
     } catch (e) {
       document.getElementById("detail-body").innerHTML =
@@ -762,7 +850,10 @@
       return;
     }
     try {
-      const r = await api("/v1/decisions/recent?limit=50");
+      const scope = getActiveAgentScope();
+      const url = "/v1/decisions/recent?limit=50"
+        + (scope ? "&agent_id=" + encodeURIComponent(scope) : "");
+      const r = await api(url);
       renderAudit(r.data || [], r.agent_id);
     } catch (e) {
       list.innerHTML = `<p class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</p>`;
@@ -896,7 +987,10 @@
     el.classList.add("open");
     el.innerHTML = '<p class="hint">loading…</p>';
     try {
-      const d = await api("/v1/decisions/" + encodeURIComponent(decisionId));
+      const scope = getActiveAgentScope();
+      const url = "/v1/decisions/" + encodeURIComponent(decisionId)
+        + (scope ? "?agent_id=" + encodeURIComponent(scope) : "");
+      const d = await api(url);
       auditDetailCache.set(decisionId, d);
       el.innerHTML = renderAuditDetail(d);
     } catch (e) {
@@ -3025,6 +3119,12 @@
   }
   renderAuth();
   renderSessions();
+  // Auto-discover OAuth-derived agents (claude-oauth-…, codex-…) and merge
+  // them into the session picker so they show up without manual setup.
+  // Runs once on load + every 60s thereafter so new logins appear within
+  // a minute of their first request.
+  discoverAgents();
+  setInterval(discoverAgents, 60_000);
   // Start notification poller — runs every 60s while the tab is open.
   loadNotifications();
   setInterval(loadNotifications, 60_000);

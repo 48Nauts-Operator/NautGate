@@ -145,7 +145,7 @@ cmd_start() {
         fi
         sleep 1
     done
-    local url="http://127.0.0.1:$PORT/dashboard"
+    local url="http://localhost:$PORT/dashboard"
     if [[ $ready -eq 1 ]]; then
         ok "uvicorn up (pid $pid) — $url"
         # /ready returns 503 when the DB pool isn't healthy — warn early
@@ -256,11 +256,11 @@ cmd_status() {
     if [[ -n "$pid" ]]; then
         ok "uvicorn running (pid $pid)"
         if command -v curl >/dev/null && curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-            echo "  ${C_DIM}health:${C_RESET}   http://127.0.0.1:$PORT/health  ${C_GREEN}OK${C_RESET}"
+            echo "  ${C_DIM}health:${C_RESET}   http://localhost:$PORT/health  ${C_GREEN}OK${C_RESET}"
         else
-            echo "  ${C_DIM}health:${C_RESET}   http://127.0.0.1:$PORT/health  ${C_RED}unreachable${C_RESET}"
+            echo "  ${C_DIM}health:${C_RESET}   http://localhost:$PORT/health  ${C_RED}unreachable${C_RESET}"
         fi
-        echo "  ${C_DIM}dashboard:${C_RESET} http://127.0.0.1:$PORT/dashboard"
+        echo "  ${C_DIM}dashboard:${C_RESET} http://localhost:$PORT/dashboard"
         echo "  ${C_DIM}log:${C_RESET}       $LOG_FILE"
     else
         warn "uvicorn not running"
@@ -291,7 +291,7 @@ cmd_down() {
 
 # --- Dispatch -----------------------------------------------------------
 cmd_open() {
-    open_dashboard "http://127.0.0.1:$PORT/dashboard"
+    open_dashboard "http://localhost:$PORT/dashboard"
 }
 
 case "${1:-}" in

@@ -299,19 +299,29 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             if pool is not None:
                 duration_ms = int((_time.monotonic_ns() - started_at_ns) / 1_000_000)
                 try:
-                    # We forward upstream bytes raw; for our own parsing we
-                    # need to decompress if the upstream used gzip / br.
+                    # We forward upstream bytes raw to the client (so the
+                    # client decompresses correctly). For our own parsing
+                    # + audit-log storage we need to decompress here too,
+                    # for both streaming AND non-streaming — Anthropic
+                    # gzips Claude Code's SSE streams, and the previous
+                    # guard left compressed garbage in response_body.
                     ce = upstream.headers.get("content-encoding", "").lower()
-                    if ce in ("gzip", "x-gzip") and not is_stream:
+                    if ce in ("gzip", "x-gzip"):
                         import gzip
                         try:
                             decoded = gzip.decompress(bytes(body_buf))
                         except OSError:
                             decoded = bytes(body_buf)
-                    elif ce == "br" and not is_stream:
+                    elif ce == "br":
                         try:
                             import brotli  # optional dep
                             decoded = brotli.decompress(bytes(body_buf))
+                        except Exception:
+                            decoded = bytes(body_buf)
+                    elif ce == "zstd":
+                        try:
+                            import zstandard  # optional dep
+                            decoded = zstandard.ZstdDecompressor().decompress(bytes(body_buf))
                         except Exception:
                             decoded = bytes(body_buf)
                     else:
