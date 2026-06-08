@@ -67,9 +67,16 @@ def _extract_token_from_request(request: Request) -> str:
     # Query-param fallback. Only honoured when the caller is explicitly OK
     # with it (we mark the endpoint by passing ?token=…; standard API
     # callers won't include that param so the surface stays the same).
-    qp_token = request.query_params.get("token", "").strip()
-    if qp_token.startswith("ng_"):
-        return qp_token
+    # Defensive: tolerate Request shims (test mocks) that don't expose a
+    # real query_params mapping — fall through to BAD_TOKEN cleanly.
+    try:
+        qp_token = request.query_params.get("token", "")
+        if isinstance(qp_token, str):
+            qp_token = qp_token.strip()
+            if qp_token.startswith("ng_"):
+                return qp_token
+    except (AttributeError, TypeError):
+        pass
     raise _BAD_TOKEN
 
 

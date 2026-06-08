@@ -369,6 +369,37 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         log.warning(
                             "anthropic_oauth_quality_failed", error=str(exc),
                         )
+                    # Engram-OSS / SecondBrain memory ingest — byte-by-byte
+                    # parity with flow-memory-proxy's storeDelta:
+                    #   - agent_id constant "claude-code" (matches proxy.js:138)
+                    #   - session_id read from payload._session_id with the
+                    #     "proxy" fallback (matches proxy.js:283)
+                    #   - same writes to agents_memory.memories on stargate
+                    # Fire-and-forget; the live config flag
+                    # (nautgate.app_config.sb_ingest.enabled) gates whether
+                    # writes actually happen. When false (current default
+                    # while flow-memory-proxy still runs), this is a no-op.
+                    try:
+                        from app.sb_memory import ingest_outcome as _sb_ingest
+                        sb_session_id = "proxy"
+                        if isinstance(payload, dict):
+                            sid = payload.get("_session_id")
+                            if isinstance(sid, str) and sid.strip():
+                                sb_session_id = sid
+                        await _sb_ingest(
+                            app_pool=pool,
+                            agent_id="claude-code",
+                            session_id=sb_session_id,
+                            model=meta.get("actual_model") or requested_model,
+                            prompt_body=(
+                                captured_body.body if captured_body else None
+                            ),
+                            response_body=response_captured.body,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "anthropic_oauth_engram_failed", error=str(exc),
+                        )
                 except Exception as exc:
                     log.warning("anthropic_oauth_outcome_failed", error=str(exc))
 
