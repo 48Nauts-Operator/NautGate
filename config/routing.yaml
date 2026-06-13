@@ -26,14 +26,15 @@ tiers:
     fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
   balanced:
     # Pi's typical "list these files / read this / write that" lands here.
-    # DeepSeek V4 Pro: cheap, capable on code, 1M context for long histories.
-    primary:  { provider: openrouter, model: openrouter/deepseek/deepseek-v4-pro }
+    # Swapped off DeepSeek V4 Pro 2026-06-09: per-call avg was $1.30
+    # (9.4% of total spend) — Kimi K2 Thinking averages cheaper in practice.
+    primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2-thinking }
     fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
   deep:
     # Code-heavy or programming-domain prose (iOS, frameworks, etc.).
     # Kimi K2 Thinking is the cheapest strong-reasoning model on the market.
     primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2-thinking }
-    fallback: { provider: openrouter, model: openrouter/deepseek/deepseek-v4-pro }
+    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
   expert:
     # Hardest tier. Kimi K2.6 → Gemini Pro fallback. NO Anthropic/OpenAI.
     # If Claude is truly needed, the caller should request claude-opus-4-7
