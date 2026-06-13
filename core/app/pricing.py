@@ -76,8 +76,16 @@ class PricingTable:
         *,
         prompt_tokens: int | None,
         completion_tokens: int | None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
     ) -> float | None:
-        """USD cost for one call. Returns None when pricing is unknown OR usage is missing."""
+        """USD cost for one call. Returns None when pricing is unknown OR usage is missing.
+
+        ``prompt_tokens`` is the FRESH (non-cached) input. Cache reads/writes are
+        priced at their own tiers (cache_read / cache_write from pricing.yaml),
+        falling back to the full ``input`` rate when a tier is unpriced so we
+        never silently zero-cost cached volume.
+        """
         price = self.lookup(provider, model)
         if price is None:
             if provider and model:
@@ -86,11 +94,20 @@ class PricingTable:
                     log.warning("pricing_unknown provider=%s model=%s", provider, model)
                     self._missing_warned.add(pair)
             return None
-        if prompt_tokens is None and completion_tokens is None:
+        if (
+            prompt_tokens is None
+            and completion_tokens is None
+            and cache_read_tokens is None
+            and cache_write_tokens is None
+        ):
             return None
+        read_rate = price.cache_read if price.cache_read is not None else price.input
+        write_rate = price.cache_write if price.cache_write is not None else price.input
         prompt_cost = (prompt_tokens or 0) * price.input / 1_000_000
+        cache_read_cost = (cache_read_tokens or 0) * read_rate / 1_000_000
+        cache_write_cost = (cache_write_tokens or 0) * write_rate / 1_000_000
         completion_cost = (completion_tokens or 0) * price.output / 1_000_000
-        return round(prompt_cost + completion_cost, 6)
+        return round(prompt_cost + cache_read_cost + cache_write_cost + completion_cost, 6)
 
     @property
     def size(self) -> int:

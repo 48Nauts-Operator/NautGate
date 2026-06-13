@@ -35,6 +35,7 @@ from app.outcome import persist_outcome
 from app.provider_health import upsert_health
 from app.scoring import resolve_healthy, score, to_tier
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
+from app.usage import cache_prefix_hash, normalize_usage
 
 AUTO_MODEL_TOKEN = "auto"
 TOOL_CALL_ARG_EXCERPT_BYTES = 200
@@ -439,10 +440,16 @@ async def _process_chat_request(
     completion_tokens: int | None = None
     was_empty = False
     tool_calls_made: list[dict] | None = None
+    prompt_tokens = completion_tokens = None
+    reasoning_tokens = cache_read_tokens = cache_write_tokens = None
     if upstream_resp:
-        usage = upstream_resp.get("usage") or {}
-        prompt_tokens = usage.get("prompt_tokens")
-        completion_tokens = usage.get("completion_tokens")
+        _usage = upstream_resp.get("usage") or {}
+        _n = normalize_usage(_usage, provider_hint=decision_provider)
+        prompt_tokens = _n.prompt_tokens
+        completion_tokens = _n.completion_tokens
+        reasoning_tokens = _n.reasoning_tokens
+        cache_read_tokens = _n.cache_read_tokens
+        cache_write_tokens = _n.cache_write_tokens
         try:
             msg = upstream_resp["choices"][0]["message"]
             content = msg.get("content", "") or ""
@@ -470,6 +477,8 @@ async def _process_chat_request(
             decision_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
         )
         if pricing is not None
         else None
@@ -482,6 +491,10 @@ async def _process_chat_request(
         duration_ms=duration_ms,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        prefix_hash=cache_prefix_hash(payload),
         cost_usd=cost_usd,
         was_empty=was_empty,
         response_body=response_captured.body,
@@ -660,6 +673,8 @@ def _streaming_response(
                     decision_model,
                     prompt_tokens=parsed.get("prompt_tokens"),
                     completion_tokens=parsed.get("completion_tokens"),
+                    cache_read_tokens=parsed.get("cache_read_tokens"),
+                    cache_write_tokens=parsed.get("cache_write_tokens"),
                 )
                 if stream_pricing is not None
                 else None
@@ -678,6 +693,9 @@ def _streaming_response(
                     prompt_tokens=parsed.get("prompt_tokens"),
                     completion_tokens=parsed.get("completion_tokens"),
                     reasoning_tokens=parsed.get("reasoning_tokens"),
+                    cache_read_tokens=parsed.get("cache_read_tokens"),
+                    cache_write_tokens=parsed.get("cache_write_tokens"),
+                    prefix_hash=cache_prefix_hash(payload),
                     cost_usd=stream_cost_usd,
                     was_empty=parsed.get("was_empty", False),
                     was_truncated=capture.was_truncated,
@@ -1128,6 +1146,114 @@ async def cost_timeseries(request: Request) -> Response:
             pool, agent_id=scope, bucket=bucket, hours=hours, project_id=project_scope,
         )
     )
+
+
+def _price_for_model(pricing, model: str | None):
+    """Resolve a ModelPrice for a bare model name by trying known providers.
+
+    The cache summary groups by decision_model only; pricing keys are
+    "<provider>/<model>". Try the provider families until one resolves.
+    """
+    if pricing is None or not model:
+        return None
+    for prov in ("anthropic", "openai", "openrouter", "deepseek", "gemini"):
+        p = pricing.lookup(prov, model)
+        if p is not None:
+            return p
+    return None
+
+
+def _cache_costs(pricing, model: str | None, fresh_tk: int, read_tk: int,
+                 write_tk: int) -> dict | None:
+    """Cache-off vs cache-on input cost for this model's volume.
+
+    off   = (fresh + read + write) × input_rate    [what it'd cost with no cache]
+    on    = fresh×input + read×cache_read_rate + write×cache_write_rate
+    saved = off − on  (positive = caching is a net win)
+
+    Input-side only — completion cost is identical either way, so it cancels.
+    """
+    price = _price_for_model(pricing, model)
+    if price is None:
+        return None
+    read_rate = price.cache_read if price.cache_read is not None else price.input
+    write_rate = price.cache_write if price.cache_write is not None else price.input
+    off = (fresh_tk + read_tk + write_tk) * price.input / 1_000_000
+    on = (
+        fresh_tk * price.input + read_tk * read_rate + write_tk * write_rate
+    ) / 1_000_000
+    return {
+        "cache_off_usd": round(off, 6),
+        "cache_on_usd": round(on, 6),
+        "saved_usd": round(off - on, 6),
+    }
+
+
+@router.get("/cache/summary")
+async def cache_summary(request: Request) -> Response:
+    """Prompt-cache accounting: hit-rate, token split, and real $ saved.
+
+    Gateway-wide (single-operator). Optional ``?model=<name>`` filter and
+    ``?hours=N`` (default 24, max 720).
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    try:
+        hours = int(request.query_params.get("hours", "24"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    model_filter = request.query_params.get("model")
+
+    summary = await queries.get_cache_summary(pool, hours=hours, model_filter=model_filter)
+    pricing = getattr(request.app.state, "pricing", None)
+
+    # Attach cache-off / cache-on / saved per model + totals, using live pricing.
+    tot_off = tot_on = 0.0
+    have_any = False
+    for row in summary["by_model"]:
+        costs = _cache_costs(
+            pricing, row["model"], row["fresh_tokens"],
+            row["cache_read_tokens"], row["cache_write_tokens"],
+        )
+        if costs is None:
+            row["cache_off_usd"] = row["cache_on_usd"] = row["saved_usd"] = None
+            continue
+        row.update(costs)
+        tot_off += costs["cache_off_usd"]
+        tot_on += costs["cache_on_usd"]
+        have_any = True
+    t = summary["totals"]
+    t["cache_off_usd"] = round(tot_off, 6) if have_any else None
+    t["cache_on_usd"] = round(tot_on, 6) if have_any else None
+    t["saved_usd"] = round(tot_off - tot_on, 6) if have_any else None
+    return JSONResponse(summary)
+
+
+@router.get("/cache/prefixes")
+async def cache_prefixes(request: Request) -> Response:
+    """Cacheable-prefix reuse: top-reused prefixes + 'leaky' write-heavy ones.
+
+    The leak list surfaces prompts that write to cache but rarely read back —
+    usually a timestamp/ID mutating an otherwise-stable prefix.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 720:
+        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+
+    return JSONResponse(await queries.get_prefix_reuse(pool, hours=hours))
 
 
 @router.get("/decisions/recent")

@@ -67,6 +67,65 @@ def test_compute_cost_one_side_zero(pricing):
     assert cost == pytest.approx(0.001, rel=1e-6)
 
 
+@pytest.fixture
+def cache_pricing(tmp_path):
+    cfg = tmp_path / "pricing.yaml"
+    cfg.write_text(
+        """
+pricing:
+  anthropic/claude-opus-4:
+    input: 15.0
+    output: 75.0
+    cache_read: 1.5
+    cache_write: 18.75
+  openai/gpt-4o-mini:
+    input: 0.15
+    output: 0.6
+""",
+        encoding="utf-8",
+    )
+    return PricingTable.from_yaml(cfg)
+
+
+def test_compute_cost_cache_tiers(cache_pricing):
+    # fresh 245 @ $15/M = 0.003675
+    # cache_read 18420 @ $1.5/M = 0.02763
+    # cache_write 1000 @ $18.75/M = 0.01875
+    # completion 512 @ $75/M = 0.0384
+    cost = cache_pricing.compute_cost(
+        "anthropic", "claude-opus-4",
+        prompt_tokens=245, completion_tokens=512,
+        cache_read_tokens=18420, cache_write_tokens=1000,
+    )
+    assert cost == pytest.approx(0.003675 + 0.02763 + 0.01875 + 0.0384, rel=1e-6)
+
+
+def test_compute_cost_cache_read_only(cache_pricing):
+    cost = cache_pricing.compute_cost(
+        "anthropic", "claude-opus-4",
+        prompt_tokens=None, completion_tokens=None, cache_read_tokens=10000,
+    )
+    assert cost == pytest.approx(10000 * 1.5 / 1_000_000, rel=1e-6)
+
+
+def test_compute_cost_unpriced_tier_falls_back_to_input(cache_pricing):
+    # gpt-4o-mini has no cache_read/cache_write → both fall back to input rate.
+    cost = cache_pricing.compute_cost(
+        "openai", "gpt-4o-mini",
+        prompt_tokens=0, completion_tokens=0,
+        cache_read_tokens=1000, cache_write_tokens=1000,
+    )
+    assert cost == pytest.approx(2000 * 0.15 / 1_000_000, rel=1e-6)
+
+
+def test_compute_cost_backward_compatible_two_arg(cache_pricing):
+    # Old call sites that don't pass cache kwargs still work.
+    cost = cache_pricing.compute_cost(
+        "anthropic", "claude-opus-4", prompt_tokens=1000, completion_tokens=0
+    )
+    assert cost == pytest.approx(1000 * 15.0 / 1_000_000, rel=1e-6)
+
+
 def test_missing_yaml_loads_empty():
     p = PricingTable.from_yaml(Path("/nonexistent/pricing.yaml"))
     assert p.size == 0

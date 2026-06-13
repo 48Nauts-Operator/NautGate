@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.streaming import parse_sse_for_outcome
+from app.usage import cache_prefix_hash, normalize_usage
 
 log = structlog.get_logger()
 
@@ -106,12 +107,14 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
 
 
 def _notional_cost(pricing, model: str | None, prompt_tk: int | None,
-                   completion_tk: int | None) -> float | None:
+                   completion_tk: int | None, cache_read_tk: int | None = None,
+                   cache_write_tk: int | None = None) -> float | None:
     """Compute what this call WOULD have cost on metered billing.
 
     Uses the same PricingTable the metered path uses, with ``anthropic``
     as the provider hint so snapshot model names (claude-opus-4-7, etc.)
-    resolve via the YAML anchors in pricing.yaml.
+    resolve via the YAML anchors in pricing.yaml. Includes the cache tiers so
+    the subscription-savings figure reflects the real (cache-discounted) bill.
     """
     if pricing is None or not model:
         return None
@@ -119,6 +122,7 @@ def _notional_cost(pricing, model: str | None, prompt_tk: int | None,
         return pricing.compute_cost(
             "anthropic", model,
             prompt_tokens=prompt_tk, completion_tokens=completion_tk,
+            cache_read_tokens=cache_read_tk, cache_write_tokens=cache_write_tk,
         )
     except Exception:
         return None
@@ -161,11 +165,13 @@ def _parse_response_meta(body_bytes: bytes, was_streaming: bool) -> dict:
                     "name": block.get("name"),
                     "arguments": json.dumps(block.get("input") or {}),
                 })
+    n = normalize_usage(usage, provider_hint="anthropic")
     return {
-        "prompt_tokens": usage.get("input_tokens"),
-        "completion_tokens": usage.get("output_tokens"),
-        "reasoning_tokens": (usage.get("cache_read_input_tokens")
-                             or usage.get("cache_creation_input_tokens")),
+        "prompt_tokens": n.prompt_tokens,
+        "completion_tokens": n.completion_tokens,
+        "reasoning_tokens": n.reasoning_tokens,
+        "cache_read_tokens": n.cache_read_tokens,
+        "cache_write_tokens": n.cache_write_tokens,
         "tool_calls": tool_calls,
         "assembled_content": "".join(text_parts),
     }
@@ -285,8 +291,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
 
     async def _relay() -> AsyncIterator[bytes]:
         body_buf = bytearray()
+        first_byte_ns: int | None = None
         try:
             async for chunk in upstream.aiter_raw():
+                if first_byte_ns is None and chunk:
+                    first_byte_ns = _time.monotonic_ns()
                 body_buf.extend(chunk)
                 yield chunk
         finally:
@@ -298,6 +307,10 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
 
             if pool is not None:
                 duration_ms = int((_time.monotonic_ns() - started_at_ns) / 1_000_000)
+                first_byte_ms = (
+                    int((first_byte_ns - started_at_ns) / 1_000_000)
+                    if first_byte_ns is not None else None
+                )
                 try:
                     # We forward upstream bytes raw to the client (so the
                     # client decompresses correctly). For our own parsing
@@ -331,12 +344,15 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     # — this path is already opt-in via OAuth detection).
                     response_text = decoded.decode("utf-8", errors="replace")
                     response_captured = capture_response(response_text, "none")
-                    # Notional cost: what this call WOULD have cost on metered.
+                    # Notional cost: what this call WOULD have cost on metered,
+                    # cache tiers included.
                     notional = _notional_cost(
                         pricing,
                         meta.get("actual_model") or requested_model,
                         meta.get("prompt_tokens"),
                         meta.get("completion_tokens"),
+                        meta.get("cache_read_tokens"),
+                        meta.get("cache_write_tokens"),
                     )
                     from app.outcome import persist_outcome
                     spool = getattr(request.app.state, "outcome_spool", None)
@@ -345,9 +361,13 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         decision_id=decision_id,
                         status_code=upstream_status,
                         duration_ms=duration_ms,
+                        first_byte_ms=first_byte_ms,
                         prompt_tokens=meta.get("prompt_tokens"),
                         completion_tokens=meta.get("completion_tokens"),
                         reasoning_tokens=meta.get("reasoning_tokens"),
+                        cache_read_tokens=meta.get("cache_read_tokens"),
+                        cache_write_tokens=meta.get("cache_write_tokens"),
+                        prefix_hash=cache_prefix_hash(payload),
                         # Real spend = $0 (Max covers it). Notional separately.
                         cost_usd=0.0,
                         notional_cost_usd=notional,

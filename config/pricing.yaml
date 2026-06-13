@@ -38,6 +38,21 @@ pricing:
     cache_read: 1.50
     cache_write: 18.75
   anthropic/claude-opus-4-7: *opus4
+  anthropic/claude-opus-4-8: *opus4
+  # 1M-context variant (Claude Code model id). Long-context (>200K-token)
+  # prompts carry an Anthropic premium not modeled here — base tier is a
+  # close-enough default for typical sub-200K calls.
+  "anthropic/claude-opus-4-8[1m]": *opus4
+  # Fable 5: input rate from Andre ($50/M). output/cache derived from the same
+  # ratios every other Anthropic tier here uses (output = 5× input, cache_read
+  # = input/10, cache_write = input × 1.25). CORRECT `output` if Fable's ratio
+  # differs from the standard 5×.
+  anthropic/claude-fable-5: &fable5
+    input: 50.00
+    output: 250.00
+    cache_read: 5.00
+    cache_write: 62.50
+  "anthropic/claude-fable-5[1m]": *fable5
 
   # --- OpenAI ---
   openai/gpt-4o-mini:

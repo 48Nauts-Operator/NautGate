@@ -32,6 +32,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
+from app.streaming import _iter_sse_events
+from app.usage import NormalizedUsage, cache_prefix_hash, normalize_usage
 
 log = structlog.get_logger()
 
@@ -67,6 +69,56 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
             continue
         out[k] = v
     return out
+
+
+def _extract_codex_usage(body: bytes) -> NormalizedUsage:
+    """Best-effort token + cache extraction from a Codex (Responses API) body.
+
+    Responses streaming emits a ``response.completed`` event carrying
+    ``response.usage`` with ``input_tokens`` (TOTAL), ``output_tokens`` and
+    ``input_tokens_details.cached_tokens`` (a SUBSET of input). We map it onto
+    the OpenAI shape so normalize_usage subtracts cached → fresh. Returns an
+    empty NormalizedUsage when nothing parses.
+    """
+    usage_obj: dict | None = None
+    try:
+        for _etype, data in _iter_sse_events(body):
+            if data == "[DONE]":
+                continue
+            try:
+                payload = json.loads(data)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            resp = payload.get("response")
+            cand = (resp or {}).get("usage") if isinstance(resp, dict) else payload.get("usage")
+            if isinstance(cand, dict):
+                usage_obj = cand  # keep last; final event has the authoritative totals
+    except Exception:
+        return NormalizedUsage()
+
+    if not usage_obj:
+        # Non-stream JSON envelope fallback.
+        try:
+            env = json.loads(body.decode("utf-8", errors="replace"))
+            cand = env.get("usage") if isinstance(env, dict) else None
+            if isinstance(cand, dict):
+                usage_obj = cand
+        except (ValueError, TypeError):
+            return NormalizedUsage()
+    if not usage_obj:
+        return NormalizedUsage()
+
+    details = usage_obj.get("input_tokens_details")
+    mapped = {
+        "prompt_tokens": usage_obj.get("input_tokens") or usage_obj.get("prompt_tokens"),
+        "completion_tokens": usage_obj.get("output_tokens") or usage_obj.get("completion_tokens"),
+        "prompt_tokens_details": {
+            "cached_tokens": details.get("cached_tokens") if isinstance(details, dict) else None
+        },
+    }
+    return normalize_usage(mapped, provider_hint="openai")
 
 
 async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONResponse:
@@ -164,8 +216,12 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
 
     async def _relay() -> AsyncIterator[bytes]:
         body_buf = bytearray()
+        first_byte_ns: int | None = None
         try:
             async for chunk in upstream.aiter_raw():
+                if first_byte_ns is None and chunk:
+                    import time as _time
+                    first_byte_ns = _time.monotonic_ns()
                 body_buf.extend(chunk)
                 yield chunk
         finally:
@@ -181,11 +237,16 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                     int((_time.monotonic_ns() - started_at_ns) / 1_000_000)
                     if started_at_ns else 0
                 )
+                first_byte_ms = (
+                    int((first_byte_ns - started_at_ns) / 1_000_000)
+                    if first_byte_ns is not None and started_at_ns else None
+                )
                 try:
                     # Best-effort body capture for the audit detail. SSE chunks
                     # accumulated above; for non-stream it's just the JSON.
                     response_text = body_buf.decode("utf-8", errors="replace")
                     response_captured = capture_response(response_text, "none")
+                    cu = _extract_codex_usage(bytes(body_buf))
                     from app.outcome import persist_outcome
                     spool = getattr(request.app.state, "outcome_spool", None)
                     await persist_outcome(
@@ -193,6 +254,13 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         decision_id=decision_id,
                         status_code=upstream.status_code,
                         duration_ms=duration_ms,
+                        first_byte_ms=first_byte_ms,
+                        prompt_tokens=cu.prompt_tokens,
+                        completion_tokens=cu.completion_tokens,
+                        reasoning_tokens=cu.reasoning_tokens,
+                        cache_read_tokens=cu.cache_read_tokens,
+                        cache_write_tokens=cu.cache_write_tokens,
+                        prefix_hash=cache_prefix_hash(payload),
                         response_body=response_captured.body,
                         response_body_truncated_at_byte=response_captured.truncated_at_byte,
                         response_size_bytes=len(body_buf),

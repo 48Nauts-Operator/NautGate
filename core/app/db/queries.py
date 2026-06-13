@@ -100,6 +100,9 @@ async def write_outcome(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     reasoning_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    prefix_hash: str | None = None,
     cost_usd: float | None = None,
     was_empty: bool = False,
     used_fallback: bool = False,
@@ -122,7 +125,8 @@ async def write_outcome(
             """
             INSERT INTO nautgate.route_outcomes
                 (decision_id, status_code, duration_ms, first_byte_ms,
-                 prompt_tokens, completion_tokens, reasoning_tokens, cost_usd,
+                 prompt_tokens, completion_tokens, reasoning_tokens,
+                 cache_read_tokens, cache_write_tokens, prefix_hash, cost_usd,
                  was_empty, used_fallback, fallback_count, client_disconnected,
                  was_truncated, truncated_at_byte,
                  response_body, response_body_truncated_at_byte,
@@ -130,7 +134,7 @@ async def write_outcome(
                  actual_model, actual_provider,
                  notional_cost_usd, rate_limited_429)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                    $18::jsonb, $19, $20, $21, $22)
+                    $18, $19, $20, $21::jsonb, $22, $23, $24, $25)
             """,
             decision_id,
             status_code,
@@ -139,6 +143,9 @@ async def write_outcome(
             prompt_tokens,
             completion_tokens,
             reasoning_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            prefix_hash,
             cost_usd,
             was_empty,
             used_fallback,
@@ -328,6 +335,167 @@ async def get_cost_summary(
         "by_agent": by_agent,
         "by_project": by_project,
     }
+
+
+async def get_cache_summary(
+    pool: asyncpg.Pool,
+    *,
+    hours: int,
+    model_filter: str | None = None,
+) -> dict:
+    """Prompt-cache accounting over the window: totals + per-model breakdown.
+
+    hit_rate = cache_read / (cache_read + cache_write + prompt)  — share of input
+    served from cache. saved_usd = naive cost (everything billed at the input
+    rate) minus actual cost (cache tiers applied), i.e. what caching saved.
+    """
+    conds = ["d.ts > NOW() - make_interval(hours => $1)", "o.decision_id IS NOT NULL"]
+    params: list = [hours]
+    if model_filter and model_filter != "*":
+        params.append(model_filter)
+        conds.append(f"d.decision_model = ${len(params)}")
+    where = " AND ".join(conds)
+
+    # Naive cost ≈ pretend every input token (fresh + read + write) was billed at
+    # the model's fresh input rate; we approximate the rate from actual rows via
+    # cost_usd, so we compute saved at the app layer instead. Here we surface the
+    # token volumes + actual cost; the route computes saved against pricing.
+    select_cols = """
+        SUM(COALESCE(o.prompt_tokens, 0))::BIGINT      AS fresh_tokens,
+        SUM(COALESCE(o.cache_read_tokens, 0))::BIGINT  AS cache_read_tokens,
+        SUM(COALESCE(o.cache_write_tokens, 0))::BIGINT AS cache_write_tokens,
+        SUM(COALESCE(o.completion_tokens, 0))::BIGINT  AS completion_tokens,
+        SUM(o.cost_usd)::FLOAT                          AS actual_cost_usd,
+        SUM(o.notional_cost_usd)::FLOAT                 AS notional_cost_usd,
+        COUNT(*)                                        AS calls
+    """
+
+    async with pool.acquire() as conn:
+        totals = await conn.fetchrow(
+            f"""
+            SELECT {select_cols}
+              FROM nautgate.route_decisions d
+              JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+             WHERE {where}
+            """,
+            *params,
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT d.decision_model AS model, {select_cols}
+              FROM nautgate.route_decisions d
+              JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+             WHERE {where}
+             GROUP BY d.decision_model
+             ORDER BY SUM(COALESCE(o.cache_read_tokens, 0)) DESC NULLS LAST
+            """,
+            *params,
+        )
+
+    def _shape(r) -> dict:
+        fresh = int(r["fresh_tokens"] or 0)
+        read = int(r["cache_read_tokens"] or 0)
+        write = int(r["cache_write_tokens"] or 0)
+        denom = fresh + read + write
+        return {
+            "fresh_tokens": fresh,
+            "cache_read_tokens": read,
+            "cache_write_tokens": write,
+            "completion_tokens": int(r["completion_tokens"] or 0),
+            "calls": int(r["calls"] or 0),
+            "actual_cost_usd": r["actual_cost_usd"],
+            "notional_cost_usd": r["notional_cost_usd"],
+            "hit_rate": (read / denom) if denom else None,
+            "write_read_ratio": (write / read) if read else None,
+        }
+
+    return {
+        "window_hours": hours,
+        "model_filter": model_filter or "*",
+        "totals": _shape(totals) if totals else _shape({}),
+        "by_model": [{"model": r["model"], **_shape(r)} for r in rows],
+    }
+
+
+async def get_prefix_reuse(
+    pool: asyncpg.Pool,
+    *,
+    hours: int,
+    limit: int = 20,
+) -> dict:
+    """Group outcomes by cacheable-prefix hash to find reuse vs. silent breaks.
+
+    Returns three lists:
+      top_reused — prefixes with the most cache-read tokens (caching working).
+      leaky      — prefixes that write to cache but rarely read it back
+                   (reuse_ratio < 1): a timestamp/ID is busting the prefix, or
+                   the TTL expires before the second call.
+      latency    — TTFT (first_byte_ms) spread per prefix. This is the SPEED lens
+                   and the one that works for LOCAL models (Ollama/vLLM), which
+                   report no cache tokens at all: a repeated prefix with low,
+                   stable TTFT = KV cache warm; a wide spread = cache going cold /
+                   thrashing between calls. Spread = p90 − p50.
+    """
+    where = "d.ts > NOW() - make_interval(hours => $1) AND o.prefix_hash IS NOT NULL"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT o.prefix_hash AS prefix_hash,
+                   MAX(d.decision_model) AS model,
+                   COUNT(*)                                        AS calls,
+                   SUM(COALESCE(o.cache_read_tokens, 0))::BIGINT   AS reads,
+                   SUM(COALESCE(o.cache_write_tokens, 0))::BIGINT  AS writes,
+                   COUNT(o.first_byte_ms)                          AS ttft_n,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.first_byte_ms)  AS ttft_p50,
+                   PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY o.first_byte_ms)  AS ttft_p90,
+                   MIN(o.first_byte_ms)                            AS ttft_min,
+                   MAX(o.first_byte_ms)                            AS ttft_max,
+                   MAX(d.ts)                                       AS last_seen
+              FROM nautgate.route_decisions d
+              JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+             WHERE {where}
+             GROUP BY o.prefix_hash
+            """,
+            hours,
+        )
+
+    items = []
+    for r in rows:
+        reads = int(r["reads"] or 0)
+        writes = int(r["writes"] or 0)
+        p50 = float(r["ttft_p50"]) if r["ttft_p50"] is not None else None
+        p90 = float(r["ttft_p90"]) if r["ttft_p90"] is not None else None
+        items.append({
+            "prefix_hash": r["prefix_hash"],
+            "model": r["model"],
+            "calls": int(r["calls"] or 0),
+            "reads": reads,
+            "writes": writes,
+            "reuse_ratio": (reads / writes) if writes else None,
+            "ttft_n": int(r["ttft_n"] or 0),
+            "ttft_p50_ms": round(p50) if p50 is not None else None,
+            "ttft_spread_ms": (round(p90 - p50) if p50 is not None and p90 is not None else None),
+            "ttft_min_ms": r["ttft_min"],
+            "ttft_max_ms": r["ttft_max"],
+            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+        })
+
+    top_reused = sorted(items, key=lambda x: x["reads"], reverse=True)[:limit]
+    # Leaky: wrote to cache but got little back. Needs ≥2 calls (a one-off write
+    # that never recurs isn't a leak) and a poor reuse ratio.
+    leaky = sorted(
+        [x for x in items if x["writes"] > 0 and x["calls"] >= 2
+         and (x["reuse_ratio"] is None or x["reuse_ratio"] < 1.0)],
+        key=lambda x: x["writes"], reverse=True,
+    )[:limit]
+    # Latency: needs ≥2 timed calls on the same prefix. Sorted by spread desc so
+    # the coldest/thrashing caches surface first (works for local + cloud).
+    latency = sorted(
+        [x for x in items if x["ttft_n"] >= 2 and x["ttft_spread_ms"] is not None],
+        key=lambda x: x["ttft_spread_ms"], reverse=True,
+    )[:limit]
+
+    return {"window_hours": hours, "top_reused": top_reused, "leaky": leaky, "latency": latency}
 
 
 async def get_cost_timeseries(

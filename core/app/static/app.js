@@ -440,6 +440,7 @@
     if (activeTab === "overview") loadOverview();
     else if (activeTab === "audit") loadAudit();
     else if (activeTab === "cost") loadCost();
+    else if (activeTab === "cache") loadCache();
     else if (activeTab === "privacy") loadPrivacy();
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "scorecard") loadScorecard();
@@ -1992,6 +1993,135 @@
       /* swallow; auth chip explains */
     }
   }
+
+  // --- Cache tab ---------------------------------------------------------
+  let cacheWindow = 24;
+
+  function pct(n) {
+    if (n === null || n === undefined) return "—";
+    return (n * 100).toFixed(1) + "%";
+  }
+  function shortHash(h) {
+    return h ? h.slice(0, 10) : "—";
+  }
+  function ms(v) {
+    return v === null || v === undefined ? "—" : Math.round(v).toLocaleString() + " ms";
+  }
+
+  async function loadCache() {
+    if (!getToken()) return;
+    const model = document.getElementById("cache-model-filter")?.value || "*";
+    const mq = model && model !== "*" ? `&model=${encodeURIComponent(model)}` : "";
+    try {
+      const [summary, prefixes] = await Promise.all([
+        api(`/v1/cache/summary?hours=${cacheWindow}${mq}`),
+        api(`/v1/cache/prefixes?hours=${cacheWindow}`),
+      ]);
+      renderCacheSummary(summary);
+      renderCachePrefixes(prefixes);
+    } catch (e) {
+      /* swallow; auth chip explains */
+    }
+  }
+
+  function renderCacheSummary(s) {
+    const t = s.totals || {};
+    document.getElementById("ch-hitrate").textContent = pct(t.hit_rate);
+    const savedEl = document.getElementById("ch-saved");
+    savedEl.textContent = usd(t.saved_usd);
+    savedEl.title =
+      t.cache_off_usd != null
+        ? `Cache off: ${usd(t.cache_off_usd)} → cache on: ${usd(t.cache_on_usd)} (input-side). Saved = the difference.`
+        : "Read discount minus the cache-write premium. Positive = caching is a net win.";
+    document.getElementById("ch-split").textContent =
+      `${(t.fresh_tokens || 0).toLocaleString()} / ${(t.cache_read_tokens || 0).toLocaleString()} / ${(t.cache_write_tokens || 0).toLocaleString()}`;
+    document.getElementById("ch-ratio").textContent =
+      t.write_read_ratio == null ? "—" : t.write_read_ratio.toFixed(2);
+
+    // Populate the model filter once (preserve current selection).
+    const sel = document.getElementById("cache-model-filter");
+    if (sel && sel.options.length <= 1) {
+      const cur = sel.value;
+      for (const r of s.by_model) {
+        const o = document.createElement("option");
+        o.value = r.model;
+        o.textContent = r.model;
+        sel.appendChild(o);
+      }
+      sel.value = cur;
+    }
+
+    const tbody = document.querySelector("#cache-model tbody");
+    tbody.innerHTML = (s.by_model || []).map((r) => `
+      <tr>
+        <td><b>${esc(r.model || "—")}</b></td>
+        <td>${pct(r.hit_rate)}</td>
+        <td>${(r.fresh_tokens || 0).toLocaleString()}</td>
+        <td>${(r.cache_read_tokens || 0).toLocaleString()}</td>
+        <td>${(r.cache_write_tokens || 0).toLocaleString()}</td>
+        <td class="cost-notional">${usd(r.cache_off_usd)}</td>
+        <td>${usd(r.cache_on_usd)}</td>
+        <td class="cache-saved">${usd(r.saved_usd)}</td>
+        <td>${r.calls || 0}</td>
+      </tr>`).join("") || `<tr><td colspan="9" class="hint">No cached calls in this window.</td></tr>`;
+  }
+
+  function reuseLabel(reads, writes) {
+    if (!writes) return reads ? "read-only" : "—";
+    return (reads / writes).toFixed(1) + "×";
+  }
+
+  function renderCachePrefixes(p) {
+    const reused = document.querySelector("#cache-reused tbody");
+    reused.innerHTML = (p.top_reused || []).map((r) => `
+      <tr>
+        <td><code title="${esc(r.prefix_hash)}">${shortHash(r.prefix_hash)}</code></td>
+        <td>${esc(r.model || "—")}</td>
+        <td>${(r.reads || 0).toLocaleString()}</td>
+        <td>${(r.writes || 0).toLocaleString()}</td>
+        <td>${r.reuse_ratio == null ? "—" : r.reuse_ratio.toFixed(1) + "×"}</td>
+        <td>${r.calls || 0}</td>
+      </tr>`).join("") || `<tr><td colspan="6" class="hint">No cacheable prefixes seen yet.</td></tr>`;
+
+    const leaky = document.querySelector("#cache-leaky tbody");
+    leaky.innerHTML = (p.leaky || []).map((r) => `
+      <tr class="leak-row">
+        <td><code title="${esc(r.prefix_hash)}">${shortHash(r.prefix_hash)}</code></td>
+        <td>${esc(r.model || "—")}</td>
+        <td>${(r.writes || 0).toLocaleString()}</td>
+        <td>${(r.reads || 0).toLocaleString()}</td>
+        <td>${r.reuse_ratio == null ? "0×" : r.reuse_ratio.toFixed(1) + "×"}</td>
+        <td>${r.calls || 0}</td>
+      </tr>`).join("") || `<tr><td colspan="6" class="hint">No leaks detected — prefixes are reused well.</td></tr>`;
+
+    const warmth = document.querySelector("#cache-warmth tbody");
+    warmth.innerHTML = (p.latency || []).map((r) => {
+      // Flag a wide spread relative to the median as a cold/thrashing cache.
+      const cold = r.ttft_p50_ms && r.ttft_spread_ms != null && r.ttft_spread_ms > r.ttft_p50_ms;
+      return `
+      <tr${cold ? ' class="leak-row"' : ""}>
+        <td><code title="${esc(r.prefix_hash)}">${shortHash(r.prefix_hash)}</code></td>
+        <td>${esc(r.model || "—")}</td>
+        <td>${ms(r.ttft_p50_ms)}</td>
+        <td>${ms(r.ttft_spread_ms)}</td>
+        <td>${ms(r.ttft_min_ms)}</td>
+        <td>${ms(r.ttft_max_ms)}</td>
+        <td>${r.ttft_n || 0}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="7" class="hint">No timed prefixes yet (need ≥2 streamed calls sharing a prefix).</td></tr>`;
+  }
+
+  document.querySelectorAll("#tab-cache .window-buttons button").forEach((b) => {
+    b.addEventListener("click", () => {
+      cacheWindow = Number(b.dataset.window);
+      document
+        .querySelectorAll("#tab-cache .window-buttons button")
+        .forEach((x) => x.classList.toggle("active", x === b));
+      loadCache();
+    });
+  });
+  document.getElementById("cache-model-filter")?.addEventListener("change", loadCache);
+  document.getElementById("cache-reload")?.addEventListener("click", loadCache);
 
   function renderCostSummary(s) {
     document.getElementById("c-total").textContent = usd(s.total_cost_usd);

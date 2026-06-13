@@ -96,6 +96,8 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
     finish_reason: str | None = None
     actual_model: str | None = None
     actual_provider: str | None = None
@@ -147,9 +149,25 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
 
         usage = payload.get("usage")
         if isinstance(usage, dict):
-            prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+            pt = usage.get("prompt_tokens")
+            # OpenAI prompt_tokens is the TOTAL input. Cache reads arrive either
+            # as prompt_tokens_details.cached_tokens (OpenAI / DeepSeek via OR) or
+            # as Anthropic passthrough fields (cache_*_input_tokens) when OR fronts
+            # an Anthropic model. Probe both; store fresh = total − read − write.
+            details_in = usage.get("prompt_tokens_details")
+            if isinstance(details_in, dict) and details_in.get("cached_tokens") is not None:
+                cache_read_tokens = details_in["cached_tokens"]
+            elif usage.get("cache_read_input_tokens") is not None:
+                cache_read_tokens = usage["cache_read_input_tokens"]
+            if usage.get("cache_creation_input_tokens") is not None:
+                cache_write_tokens = usage["cache_creation_input_tokens"]
+            if pt is not None:
+                pt = pt - (cache_read_tokens or 0) - (cache_write_tokens or 0)
+                if pt < 0:  # provider already excluded cache from prompt_tokens
+                    pt = usage.get("prompt_tokens")
+                prompt_tokens = pt
             completion_tokens = usage.get("completion_tokens", completion_tokens)
-            details = usage.get("output_tokens_details") or {}
+            details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
             if isinstance(details, dict):
                 reasoning_tokens = details.get("reasoning_tokens", reasoning_tokens)
 
@@ -158,7 +176,13 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         if ptype == "message_start":
             msg = payload.get("message") or {}
             u = msg.get("usage") or {}
+            # Anthropic input_tokens is already FRESH; cache reads/writes are
+            # separate additive fields carried on message_start.
             prompt_tokens = u.get("input_tokens", prompt_tokens)
+            if u.get("cache_read_input_tokens") is not None:
+                cache_read_tokens = u["cache_read_input_tokens"]
+            if u.get("cache_creation_input_tokens") is not None:
+                cache_write_tokens = u["cache_creation_input_tokens"]
         elif ptype == "content_block_start":
             cb = payload.get("content_block") or {}
             if cb.get("type") == "tool_use":
@@ -217,6 +241,8 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "reasoning_tokens": reasoning_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
         "finish_reason": finish_reason,
         "assembled_content": assembled,
         "was_empty": was_empty,

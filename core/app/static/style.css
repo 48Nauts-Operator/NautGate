@@ -1313,6 +1313,9 @@ table.clickable tbody tr { cursor: pointer; }
 /* --- Cost page extensions -------------------------------------------- */
 .cost-savings { border-left: 3px solid var(--accent); background: rgba(194, 65, 12, 0.04); }
 .cost-savings .metric { color: var(--accent); }
+.leak-row { background: rgba(220, 38, 38, 0.06); }
+.leak-row td:first-child { border-left: 3px solid #dc2626; }
+.cache-saved { color: var(--accent); font-variant-numeric: tabular-nums; }
 .cost-notional { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 #cost-model td:nth-child(n+2),
 #cost-provider td:nth-child(n+2) {

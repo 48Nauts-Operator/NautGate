@@ -17,6 +17,7 @@
       <a href="#quality" data-tab="quality">Quality</a>
       <a href="#behavior" data-tab="behavior">Behavior</a>
       <a href="#cost" data-tab="cost">Cost</a>
+      <a href="#cache" data-tab="cache">Cache</a>
       <a href="#privacy" data-tab="privacy">Privacy</a>
       <a href="#decisions" data-tab="decisions">Decisions</a>
       <a href="#health" data-tab="health">Provider health</a>
@@ -149,6 +150,49 @@
       <table id="cost-agent" style="display:none">
         <thead><tr><th>agent</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody>
       </table>
+    </section>
+
+    <!-- Cache (prompt-cache accounting + leak detector) --------------------->
+    <section id="tab-cache" class="tab">
+      <h2>Prompt cache
+        <span class="window-buttons">
+          <button data-window="24" class="active">24h</button>
+          <button data-window="168">7d</button>
+          <button data-window="720">30d</button>
+        </span>
+        <select id="cache-model-filter"><option value="*" selected>All models</option></select>
+        <button class="reload" id="cache-reload">↻</button>
+      </h2>
+      <p class="hint">What prompt caching is actually doing for you. Providers serve a repeated prefix (system prompt + tool defs) from cache at ~1/10th the input price; the first call <em>writes</em> it (Anthropic charges a 25% premium), later calls <em>read</em> it cheap. <b>Hit rate</b> = share of input tokens served from cache. <b>Saved</b> = read discount minus write premium. The <b>leak detector</b> finds prefixes that write but rarely read back — usually a timestamp or ID sneaking into an otherwise-stable prompt and silently busting the cache.</p>
+      <div class="grid">
+        <div class="card"><div class="metric" id="ch-hitrate">—</div><div class="label">cache hit rate</div></div>
+        <div class="card cost-savings"><div class="metric" id="ch-saved">$0.00</div><div class="label">saved by caching</div></div>
+        <div class="card"><div class="metric" id="ch-split">—</div><div class="label">fresh / read / write tokens</div></div>
+        <div class="card"><div class="metric" id="ch-ratio">—</div><div class="label">write : read ratio</div></div>
+      </div>
+
+      <h3>By model — cost with caching off vs on</h3>
+      <p class="hint">Input-side cost only (caching doesn't touch output). <b>off</b> = what this volume would cost billed entirely at the fresh input rate; <b>on</b> = actual, with cache-read discount and write premium applied.</p>
+      <table id="cache-model"><thead><tr>
+        <th>model</th><th>hit rate</th><th>fresh</th><th>cache read</th><th>cache write</th><th>cache off</th><th>cache on</th><th>saved</th><th>calls</th>
+      </tr></thead><tbody></tbody></table>
+
+      <div class="grid-2">
+        <div>
+          <h3>Top reused prefixes</h3>
+          <p class="hint">Caching working as intended — stable prefixes read back many times.</p>
+          <table id="cache-reused"><thead><tr><th>prefix</th><th>model</th><th>reads</th><th>writes</th><th>reuse</th><th>calls</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>⚠ Leaky prefixes</h3>
+          <p class="hint">Wrote to cache but barely read back (reuse &lt; 1). Something tiny is mutating the prefix — check for an injected timestamp/ID.</p>
+          <table id="cache-leaky"><thead><tr><th>prefix</th><th>model</th><th>writes</th><th>reads</th><th>reuse</th><th>calls</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+
+      <h3>Cache warmth — TTFT by prefix <span class="hint" style="font-weight:400">(the speed lens — works for local models too)</span></h3>
+      <p class="hint">Time-to-first-token grouped by prompt prefix. A repeated prefix with low, stable TTFT = KV cache warm (prefill skipped). A wide spread (p90 − p50) = the cache is going cold or thrashing between calls. This is how cache effectiveness shows up for <b>local models</b> (Ollama/vLLM), which report no cache tokens — only speed. Sorted worst-spread first.</p>
+      <table id="cache-warmth"><thead><tr><th>prefix</th><th>model</th><th>median TTFT</th><th>spread (p90−p50)</th><th>min</th><th>max</th><th>timed calls</th></tr></thead><tbody></tbody></table>
     </section>
 
     <!-- Audit Log (per-call live feed) -------------------------------------->
