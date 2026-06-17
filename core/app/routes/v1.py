@@ -1028,8 +1028,8 @@ async def findings_summary(request: Request) -> Response:
         raise HTTPException(
             status_code=400, detail="hours and scan_limit must be integers"
         ) from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
     if scan_limit < 1 or scan_limit > 2000:
         raise HTTPException(status_code=400, detail="scan_limit must be in 1..2000")
 
@@ -1105,8 +1105,8 @@ async def cost_summary(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "24"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     project_scope = _resolve_project_scope(request)
     return JSONResponse(await queries.get_cost_summary(
@@ -1137,8 +1137,8 @@ async def cost_timeseries(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "168"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     project_scope = _resolve_project_scope(request)
     return JSONResponse(
@@ -1205,8 +1205,8 @@ async def cache_summary(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "24"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
     model_filter = request.query_params.get("model")
 
     summary = await queries.get_cache_summary(pool, hours=hours, model_filter=model_filter)
@@ -1250,8 +1250,8 @@ async def cache_prefixes(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "168"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     return JSONResponse(await queries.get_prefix_reuse(pool, hours=hours))
 
@@ -1283,17 +1283,24 @@ async def health_providers(request: Request) -> Response:
     for key in keys:
         p = passive.get(key)
         hb = heartbeat.get(key)
-        # Passive is primary (real subscription pool); heartbeat is the fallback
-        # signal when there's no recent traffic.
+        # Passive (real subscription-pool traffic) is AUTHORITATIVE: if real
+        # calls are succeeding the provider is up, full stop. The synthetic
+        # heartbeat only fills in when there's no recent real traffic — a
+        # failing heartbeat ping (e.g. a stale OAuth token) must NOT mark a
+        # provider "down" while real traffic is flowing fine.
+        hb_status = {"ok": "up"}.get(hb["status"], hb["status"]) if hb else None
         if p and p["status"] != "no-data":
+            # Real traffic is the whole story for provider HEALTH: succeeding
+            # calls → up; 429/529ing calls → degraded (overload_pct shows how
+            # much). A failing synthetic OAuth heartbeat does NOT change this —
+            # a stale subscription-ping token is a credential concern surfaced
+            # in LLM Probing (auth_expired), not an outage.
             status = p["status"]
-        elif hb:
-            status = {"ok": "up"}.get(hb["status"], hb["status"])
+        elif hb_status:
+            # No real traffic in the window → fall back to the heartbeat probe.
+            status = hb_status
         else:
             status = "no-data"
-        # Overall = worst of passive + heartbeat.
-        if hb and _STATUS_RANK.get({"ok": "up"}.get(hb["status"], hb["status"]), 1) > _STATUS_RANK.get(status, 1):
-            status = {"ok": "up"}.get(hb["status"], hb["status"])
         providers.append({
             "key": key,
             "label": _PROVIDER_LABELS.get(key, key),
@@ -1453,8 +1460,8 @@ async def agents_discovered(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "168"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     rows = await queries.get_discovered_agents(pool, hours=hours)
     return JSONResponse({"hours": hours, "data": rows})
@@ -2551,8 +2558,8 @@ async def behavior_per_model(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "168"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
     rows = await queries.get_behavior_per_model(pool, hours=hours)
     return JSONResponse({"hours": hours, "data": rows})
 
@@ -3051,8 +3058,8 @@ async def stats(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "24"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    if hours < 1 or hours > 720:
-        raise HTTPException(status_code=400, detail="hours must be in 1..720")
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     body = await queries.get_stats(pool, agent_id=agent_id, hours=hours)
     return JSONResponse(body)

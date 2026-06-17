@@ -409,6 +409,45 @@
     });
   });
 
+  // Header page title + one-line subtitle per tab (sidebar chrome).
+  const PAGE_META = {
+    overview:  ["Overview", "Live provider status & last-24h traffic"],
+    audit:     ["Audit Log", "Every LLM call as it happens"],
+    decisions: ["Decisions", "Recent routing decisions · refreshes every 5s"],
+    health:    ["Provider Health", "Model availability & the in-process health tracker"],
+    scorecard: ["Model Scorecard", "The brain layer — per-model trust scores"],
+    behavior:  ["Behavior", "Did the model do what you asked?"],
+    drift:     ["Behavior Drift", "Silent provider-side change detection"],
+    quality:   ["Quality", "LLM-as-judge evaluations over the audit log"],
+    probe:     ["LLM Probing", "Provenance & degradation monitoring"],
+    cost:      ["Cost", "Spend & subscription savings"],
+    cache:     ["Prompt Cache", "Prompt-cache accounting & leak detector"],
+    privacy:   ["Privacy", "Lighthouse-style audit of recent prompts"],
+    models:    ["Models", "Routes from config/routing.yaml"],
+    settings:  ["Settings", "Profile, memory ingest, quality eval, backups & keys"],
+  };
+  function setPageHeading(name) {
+    const meta = PAGE_META[name] || [name, ""];
+    const t = document.getElementById("page-title");
+    const s = document.getElementById("page-subtitle");
+    if (t) t.textContent = meta[0];
+    if (s) s.textContent = meta[1];
+  }
+
+  // Per-page primary action button shown in the header (mock places these
+  // top-right). Functions are hoisted so referencing them here is safe.
+  function configureHeaderAction(name) {
+    const btn = document.getElementById("header-action");
+    if (!btn) return;
+    const actions = {
+      drift: { label: "📄 Generate report", fn: () => _generateDriftReport(false) },
+      probe: { label: "▶ Run probe now", fn: () => runProbeNow() },
+    };
+    const a = actions[name];
+    if (a) { btn.hidden = false; btn.textContent = a.label; btn.onclick = a.fn; }
+    else { btn.hidden = true; btn.onclick = null; }
+  }
+
   function activateTab(name) {
     activeTab = name;
     document.querySelectorAll("nav a[data-tab]").forEach((a) =>
@@ -417,6 +456,8 @@
     document.querySelectorAll(".tab").forEach((s) =>
       s.classList.toggle("active", s.id === "tab-" + name)
     );
+    setPageHeading(name);
+    configureHeaderAction(name);
     refreshActive();
     // Auto-refresh on the live tabs.
     clearInterval(refreshTimer);
@@ -505,22 +546,91 @@
 
   // --- Overview -----------------------------------------------------------
 
+  let overviewWindow = { hours: 24, bucket: "hour" };
+  document.querySelectorAll("#overview-window button").forEach((b) => {
+    b.addEventListener("click", () => {
+      overviewWindow = { hours: Number(b.dataset.hours), bucket: b.dataset.bucket || "day" };
+      document.querySelectorAll("#overview-window button").forEach((x) => x.classList.toggle("active", x === b));
+      loadOverview();
+    });
+  });
+
   async function loadOverview() {
     // Sessions section gets re-rendered every Overview load so the
     // last-used timestamps stay fresh as the active session makes calls.
     renderSessions();
     loadProviderStatus();
+    // Render the layout with placeholders first so the page is never blank
+    // (e.g. before a session is added, or while the first fetch is in flight).
+    const kpisEl = document.getElementById("overview-kpis");
+    if (kpisEl && !kpisEl.children.length) {
+      NG.statRow(kpisEl, ["Requests", "Empty rate", "p50 latency", "p95 latency"].map(
+        (label) => NG.statCard({ label, value: "—" })));
+      renderOverviewBars("overview-tier-card", "Requests by tier", null);
+    }
     try {
-      const s = await api("/v1/stats?hours=24");
-      document.getElementById("m-total").textContent = s.requests_total ?? "0";
-      document.getElementById("m-empty").textContent = pct(s.empty_rate);
-      document.getElementById("m-p50").textContent = ms(s.latency_ms?.p50);
-      document.getElementById("m-p95").textContent = ms(s.latency_ms?.p95);
-      renderBars("tier-bars", s.requests_by_tier);
-      renderBars("format-bars", s.requests_by_inbound_format);
+      const s = await api("/v1/stats?hours=" + overviewWindow.hours);
+      const kpis = document.getElementById("overview-kpis");
+      const total = s.requests_total ?? 0;
+      if (kpis) NG.statRow(kpis, [
+        NG.statCard({ label: "Requests", value: total.toLocaleString() }),
+        NG.statCard({ label: "Empty rate", value: pct(s.empty_rate), sub: `${s.empty_count || 0} of ${total.toLocaleString()} calls` }),
+        NG.statCard({ label: "p50 latency", value: ms(s.latency_ms?.p50 ?? s.latency_ms?.avg) }),
+        NG.statCard({ label: "p95 latency", value: ms(s.latency_ms?.p95) }),
+      ]);
+      renderOverviewBars("overview-tier-card", "Requests by tier", s.requests_by_tier);
+      renderOverviewRequestsChart();
     } catch (e) {
       // Silently leave dashes; auth state above will explain.
     }
+  }
+
+  // Requests-over-time area chart, derived by summing per-provider call
+  // counts from the cost timeseries (no dedicated requests-series endpoint).
+  async function renderOverviewRequestsChart() {
+    const mount = document.getElementById("overview-requests-card");
+    if (!mount) return;
+    const body = NG.el("div");
+    const chartEl = NG.el("div", { class: "v2-chart", html: '<p class="hint" style="padding:12px">loading…</p>' });
+    body.appendChild(chartEl);
+    mount.innerHTML = "";
+    mount.appendChild(NG.card({ title: "Requests over time", body }));
+    try {
+      const ts = await api(`/v1/cost/timeseries?hours=${overviewWindow.hours}&bucket=${overviewWindow.bucket}`);
+      const series = (ts && ts.series) || [];
+      const allTs = new Set();
+      series.forEach((sv) => (sv.points || []).forEach((p) => allTs.add(p.ts)));
+      const labels = Array.from(allTs).sort();
+      const x = labels.map((iso) => Math.floor(new Date(iso).getTime() / 1000));
+      const totals = labels.map((t) => series.reduce((sum, sv) => {
+        const pt = (sv.points || []).find((p) => p.ts === t);
+        return sum + (pt ? (pt.calls || 0) : 0);
+      }, 0));
+      chartEl.innerHTML = "";
+      if (x.length < 2) { chartEl.innerHTML = '<div class="v2-chart-fallback">Not enough traffic in this window.</div>'; return; }
+      NG.chart(chartEl, {
+        type: "area", x, height: 220,
+        series: [{ label: "requests", values: totals, color: "#E8833A" }],
+        fmtY: (v) => fmtNum(v),
+        fmtX: (e) => overviewWindow.bucket === "day"
+          ? new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" })
+          : new Date(e * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      });
+    } catch (_e) { chartEl.innerHTML = '<div class="v2-chart-fallback">No traffic data.</div>'; }
+  }
+
+  // Ranked-bar card for an Overview {label: count} distribution.
+  function renderOverviewBars(mountId, title, dict) {
+    const mount = document.getElementById(mountId);
+    if (!mount) return;
+    const items = Object.entries(dict || {})
+      .map(([k, v]) => ({ label: k, value: v }))
+      .sort((a, b) => b.value - a.value);
+    const body = items.length
+      ? NG.rankedBars({ items, fmt: (v) => (v || 0).toLocaleString() })
+      : NG.el("div", { class: "hint" }, "No traffic in this window.");
+    mount.innerHTML = "";
+    mount.appendChild(NG.card({ title, body }));
   }
 
   async function loadProviderStatus() {
@@ -530,32 +640,98 @@
     } catch (e) { /* leave prior state */ }
   }
 
+  // Header pill + sidebar live dot, fed from the same /v1/health/providers
+  // payload. Shows the single worst provider so the operator sees trouble
+  // from any tab. Polled globally every 60s (loadGlobalStatus).
+  const STATUS_RANK = { down: 3, degraded: 2, up: 1, "no-data": 0 };
+  function renderHeaderStatus(d) {
+    const pill = document.getElementById("header-status");
+    const navDot = document.getElementById("nav-health-dot");
+    if (!pill) return;
+    const providers = (d && d.providers) || [];
+    const clsMap = { up: "up", degraded: "degraded", down: "down", "no-data": "nodata" };
+    let worst = null;
+    for (const p of providers) {
+      if (!worst || (STATUS_RANK[p.status] || 0) > (STATUS_RANK[worst.status] || 0)) worst = p;
+    }
+    const labelEl = document.getElementById("header-status-label");
+    const detailEl = document.getElementById("header-status-detail");
+    if (!worst) {
+      pill.className = "header-status nodata";
+      if (labelEl) labelEl.textContent = "No data";
+      if (detailEl) detailEl.textContent = "";
+    } else if (worst.status === "up") {
+      pill.className = "header-status up";
+      if (labelEl) labelEl.textContent = "All providers up";
+      if (detailEl) detailEl.textContent = providers.length > 1 ? `· ${providers.length} live` : "";
+    } else {
+      pill.className = "header-status " + (clsMap[worst.status] || "nodata");
+      if (labelEl) labelEl.textContent = `${worst.label} ${worst.status}`;
+      const pctOv = worst.overload_pct ? `· ${(worst.overload_pct * 100).toFixed(0)}%` : "";
+      if (detailEl) detailEl.textContent = pctOv;
+    }
+    // Sidebar Provider Health dot mirrors the worst status.
+    if (navDot) {
+      if (!worst || worst.status === "no-data") {
+        navDot.hidden = true;
+      } else {
+        navDot.hidden = false;
+        navDot.className = "nav-dot " + (clsMap[worst.status] || "nodata");
+      }
+    }
+  }
+
+  // Global pollers for chrome that must stay live on every tab.
+  async function loadGlobalStatus() {
+    if (!getToken()) return;
+    try { renderHeaderStatus(await api("/v1/health/providers")); } catch (_e) {}
+  }
+  async function loadDriftBadge() {
+    if (!getToken()) return;
+    const badge = document.getElementById("nav-drift-badge");
+    if (!badge) return;
+    try {
+      const d = await api("/v1/drift");
+      const open = (d.alerts || []).filter((a) => a.is_open).length;
+      if (open > 0) { badge.hidden = false; badge.textContent = String(open); }
+      else { badge.hidden = true; }
+    } catch (_e) {}
+  }
+
   function renderProviderStatus(d) {
+    renderHeaderStatus(d);
     const strip = document.getElementById("provider-strip");
     if (!strip) return;
-    const dot = { up: "up", degraded: "degraded", down: "down", "no-data": "nodata" };
-    strip.innerHTML = (d.providers || []).map(p => {
-      const cls = dot[p.status] || "nodata";
+    const providers = (d && d.providers) || [];
+    strip.innerHTML = "";
+    if (!providers.length) {
+      strip.appendChild(NG.el("span", { class: "hint" }, "No provider data yet."));
+      return;
+    }
+    const clsMap = { up: "up", degraded: "degraded", down: "down", "no-data": "nodata" };
+    providers.forEach((p) => {
       let detail;
       if (p.status === "degraded" || p.status === "down") {
-        const pctOv = (p.overload_pct * 100).toFixed(0);
         const bits = [];
-        if (p.overload_pct > 0) bits.push(`${pctOv}% overloaded`);
+        if (p.overload_pct > 0) bits.push(`${(p.overload_pct * 100).toFixed(0)}% overloaded`);
+        else bits.push(p.status);
         if (p.retries_absorbed) bits.push(`${p.retries_absorbed} absorbed`);
         if (p.rate_limited) bits.push(`${p.rate_limited}× 429`);
-        detail = bits.join(" · ") || "errors";
+        detail = bits.join(" · ");
       } else if (p.status === "up") {
-        detail = p.total ? `${p.success}/${p.total} ok (10m)` : "reachable";
+        detail = p.heartbeat && p.heartbeat.latency_ms != null ? `up · ${p.heartbeat.latency_ms}ms` : (p.total ? `up · ${p.success}/${p.total} ok` : "up");
       } else {
         detail = p.heartbeat && p.heartbeat.status === "no-cred" ? "no credential" : "no recent calls";
       }
-      const hb = p.heartbeat && p.heartbeat.latency_ms != null ? ` · ${p.heartbeat.latency_ms}ms` : "";
-      return `<div class="status-badge ${cls}">
-        <span class="status-dot"></span>
-        <span class="status-label">${esc(p.label)}</span>
-        <span class="status-detail">${esc(detail)}${hb}</span>
-      </div>`;
-    }).join("") || '<span class="hint">No provider data yet.</span>';
+      const card = NG.el("div", { class: "prov-card prov-" + (clsMap[p.status] || "nodata") });
+      card.appendChild(NG.el("span", { class: "prov-dot" }));
+      const nameWrap = NG.el("div", { class: "prov-name" });
+      nameWrap.appendChild(NG.el("span", null, p.label));
+      if (/anthropic/i.test(p.label) && p.max_subscription) nameWrap.appendChild(NG.el("span", { class: "prov-tag" }, "(Max)"));
+      card.appendChild(nameWrap);
+      card.appendChild(NG.el("span", { class: "prov-detail" }, detail));
+      strip.appendChild(card);
+    });
   }
 
   document.getElementById("sessions-prev")?.addEventListener("click", () => { sessionPage--; renderSessions(); });
@@ -564,48 +740,42 @@
     sessionPageSize = Number(e.target.value) || 10; sessionPage = 0; renderSessions();
   });
 
-  function renderBars(id, dict) {
-    const el = document.getElementById(id);
-    el.innerHTML = "";
-    const max = Math.max(...Object.values(dict || {}), 1);
-    Object.entries(dict || {})
-      .sort((a, b) => b[1] - a[1])
-      .forEach(([k, n]) => {
-        const w = Math.round((n / max) * 400) + "px";
-        const row = document.createElement("div");
-        row.className = "bar";
-        row.innerHTML = `<span class="name">${k}</span><span class="fill" style="width:${w}"></span><span class="count">${n}</span>`;
-        el.appendChild(row);
-      });
-  }
-
   // --- Decisions ----------------------------------------------------------
 
+  let decTable = null;
   async function loadDecisions() {
+    if (!getToken()) return;
+    const mount = document.getElementById("dec-card");
+    if (!mount) return;
     try {
       const r = await api("/v1/decisions/recent?limit=50");
-      const tbody = document.getElementById("dec-tbody");
-      tbody.innerHTML = r.data
-        .map(
-          (d) => `
-        <tr data-decision="${esc(d.decision_id)}">
-          <td>${tsShort(d.ts)}</td>
-          <td>${esc(d.inbound_format)}</td>
-          <td><span class="tag tier">${esc(d.tier || "-")}</span></td>
-          <td>${(d.score ?? 0).toFixed(2)}</td>
-          <td>${sensTag(d.sensitivity)}</td>
-          <td>${esc(d.provider)}</td>
-          <td>${esc(d.model)}</td>
-          <td class="${statusClass(d.status_code)}">${d.status_code ?? "-"}</td>
-          <td>${d.duration_ms ?? "-"}</td>
-          <td>${tokens(d)}</td>
-          <td>${costShort(d)}</td>
-        </tr>`
-        )
-        .join("");
-      tbody.querySelectorAll("tr").forEach((row) => {
-        row.addEventListener("click", () => openDetail(row.dataset.decision));
-      });
+      const rows = r.data || [];
+      if (!decTable) {
+        decTable = NG.DataTable(mount, {
+          title: "Recent decisions",
+          countLabel: (n) => `${n} call${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter…",
+          defaultSort: { key: "ts", dir: "desc" },
+          emptyText: "No decisions yet.",
+          rows,
+          onRowClick: (d) => openDetail(d.decision_id),
+          columns: [
+            { key: "ts", label: "Time", render: (d) => tsShort(d.ts), sortValue: (d) => d.ts || "" },
+            { key: "inbound_format", label: "Fmt", render: (d) => d.inbound_format || "—", sortValue: (d) => d.inbound_format || "" },
+            { key: "tier", label: "Tier", render: (d) => NG.tierPill(d.tier || "—"), sortValue: (d) => d.tier || "" },
+            { key: "score", label: "Score", align: "right", render: (d) => (d.score ?? 0).toFixed(2), sortValue: (d) => d.score || 0 },
+            { key: "sensitivity", label: "Sens", sortable: false, render: (d) => sensTag(d.sensitivity) },
+            { key: "provider", label: "Provider", render: (d) => NG.providerTag(d.provider), sortValue: (d) => d.provider || "" },
+            { key: "model", label: "Model", render: (d) => shortModelName(d.model), sortValue: (d) => d.model || "" },
+            { key: "status_code", label: "Status", align: "right", render: (d) => NG.el("span", { class: statusClass(d.status_code) }, String(d.status_code ?? "—")), sortValue: (d) => d.status_code || 0 },
+            { key: "ms", label: "ms", align: "right", render: (d) => (d.duration_ms ?? "—"), sortValue: (d) => d.duration_ms || 0 },
+            { key: "tok", label: "Tokens", align: "right", render: (d) => tokens(d), sortValue: (d) => (d.prompt_tokens || 0) + (d.completion_tokens || 0) },
+            { key: "cost", label: "Cost", align: "right", render: (d) => costShort(d), sortValue: (d) => d.cost_usd || 0 },
+          ],
+        });
+      } else {
+        decTable.setRows(rows);
+      }
     } catch (e) {
       /* swallow; auth state explains */
     }
@@ -761,11 +931,23 @@
 
   async function loadPrivacy() {
     if (!getToken()) return;
+    // The findings scan is slow (server-side scan of up to 500 decisions),
+    // so show a spinner and hide stale content while it runs.
+    const loadEl = document.getElementById("privacy-loading");
+    const hero = document.querySelector("#tab-privacy .lh-hero");
+    const cats = document.getElementById("lh-categories");
+    if (loadEl) { loadEl.hidden = false; loadEl.innerHTML = ""; loadEl.appendChild(NG.spinner("Scanning recent prompts…")); }
+    if (hero) hero.style.opacity = "0.35";
+    if (cats) cats.style.opacity = "0.35";
     try {
       const r = await api(`/v1/findings/summary?hours=${privacyWindow}&scan_limit=500`);
       renderPrivacy(r);
     } catch (e) {
       /* swallow */
+    } finally {
+      if (loadEl) { loadEl.hidden = true; loadEl.innerHTML = ""; }
+      if (hero) hero.style.opacity = "";
+      if (cats) cats.style.opacity = "";
     }
   }
 
@@ -987,8 +1169,7 @@
               </div>
               <div>${latency} · ${tsShort(r.ts)}</div>
             </div>
-          </div>
-          <div class="audit-detail" id="audit-detail-${esc(r.decision_id)}"></div>`;
+          </div>`;
       })
       .join("");
 
@@ -1018,8 +1199,9 @@
           // coach panel if drawer is already open for this row.
           auditDetailCache.delete(did);
           if (auditExpandedId === did) {
-            const el = document.getElementById("audit-detail-" + did);
-            if (el) toggleAuditDetail(did), toggleAuditDetail(did);
+            // Re-open to refresh the detail panel with the fresh eval/coach data.
+            auditExpandedId = null;
+            toggleAuditDetail(did);
           }
           btn.textContent = "✓";
           btn.title = "Evaluated · open the row to see the Coach";
@@ -1031,42 +1213,39 @@
         }
       });
     });
+    // Re-mark the selected row + repopulate the detail panel after a live refresh.
     if (auditExpandedId) {
-      const el = document.getElementById("audit-detail-" + auditExpandedId);
-      if (el) {
-        el.classList.add("open");
-        if (auditDetailCache.has(auditExpandedId)) {
-          el.innerHTML = renderAuditDetail(auditDetailCache.get(auditExpandedId));
-        }
+      const row = document.querySelector(`.audit-row[data-decision="${CSS.escape(auditExpandedId)}"]`);
+      if (row) row.classList.add("selected");
+      const panel = document.getElementById("audit-detail-panel");
+      if (panel && auditDetailCache.has(auditExpandedId)) {
+        panel.innerHTML = renderAuditDetail(auditDetailCache.get(auditExpandedId));
       }
     }
   }
 
+  // Inline split-view: render the decision detail into the right-hand panel.
   async function toggleAuditDetail(decisionId) {
+    const panel = document.getElementById("audit-detail-panel");
+    if (!panel) return;
     if (auditExpandedId === decisionId) {
-      const el = document.getElementById("audit-detail-" + decisionId);
-      if (el) el.classList.remove("open");
       auditExpandedId = null;
+      document.querySelectorAll(".audit-row.selected").forEach((r) => r.classList.remove("selected"));
+      panel.innerHTML = '<p class="hint" style="padding:18px">Select a call to inspect its token anatomy, prompt &amp; response.</p>';
       return;
     }
-    if (auditExpandedId) {
-      const prev = document.getElementById("audit-detail-" + auditExpandedId);
-      if (prev) prev.classList.remove("open");
-    }
     auditExpandedId = decisionId;
-    const el = document.getElementById("audit-detail-" + decisionId);
-    if (!el) return;
-    el.classList.add("open");
-    el.innerHTML = '<p class="hint">loading…</p>';
+    document.querySelectorAll(".audit-row").forEach((r) => r.classList.toggle("selected", r.dataset.decision === decisionId));
+    panel.innerHTML = '<p class="hint" style="padding:18px">loading…</p>';
     try {
       const scope = getActiveAgentScope();
       const url = "/v1/decisions/" + encodeURIComponent(decisionId)
         + (scope ? "?agent_id=" + encodeURIComponent(scope) : "");
       const d = await api(url);
       auditDetailCache.set(decisionId, d);
-      el.innerHTML = renderAuditDetail(d);
+      panel.innerHTML = renderAuditDetail(d);
     } catch (e) {
-      el.innerHTML = '<p class="hint">failed to load</p>';
+      panel.innerHTML = '<p class="hint" style="padding:18px">failed to load</p>';
     }
   }
 
@@ -1479,7 +1658,6 @@
 
   // --- Cost ---------------------------------------------------------------
 
-  let costChart = null;
   let costWindow = { hours: 24, bucket: "hour" };
   // Selected agent for the Cost tab; "*" = aggregate across all agents.
   let costAgent = "*";
@@ -1555,58 +1733,94 @@
 
   document.getElementById("sc-reload").addEventListener("click", () => loadScorecard());
 
+  function scScoreColor(s) {
+    return s < 0.30 ? "var(--bad)" : s <= 0.55 ? "var(--warn)" : "var(--good)";
+  }
+  function shortModelName(m) {
+    if (!m) return "—";
+    return String(m).replace(/^(openrouter\/anthropic\/|openrouter\/openai\/|openrouter\/|anthropic\/|openai\/)/, "");
+  }
+  function scStatus(r) {
+    if (r.is_demoted) return NG.chip("Demoted", "demoted");
+    if (r.score > 0.55) return NG.chip("Healthy", "healthy");
+    return NG.chip("Watch", "watch");
+  }
+
   async function loadScorecard() {
-    const tbody = document.getElementById("sc-tbody");
-    tbody.innerHTML = '<tr><td colspan="8" class="hint">loading…</td></tr>';
+    if (!getToken()) return;
+    const kpis = document.getElementById("sc-kpis");
+    const barsCard = document.getElementById("sc-bars-card");
+    const tableCard = document.getElementById("sc-table-card");
+    if (!tableCard) return;
+    tableCard.innerHTML = '<div class="v2-card"><p class="hint">loading…</p></div>';
     try {
       const data = await api("/v1/scorecard");
       const items = data.items || [];
       if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="hint">No scorecard data yet — make a few requests via /v1/chat/completions and they\'ll show up here.</td></tr>';
+        if (kpis) kpis.innerHTML = "";
+        if (barsCard) barsCard.innerHTML = "";
+        tableCard.innerHTML = '<div class="v2-card"><p class="hint">No scorecard data yet — make a few requests via /v1/chat/completions and they\'ll show up here.</p></div>';
         return;
       }
-      tbody.innerHTML = items.map(renderScorecardRow).join("");
-      // Wire up incident click → audit detail.
-      tbody.querySelectorAll("[data-incident-decision]").forEach(el => {
-        el.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const did = el.getAttribute("data-incident-decision");
-          openDecisionDetail(did);
+
+      // KPIs — Models scored / Demoted (red) / Avg score / Incidents 24h
+      const demoted = items.filter((r) => r.is_demoted).length;
+      const avg = items.reduce((s, r) => s + (r.score || 0), 0) / items.length;
+      const incidents24h = items.reduce((s, r) => s + ((r.recent_incidents || []).length), 0);
+      if (kpis) NG.statRow(kpis, [
+        NG.statCard({ label: "Models scored", value: items.length }),
+        NG.statCard({ label: "Demoted", value: demoted, tone: demoted ? "bad" : null, sub: demoted ? "below 0.30 threshold" : "none demoted" }),
+        NG.statCard({ label: "Avg score", value: avg.toFixed(2) }),
+        NG.statCard({ label: "Incidents 24h", value: incidents24h }),
+      ]);
+
+      // Scores by model — vertical bars colored by health + 0.30 threshold line
+      if (barsCard) {
+        const bars = NG.verticalBars({
+          max: 1,
+          threshold: 0.30,
+          thresholdLabel: "demotion threshold 0.30",
+          height: 180,
+          items: items.slice().sort((a, b) => b.score - a.score).map((r) => ({
+            label: shortModelName(r.model), value: r.score, color: scScoreColor(r.score),
+          })),
+          fmt: (v) => v.toFixed(2),
         });
+        barsCard.innerHTML = "";
+        barsCard.appendChild(NG.card({ title: "Scores by model", body: bars }));
+      }
+
+      // Detail table — model·provider, tier, inline score bar, samples, waste, status
+      NG.DataTable(tableCard, {
+        title: "Scores", meta: "per provider · model · tier",
+        countLabel: (n) => `${n} model${n === 1 ? "" : "s"}`,
+        searchPlaceholder: "Filter…",
+        defaultSort: { key: "score", dir: "desc" },
+        rowClass: (r) => (r.is_demoted ? "v2-row-bad" : null),
+        rows: items,
+        onRowClick: (r) => { const inc = (r.recent_incidents || [])[0]; if (inc) openDecisionDetail(inc.decision_id); },
+        columns: [
+          { key: "model", label: "Model", render: (r) => { const w = NG.el("div", { class: "v2-cell-stack" }); w.appendChild(NG.el("span", { class: "v2-strong" }, r.model)); w.appendChild(NG.el("span", { class: "v2-cell-sub" }, r.provider || "")); return w; }, sortValue: (r) => r.model || "" },
+          { key: "tier", label: "Tier", render: (r) => NG.tierPill(r.tier), sortValue: (r) => r.tier || "" },
+          { key: "score", label: "Score", render: (r) => scScoreCell(r.score), sortValue: (r) => r.score },
+          { key: "samples", label: "Samples", align: "right", render: (r) => (r.sample_size || 0).toLocaleString(), sortValue: (r) => r.sample_size || 0 },
+          { key: "waste", label: "Waste", align: "right", render: (r) => (r.total_waste_usd > 0 ? usd(r.total_waste_usd) : "—"), sortValue: (r) => r.total_waste_usd || 0 },
+          { key: "status", label: "Status", render: (r) => scStatus(r), sortable: false },
+        ],
       });
     } catch (e) {
-      tbody.innerHTML = `<tr><td colspan="8" class="hint">load failed: ${esc(e.message || e)}</td></tr>`;
+      tableCard.innerHTML = `<div class="v2-card"><p class="hint">load failed: ${esc(e.message || e)}</p></div>`;
     }
   }
 
-  function renderScorecardRow(r) {
-    const score = r.score.toFixed(3);
-    const scoreColor = r.score < 0.30 ? "#ff5c5c" : r.score < 0.45 ? "#f0b132" : r.score > 0.55 ? "#4caf50" : "#888";
-    const statusBadge = r.is_demoted
-      ? '<span class="sc-badge sc-demoted">demoted</span>'
-      : r.score > 0.55
-        ? '<span class="sc-badge sc-trusted">trusted</span>'
-        : '<span class="sc-badge sc-neutral">neutral</span>';
-    const waste = r.total_waste_usd > 0
-      ? '<span class="sc-waste">$' + r.total_waste_usd.toFixed(4) + '</span>'
-      : '<span class="hint">$0</span>';
-    const incidents = (r.recent_incidents || []).length === 0
-      ? '<span class="hint">none</span>'
-      : r.recent_incidents.map(i => {
-          const sev = i.severity || "info";
-          return `<span class="sc-incident sc-sev-${esc(sev)}" data-incident-decision="${esc(i.decision_id)}" title="penalty -${i.score_penalty.toFixed(3)} · waste $${(i.estimated_waste_usd || 0).toFixed(4)} · ${i.ts}">${esc(i.finding_type)}</span>`;
-        }).join(" ");
-    return `
-      <tr>
-        <td>${esc(r.provider)}</td>
-        <td><b>${esc(r.model)}</b></td>
-        <td>${esc(r.tier)}</td>
-        <td><span style="color:${scoreColor};font-family:var(--mono);font-weight:600">${score}</span></td>
-        <td>${r.sample_size}</td>
-        <td>${waste}</td>
-        <td>${statusBadge}</td>
-        <td>${incidents}</td>
-      </tr>`;
+  // inline score bar cell — bar then value (matches mock)
+  function scScoreCell(score) {
+    const wrap = NG.el("div", { class: "sc-score-cell" });
+    const track = NG.el("div", { class: "sc-score-track" });
+    track.appendChild(NG.el("div", { class: "sc-score-fill", style: { width: Math.max(2, Math.min(100, score * 100)) + "%", background: scScoreColor(score) } }));
+    wrap.appendChild(track);
+    wrap.appendChild(NG.el("span", { class: "sc-score-num", style: { color: scScoreColor(score) } }, score.toFixed(2)));
+    return wrap;
   }
 
   // Open the decision detail drawer for a decision_id (used by scorecard click-through).
@@ -1727,45 +1941,196 @@
   }
 
   async function loadDrift() {
+    if (!getToken()) return;
     const alertsEl = document.getElementById("dr-alerts");
-    const histTbody = document.getElementById("dr-alerts-tbody");
-    const baseTbody = document.getElementById("dr-baselines-tbody");
+    if (!alertsEl) return;
     alertsEl.innerHTML = '<p class="hint">loading…</p>';
-    histTbody.innerHTML = '<tr><td colspan="10" class="hint">loading…</td></tr>';
-    baseTbody.innerHTML = '<tr><td colspan="9" class="hint">loading…</td></tr>';
     try {
       const data = await api("/v1/drift");
       const alerts = data.alerts || [];
       const baselines = data.baselines || [];
 
-      // Open alerts hero panel
-      const open = alerts.filter(a => a.is_open);
+      const open = alerts.filter((a) => a.is_open);
+
+      // Compact alert callouts (match mock)
+      alertsEl.innerHTML = "";
       if (!open.length) {
-        alertsEl.innerHTML = '<p class="hint">No open alerts. Drift detection needs ~10 samples per (provider, model, metric) to warm up.</p>';
+        alertsEl.appendChild(NG.el("p", { class: "hint" }, "No open alerts. Drift detection needs ~10 samples per (provider, model, metric) to warm up."));
       } else {
-        alertsEl.innerHTML = open.map(renderOpenAlert).join("");
-        _wireInvestigateButtons();
-        // Auto-load the latest investigation for EVERY open alert (incl.
-        // compaction events). Without this, results disappear when you
-        // switch tabs and come back.
-        _autoLoadLatestInvestigations(open.map(a => a.id));
+        const row = NG.el("div", { class: "dr-callouts" });
+        open.forEach((a) => {
+          const crit = Math.abs(a.peak_z_score || 0) > 3 || a.peak_z_score === -99;
+          const c = NG.el("div", { class: "dr-callout " + (crit ? "dr-callout-bad" : "dr-callout-warn") });
+          c.appendChild(NG.el("span", { class: "dr-callout-icon", html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l9 16H3z"/><path d="M12 10v4"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>' }));
+          const mid = NG.el("div", { class: "dr-callout-mid" });
+          mid.appendChild(NG.el("div", { class: "dr-callout-title" }, `${shortModelName(a.model)} · ${a.metric}`));
+          mid.appendChild(NG.el("div", { class: "dr-callout-sub" }, `${a.sample_count || 0} samples · started ${fmtAge(a.started_at)}`));
+          c.appendChild(mid);
+          const z = a.peak_z_score === -99 ? "compaction" : `z = ${(a.peak_z_score || 0).toFixed(1)} ${a.direction === "up" ? "▲" : "▼"}`;
+          c.appendChild(NG.el("span", { class: "dr-callout-z" }, z));
+          row.appendChild(c);
+        });
+        alertsEl.appendChild(row);
       }
 
-      // History table — all alerts.
-      if (!alerts.length) {
-        histTbody.innerHTML = '<tr><td colspan="10" class="hint">No alerts yet.</td></tr>';
-      } else {
-        histTbody.innerHTML = alerts.map(renderAlertHistoryRow).join("");
+      // Anomaly-band chart — defaults to the primary open alert, updates when
+      // any alert row is clicked.
+      renderDriftBand(open[0] || alerts[0]);
+
+      // All-alerts history → DataTable (10/page, click a row to chart it)
+      const histCard = document.getElementById("dr-history-card");
+      if (histCard) {
+        NG.DataTable(histCard, {
+          title: "All alerts", meta: "open + resolved · click a row to chart it",
+          countLabel: (n) => `${n} alert${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter…",
+          defaultSort: { key: "started", dir: "desc" },
+          emptyText: "No alerts yet.",
+          rows: alerts,
+          pageSize: 10,
+          pageSizeOptions: [10, 25, 50],
+          onRowClick: (r) => renderDriftBand(r),
+          rowClass: (r) => (r.is_open ? "v2-row-bad" : null),
+          columns: [
+            { key: "provider", label: "Provider", render: (r) => NG.providerTag(r.provider), sortValue: (r) => r.provider || "" },
+            { key: "model", label: "Model", render: (r) => NG.el("span", { class: "v2-strong" }, r.model), sortValue: (r) => r.model || "" },
+            { key: "metric", label: "Metric", mono: true, render: (r) => r.metric, sortValue: (r) => r.metric || "" },
+            { key: "direction", label: "Dir", render: (r) => (r.direction === "up" ? "↑" : "↓"), sortValue: (r) => r.direction || "" },
+            { key: "peak_z", label: "Peak z", align: "right", render: (r) => (r.peak_z_score === -99 ? "compaction" : (r.peak_z_score != null ? r.peak_z_score.toFixed(2) : "—")), sortValue: (r) => (r.peak_z_score === -99 ? 99 : Math.abs(r.peak_z_score || 0)) },
+            { key: "peak_obs", label: "Peak observed", align: "right", render: (r) => fmtNum(r.peak_observed), sortValue: (r) => r.peak_observed || 0 },
+            { key: "baseline", label: "Baseline", align: "right", render: (r) => fmtNum(r.baseline_at_alert), sortValue: (r) => r.baseline_at_alert || 0 },
+            { key: "samples", label: "Samples", align: "right", render: (r) => r.sample_count || 0, sortValue: (r) => r.sample_count || 0 },
+            { key: "started", label: "Started", render: (r) => fmtAge(r.started_at), sortValue: (r) => r.started_at || "" },
+            { key: "status", label: "Status", sortable: false, render: (r) => NG.chip(r.is_open ? "Open" : "Resolved", r.is_open ? "open" : "resolved") },
+          ],
+        });
       }
 
-      // Baselines table.
-      if (!baselines.length) {
-        baseTbody.innerHTML = '<tr><td colspan="9" class="hint">No baselines yet — make some requests through /v1/chat/completions.</td></tr>';
-      } else {
-        baseTbody.innerHTML = baselines.map(renderBaselineRow).join("");
+      // Baselines → DataTable
+      const baseCard = document.getElementById("dr-baselines-card");
+      if (baseCard) {
+        NG.DataTable(baseCard, {
+          title: "Baselines",
+          countLabel: (n) => `${n} baseline${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter…",
+          defaultSort: { key: "lastz", dir: "desc" },
+          emptyText: "No baselines yet — make some requests through /v1/chat/completions.",
+          rows: baselines,
+          columns: [
+            { key: "provider", label: "Provider", render: (r) => NG.providerTag(r.provider), sortValue: (r) => r.provider || "" },
+            { key: "model", label: "Model", render: (r) => NG.el("span", { class: "v2-strong" }, r.model), sortValue: (r) => r.model || "" },
+            { key: "metric", label: "Metric", mono: true, render: (r) => r.metric, sortValue: (r) => r.metric || "" },
+            { key: "mean", label: "Mean", align: "right", render: (r) => fmtNum(r.mean), sortValue: (r) => r.mean || 0 },
+            { key: "stddev", label: "Stddev", align: "right", render: (r) => fmtNum(r.stddev), sortValue: (r) => r.stddev || 0 },
+            { key: "samples", label: "Samples", align: "right", render: (r) => r.sample_count || 0, sortValue: (r) => r.sample_count || 0 },
+            { key: "last_obs", label: "Last observed", align: "right", render: (r) => fmtNum(r.last_observed), sortValue: (r) => r.last_observed || 0 },
+            { key: "lastz", label: "Last z", align: "right", render: (r) => driftZCell(r.last_z_score), sortValue: (r) => Math.abs(r.last_z_score || 0) },
+            { key: "updated", label: "Updated", render: (r) => fmtAge(r.updated_at), sortValue: (r) => r.updated_at || "" },
+          ],
+        });
       }
     } catch (e) {
       alertsEl.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  function driftZCell(z) {
+    if (z == null) return "—";
+    const color = Math.abs(z) > 3 ? "var(--bad)" : Math.abs(z) > 2 ? "var(--warn)" : "var(--text)";
+    return NG.el("span", { style: { color } }, z.toFixed(2));
+  }
+
+  // What each drift metric means + how to format its value.
+  const DRIFT_METRIC_META = {
+    input_tokens_per_byte: { label: "input tokens / byte", fmt: (v) => v == null ? "—" : v.toFixed(4), means: "How densely your prompt tokenizes. A shift means the provider changed its tokenizer or cache behaviour — same text, different token count (and cost)." },
+    response_size_bytes: { label: "response size (bytes)", fmt: (v) => v == null ? "—" : fmtNum(v) + " B", means: "How long the model's replies are. Drift here is verbosity change — the model getting chattier or terser for the same kind of request." },
+    first_byte_ms: { label: "time to first byte", fmt: (v) => v == null ? "—" : Math.round(v) + " ms", means: "Latency until the first token streams back. Upward drift = the provider getting slower to start." },
+    duration_ms: { label: "total duration", fmt: (v) => v == null ? "—" : Math.round(v) + " ms", means: "End-to-end call latency. Upward drift = slower completions overall." },
+    messages_count_delta: { label: "messages-count delta", fmt: (v) => v == null ? "—" : String(v), means: "Sudden change in how many messages the client sends — a sharp drop usually means a context compaction event fired." },
+  };
+  function driftMetricFmt(metric) {
+    const m = DRIFT_METRIC_META[metric];
+    return m ? m.fmt : ((v) => v == null ? "—" : (typeof v === "number" ? v.toFixed(2) : String(v)));
+  }
+  function zInterpretation(z) {
+    if (z == null) return "no z-score";
+    const a = Math.abs(z);
+    if (a > 3) return `${z.toFixed(2)}σ from baseline — a real anomaly (beyond ±3σ)`;
+    if (a > 2) return `${z.toFixed(2)}σ from baseline — worth watching`;
+    return `${z.toFixed(2)}σ from baseline — within normal range`;
+  }
+
+  // Click a drift data-point → explain the sample in the right drawer + show
+  // the actual request that produced it.
+  async function openDriftSampleDetail(p, alert) {
+    const meta = DRIFT_METRIC_META[alert.metric] || { label: alert.metric, fmt: driftMetricFmt(alert.metric), means: "" };
+    const fmt = meta.fmt;
+    document.getElementById("detail-id").textContent = `${shortModelName(alert.model)} · ${alert.metric}`;
+    const band = (p.mean != null && p.stddev != null) ? `${fmt(p.mean - 3 * p.stddev)} … ${fmt(p.mean + 3 * p.stddev)}` : "—";
+    const anomaly = Math.abs(p.z || 0) > 3;
+    let html = "";
+    html += '<div class="section-title">What you\'re looking at</div>';
+    html += `<p class="hint" style="line-height:1.5">This is one <b>${esc(meta.label)}</b> sample for <b>${esc(shortModelName(alert.model))}</b>, taken ${esc(new Date(p.ts).toLocaleString())}. ${esc(meta.means)}</p>`;
+    html += '<div class="kv">';
+    html += `<div class="k">observed</div><div class="v" style="color:${anomaly ? "var(--bad)" : "var(--text)"}">${esc(fmt(p.observed))}</div>`;
+    html += `<div class="k">baseline μ</div><div class="v">${esc(fmt(p.mean))}</div>`;
+    html += `<div class="k">normal band (±3σ)</div><div class="v">${esc(band)}</div>`;
+    html += `<div class="k">z-score</div><div class="v" style="color:${anomaly ? "var(--bad)" : Math.abs(p.z||0) > 2 ? "var(--warn)" : "var(--text)"}">${esc(zInterpretation(p.z))}</div>`;
+    html += "</div>";
+    if (p.decisionId) {
+      html += '<div class="section-title">The request that produced this sample</div>';
+      html += '<p class="hint" id="drift-req-loading">loading request…</p>';
+    } else {
+      html += '<p class="hint">No linked request id for this sample.</p>';
+    }
+    document.getElementById("detail-body").innerHTML = html;
+    drawer.classList.remove("hidden");
+    if (p.decisionId) {
+      try {
+        const scope = getActiveAgentScope();
+        const d = await api("/v1/decisions/" + encodeURIComponent(p.decisionId) + (scope ? "?agent_id=" + encodeURIComponent(scope) : ""));
+        const slot = document.getElementById("drift-req-loading");
+        if (slot) slot.outerHTML = renderAuditDetail(d);
+      } catch (_e) {
+        const slot = document.getElementById("drift-req-loading");
+        if (slot) slot.textContent = "Couldn't load the linked request.";
+      }
+    }
+  }
+
+  // Render the anomaly-band chart for one alert (provider/model/metric).
+  // Called for the primary alert on load + whenever an alert row is clicked.
+  async function renderDriftBand(alert) {
+    const bandCard = document.getElementById("dr-band-card");
+    if (!bandCard) return;
+    bandCard.innerHTML = "";
+    if (!alert) {
+      bandCard.appendChild(NG.card({ title: "Anomaly band", body: NG.el("div", { class: "hint" }, "No alerts to chart yet.") }));
+      return;
+    }
+    const body = NG.el("div");
+    const chartEl = NG.el("div", { html: '<p class="hint" style="padding:12px">loading…</p>' });
+    body.appendChild(chartEl);
+    const legend = [
+      NG.el("span", { class: "v2-chart-legend-item", html: '<span style="display:inline-block;width:14px;height:8px;background:rgba(76,141,255,0.25);border:1px solid rgba(76,141,255,0.4);border-radius:2px"></span> ±3σ band' }),
+      NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#E8833A"></span> observed' }),
+    ];
+    bandCard.appendChild(NG.card({ title: `${shortModelName(alert.model)} — ${alert.metric}`, meta: alert.is_open ? "open" : "resolved", actions: legend, body }));
+    try {
+      const anom = await api(`/v1/drift/${encodeURIComponent(alert.provider)}/${alert.model}/anomalies?metric=${encodeURIComponent(alert.metric)}&limit=80`);
+      const points = (anom.items || []).map((it) => ({
+        ts: it.ts, observed: it.observed_value, mean: it.baseline_mean, stddev: it.baseline_stddev, z: it.z_score, decisionId: it.decision_id,
+      }));
+      chartEl.innerHTML = "";
+      chartEl.appendChild(NG.anomalyBand({
+        points, height: 220,
+        fmtV: driftMetricFmt(alert.metric),
+        onPointClick: (pt) => openDriftSampleDetail(pt, alert),
+      }));
+      const hint = NG.el("p", { class: "hint", style: { margin: "8px 2px 0" } }, "Click any point to see what produced it.");
+      chartEl.appendChild(hint);
+    } catch (_e) {
+      chartEl.innerHTML = '<div class="v2-chart-fallback">No anomaly samples available for this metric.</div>';
     }
   }
 
@@ -1957,45 +2322,6 @@
     }
   }
 
-  function renderAlertHistoryRow(a) {
-    const status = a.is_open
-      ? '<span class="dr-status dr-open">OPEN</span>'
-      : '<span class="dr-status dr-resolved">resolved</span>';
-    const arrow = a.direction === "up" ? "↑" : "↓";
-    return `
-      <tr>
-        <td>${esc(a.provider)}</td>
-        <td>${esc(a.model)}</td>
-        <td><code>${esc(a.metric)}</code></td>
-        <td>${arrow}</td>
-        <td>${a.peak_z_score === -99 ? "compaction" : a.peak_z_score.toFixed(2)}</td>
-        <td>${fmtNum(a.peak_observed)}</td>
-        <td>${fmtNum(a.baseline_at_alert)}</td>
-        <td>${a.sample_count}</td>
-        <td>${fmtAge(a.started_at)}</td>
-        <td>${status}</td>
-      </tr>`;
-  }
-
-  function renderBaselineRow(b) {
-    const zClass = b.last_z_score == null
-      ? ""
-      : Math.abs(b.last_z_score) > 3 ? "style=\"color:#ff5c5c\""
-        : Math.abs(b.last_z_score) > 2 ? "style=\"color:#f0b132\"" : "";
-    return `
-      <tr>
-        <td>${esc(b.provider)}</td>
-        <td>${esc(b.model)}</td>
-        <td><code>${esc(b.metric)}</code></td>
-        <td>${fmtNum(b.mean)}</td>
-        <td>${fmtNum(b.stddev)}</td>
-        <td>${b.sample_count}</td>
-        <td>${fmtNum(b.last_observed)}</td>
-        <td ${zClass}>${b.last_z_score == null ? "—" : b.last_z_score.toFixed(2)}</td>
-        <td>${fmtAge(b.updated_at)}</td>
-      </tr>`;
-  }
-
   // --- OpenRouter credits (Cost tab) ---------------------------------
   document.getElementById("or-credits-reload")?.addEventListener("click", () => loadOpenRouterCredits());
 
@@ -2087,98 +2413,66 @@
         api(`/v1/cache/summary?hours=${cacheWindow}${mq}`),
         api(`/v1/cache/prefixes?hours=${cacheWindow}`),
       ]);
-      renderCacheSummary(summary);
-      renderCachePrefixes(prefixes);
+      renderCache(summary, prefixes);
     } catch (e) {
       /* swallow; auth chip explains */
     }
   }
 
-  function renderCacheSummary(s) {
-    const t = s.totals || {};
-    document.getElementById("ch-hitrate").textContent = pct(t.hit_rate);
-    const savedEl = document.getElementById("ch-saved");
-    savedEl.textContent = usd(t.saved_usd);
-    savedEl.title =
-      t.cache_off_usd != null
-        ? `Cache off: ${usd(t.cache_off_usd)} → cache on: ${usd(t.cache_on_usd)} (input-side). Saved = the difference.`
-        : "Read discount minus the cache-write premium. Positive = caching is a net win.";
-    document.getElementById("ch-split").textContent =
-      `${(t.fresh_tokens || 0).toLocaleString()} / ${(t.cache_read_tokens || 0).toLocaleString()} / ${(t.cache_write_tokens || 0).toLocaleString()}`;
-    document.getElementById("ch-ratio").textContent =
-      t.write_read_ratio == null ? "—" : t.write_read_ratio.toFixed(2);
+  function renderCache(s, p) {
+    const t = (s && s.totals) || {};
+    const leakyCount = ((p && p.leaky) || []).length;
+
+    // KPIs — hit rate / saved (hl, off→on sub) / write:read / leaky (red)
+    const kpis = document.getElementById("cache-kpis");
+    if (kpis) NG.statRow(kpis, [
+      NG.statCard({ label: "Hit rate", value: pct(t.hit_rate), sub: "of input served from cache" }),
+      NG.statCard({ label: "Saved by caching", value: usd(t.saved_usd), sub: t.cache_off_usd != null ? `${usd(t.cache_off_usd)} → ${usd(t.cache_on_usd)}` : "read discount − write premium", highlight: true }),
+      NG.statCard({ label: "Write : read", value: t.write_read_ratio == null ? "—" : t.write_read_ratio.toFixed(3), sub: "low = healthy reuse" }),
+      NG.statCard({ label: "Leaky prefixes", value: leakyCount, tone: leakyCount > 0 ? "bad" : null, sub: leakyCount ? "write-heavy, low reuse" : "none detected" }),
+    ]);
 
     // Populate the model filter once (preserve current selection).
     const sel = document.getElementById("cache-model-filter");
     if (sel && sel.options.length <= 1) {
       const cur = sel.value;
-      for (const r of s.by_model) {
+      for (const r of (s.by_model || [])) {
         const o = document.createElement("option");
-        o.value = r.model;
-        o.textContent = r.model;
+        o.value = r.model; o.textContent = r.model;
         sel.appendChild(o);
       }
       sel.value = cur;
     }
 
-    const tbody = document.querySelector("#cache-model tbody");
-    tbody.innerHTML = (s.by_model || []).map((r) => `
-      <tr>
-        <td><b>${esc(r.model || "—")}</b></td>
-        <td>${pct(r.hit_rate)}</td>
-        <td>${(r.fresh_tokens || 0).toLocaleString()}</td>
-        <td>${(r.cache_read_tokens || 0).toLocaleString()}</td>
-        <td>${(r.cache_write_tokens || 0).toLocaleString()}</td>
-        <td class="cost-notional">${usd(r.cache_off_usd)}</td>
-        <td>${usd(r.cache_on_usd)}</td>
-        <td class="cache-saved">${usd(r.saved_usd)}</td>
-        <td>${r.calls || 0}</td>
-      </tr>`).join("") || `<tr><td colspan="9" class="hint">No cached calls in this window.</td></tr>`;
-  }
-
-  function reuseLabel(reads, writes) {
-    if (!writes) return reads ? "read-only" : "—";
-    return (reads / writes).toFixed(1) + "×";
-  }
-
-  function renderCachePrefixes(p) {
-    const reused = document.querySelector("#cache-reused tbody");
-    reused.innerHTML = (p.top_reused || []).map((r) => `
-      <tr>
-        <td><code title="${esc(r.prefix_hash)}">${shortHash(r.prefix_hash)}</code></td>
-        <td>${esc(r.model || "—")}</td>
-        <td>${(r.reads || 0).toLocaleString()}</td>
-        <td>${(r.writes || 0).toLocaleString()}</td>
-        <td>${r.reuse_ratio == null ? "—" : r.reuse_ratio.toFixed(1) + "×"}</td>
-        <td>${r.calls || 0}</td>
-      </tr>`).join("") || `<tr><td colspan="6" class="hint">No cacheable prefixes seen yet.</td></tr>`;
-
-    const leaky = document.querySelector("#cache-leaky tbody");
-    leaky.innerHTML = (p.leaky || []).map((r) => `
-      <tr class="leak-row">
-        <td><code title="${esc(r.prefix_hash)}">${shortHash(r.prefix_hash)}</code></td>
-        <td>${esc(r.model || "—")}</td>
-        <td>${(r.writes || 0).toLocaleString()}</td>
-        <td>${(r.reads || 0).toLocaleString()}</td>
-        <td>${r.reuse_ratio == null ? "0×" : r.reuse_ratio.toFixed(1) + "×"}</td>
-        <td>${r.calls || 0}</td>
-      </tr>`).join("") || `<tr><td colspan="6" class="hint">No leaks detected — prefixes are reused well.</td></tr>`;
-
-    const warmth = document.querySelector("#cache-warmth tbody");
-    warmth.innerHTML = (p.latency || []).map((r) => {
-      // Flag a wide spread relative to the median as a cold/thrashing cache.
-      const cold = r.ttft_p50_ms && r.ttft_spread_ms != null && r.ttft_spread_ms > r.ttft_p50_ms;
-      return `
-      <tr${cold ? ' class="leak-row"' : ""}>
-        <td><code title="${esc(r.prefix_hash)}">${shortHash(r.prefix_hash)}</code></td>
-        <td>${esc(r.model || "—")}</td>
-        <td>${ms(r.ttft_p50_ms)}</td>
-        <td>${ms(r.ttft_spread_ms)}</td>
-        <td>${ms(r.ttft_min_ms)}</td>
-        <td>${ms(r.ttft_max_ms)}</td>
-        <td>${r.ttft_n || 0}</td>
-      </tr>`;
-    }).join("") || `<tr><td colspan="7" class="hint">No timed prefixes yet (need ≥2 streamed calls sharing a prefix).</td></tr>`;
+    // Prefix reuse — reused + leaky merged; leaky flagged red; All/Leaky toggle.
+    const prefixCard = document.getElementById("cache-prefix-card");
+    if (prefixCard) {
+      const reused = ((p && p.top_reused) || []).map((r) => ({ ...r, _leaky: false }));
+      const leaky = ((p && p.leaky) || []).map((r) => ({ ...r, _leaky: true }));
+      const all = leaky.concat(reused);
+      NG.DataTable(prefixCard, {
+        title: "Prefix reuse", meta: "cacheable prefixes · find the leaks",
+        countLabel: (n) => `${n} prefix${n === 1 ? "" : "es"}`,
+        search: false,
+        columnsMenu: false,
+        segments: { options: [
+          { label: "All", predicate: null },
+          { label: "Leaky", predicate: (r) => r._leaky },
+        ] },
+        defaultSort: { key: "reuse", dir: "desc" },
+        emptyText: "No cacheable prefixes seen yet.",
+        rows: all,
+        rowClass: (r) => (r._leaky ? "v2-row-bad" : null),
+        columns: [
+          { key: "prefix_hash", label: "Prefix", mono: true, render: (r) => NG.el("code", { title: r.prefix_hash }, shortHash(r.prefix_hash)), sortValue: (r) => r.prefix_hash || "" },
+          { key: "model", label: "Model", render: (r) => shortModelName(r.model), sortValue: (r) => r.model || "" },
+          { key: "reads", label: "Reads", align: "right", render: (r) => (r.reads || 0).toLocaleString(), sortValue: (r) => r.reads || 0 },
+          { key: "writes", label: "Writes", align: "right", render: (r) => NG.el("span", { style: r._leaky ? { color: "var(--bad)" } : null }, (r.writes || 0).toLocaleString()), sortValue: (r) => r.writes || 0 },
+          { key: "reuse", label: "Reuse", align: "right", render: (r) => NG.el("span", { style: { color: r._leaky ? "var(--bad)" : "var(--good)" } }, r.reuse_ratio == null ? "—" : r.reuse_ratio.toFixed(1) + "×"), sortValue: (r) => r.reuse_ratio || 0 },
+          { key: "status", label: "Status", render: (r) => NG.chip(r._leaky ? "Leaky" : "Reused", r._leaky ? "leaky" : "reused"), sortable: false },
+        ],
+      });
+    }
   }
 
   document.querySelectorAll("#tab-cache .window-buttons button").forEach((b) => {
@@ -2206,35 +2500,103 @@
       document.getElementById("probe-state").textContent =
         cfg.last_run_at ? "last run " + new Date(cfg.last_run_at).toLocaleString() : "never run";
 
-      const al = document.querySelector("#probe-alerts tbody");
-      al.innerHTML = (s.alerts || []).filter(a => !a.resolved_at).map(a => `
-        <tr class="${a.severity === 'critical' ? 'leak-row' : ''}">
-          <td>${new Date(a.ts).toLocaleString()}</td>
-          <td>${esc(a.model)}</td>
-          <td><b>${esc(a.alert_type)}</b></td>
-          <td>${esc(a.severity)}</td>
-          <td><code>${esc(JSON.stringify(a.detail || {}))}</code></td>
-        </tr>`).join("") || `<tr><td colspan="5" class="hint">No open alerts.</td></tr>`;
+      // Pivot each target's legs into sub-vs-metered comparison rows.
+      const targets = s.targets || [];
+      const openAlerts = (s.alerts || []).filter((a) => !a.resolved_at);
+      const isSub = (leg, name) => /oauth|sub|anthropic|chatgpt|max/i.test((leg && leg.via) || name || "");
+      const cmpRows = targets.map((t) => {
+        const entries = Object.entries(t.legs || {});
+        let sub = null, met = null;
+        for (const [name, leg] of entries) {
+          if (sub == null && isSub(leg, name)) sub = leg;
+          else if (met == null) met = leg;
+        }
+        if (!sub && entries[0]) sub = entries[0][1];
+        if (!met && entries[1]) met = entries[1][1];
+        const modelMism = sub && sub.observed_model && !modelsLooseMatch(t.model, sub.observed_model);
+        const st = sub && sub.tokens_per_byte, mt = met && met.tokens_per_byte;
+        const tpbMism = st != null && mt ? Math.abs((st - mt) / mt) > 0.10 : false;
+        return { model: t.model, sub: sub || {}, met: met || {}, mismatch: modelMism || tpbMism };
+      });
+      let divergent = cmpRows.filter((r) => r.mismatch).length;
 
-      const tb = document.querySelector("#probe-targets-tbl tbody");
-      const rows = [];
-      for (const t of s.targets || []) {
-        const legs = Object.values(t.legs || {});
-        if (!legs.length) continue;
-        legs.forEach((leg, i) => {
-          const mism = leg.observed_model && !modelsLooseMatch(t.model, leg.observed_model);
-          rows.push(`<tr class="${mism ? 'leak-row' : ''}">
-            <td>${i === 0 ? '<b>' + esc(t.model) + '</b>' : ''}</td>
-            <td>${esc(leg.via)}</td>
-            <td>${esc(leg.observed_model || (leg.error ? '— (' + (leg.status_code||'err') + ')' : '—'))}</td>
-            <td>${leg.tokens_per_byte != null ? leg.tokens_per_byte.toFixed(4) : '—'}</td>
-            <td>${leg.first_byte_ms != null ? leg.first_byte_ms + ' ms' : '—'}</td>
-            <td>${leg.quality_score != null ? leg.quality_score + '/5' : '—'}</td>
-            <td>${leg.refused ? '⚠' : ''}</td>
-          </tr>`);
+      // KPIs — integrity / models probed / open alerts / last cycle
+      const lastRun = cfg.last_run_at ? fmtAge(cfg.last_run_at) : "never";
+      const kpis = document.getElementById("probe-kpis");
+      if (kpis) NG.statRow(kpis, [
+        NG.statCard({ label: "Integrity", value: divergent ? `${divergent} divergence${divergent === 1 ? "" : "s"}` : "clean", tone: divergent ? "bad" : "good", sub: "subscription vs metered" }),
+        NG.statCard({ label: "Models probed", value: targets.length }),
+        NG.statCard({ label: "Open alerts", value: openAlerts.length, tone: openAlerts.length ? "bad" : null }),
+        NG.statCard({ label: "Last cycle", value: lastRun, sub: cfg.interval_hours ? `every ${cfg.interval_hours}h` : "" }),
+      ]);
+
+      // Fingerprint over cycles — tokens/byte, subscription vs metered, for the first target
+      const fpCard = document.getElementById("probe-fingerprint-card");
+      if (fpCard) {
+        fpCard.innerHTML = "";
+        const firstModel = targets[0] && targets[0].model;
+        const body = NG.el("div");
+        const chartEl = NG.el("div", { class: "v2-chart", html: '<p class="hint" style="padding:12px">' + (firstModel ? "loading…" : "No targets configured yet.") + "</p>" });
+        body.appendChild(chartEl);
+        const legend = [
+          NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#E8833A"></span>subscription' }),
+          NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#4C8DFF"></span>metered' }),
+        ];
+        fpCard.appendChild(NG.card({ title: "Tokenizer fingerprint over cycles", actions: firstModel ? legend : [], body }));
+        if (firstModel) {
+          try {
+            const hist = await api(`/v1/probe/history?model=${encodeURIComponent(firstModel)}&hours=720`);
+            const runs = (hist.runs || []).filter((r) => r.tokens_per_byte != null);
+            // group by ts, split sub/metered by via
+            const byTs = {};
+            runs.forEach((r) => {
+              const k = r.ts;
+              byTs[k] = byTs[k] || { ts: k, sub: null, met: null };
+              if (isSub(r)) byTs[k].sub = r.tokens_per_byte; else byTs[k].met = r.tokens_per_byte;
+            });
+            const rowsT = Object.values(byTs).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+            const x = rowsT.map((r) => Math.floor(new Date(r.ts).getTime() / 1000));
+            chartEl.innerHTML = "";
+            if (x.length < 2) { chartEl.innerHTML = '<div class="v2-chart-fallback">Need ≥2 probe cycles to chart the fingerprint.</div>'; }
+            else NG.chart(chartEl, {
+              type: "line", x, height: 220,
+              series: [
+                { label: "subscription", values: rowsT.map((r) => r.sub), color: "#E8833A" },
+                { label: "metered", values: rowsT.map((r) => r.met), color: "#4C8DFF" },
+              ],
+              fmtY: (v) => (v == null ? "" : Number(v).toFixed(3)),
+              fmtX: (e) => new Date(e * 1000).toLocaleString(),
+            });
+          } catch (_e) { chartEl.innerHTML = '<div class="v2-chart-fallback">No probe history yet.</div>'; }
+        }
+      }
+
+      // Cross-path comparison — one row per model
+      const compareCard = document.getElementById("probe-compare-card");
+      if (compareCard) {
+        const tpbDelta = (sub, met) => {
+          if (sub == null || met == null || !met) return "";
+          const d = ((sub - met) / met) * 100;
+          if (Math.abs(d) < 1) return "";
+          return ` ${d > 0 ? "+" : ""}${d.toFixed(0)}%`;
+        };
+        NG.DataTable(compareCard, {
+          title: "Cross-path comparison", meta: "subscription vs metered · latest cycle",
+          countLabel: (n) => `${n} model${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter models…",
+          defaultSort: { key: "model", dir: "asc" },
+          emptyText: "No probe cycle yet — set targets, enable, and Run now.",
+          rows: cmpRows,
+          rowClass: (r) => (r.mismatch ? "v2-row-bad" : null),
+          columns: [
+            { key: "model", label: "Model", render: (r) => { const w = NG.el("div", { class: "v2-cell-stack" }); w.appendChild(NG.el("span", { class: "v2-strong" }, shortModelName(r.model))); w.appendChild(NG.el("span", { class: "v2-cell-sub" }, `${r.sub.via || "sub"} · ${r.met.via || "metered"}`)); return w; }, sortValue: (r) => r.model || "" },
+            { key: "observed", label: "Observed (sub)", mono: true, render: (r) => r.sub.observed_model || (r.sub.error ? `— (${r.sub.status_code || "err"})` : "—"), sortValue: (r) => r.sub.observed_model || "" },
+            { key: "tpb", label: "Tokens/byte", align: "right", render: (r) => { const sub = r.sub.tokens_per_byte, met = r.met.tokens_per_byte; const base = `${sub != null ? sub.toFixed(2) : "—"} / ${met != null ? met.toFixed(2) : "—"}`; const d = tpbDelta(sub, met); const w = NG.el("span", null, base); if (d) w.appendChild(NG.el("span", { class: "v2-chip v2-chip-" + (Math.abs((sub - met) / met) > 0.1 ? "bad" : "neutral"), style: { marginLeft: "6px" } }, d.trim())); return w; }, sortValue: (r) => r.sub.tokens_per_byte || 0 },
+            { key: "quality", label: "Quality", align: "right", render: (r) => `${r.sub.quality_score != null ? r.sub.quality_score : "—"} / ${r.met.quality_score != null ? r.met.quality_score : "—"}`, sortValue: (r) => r.sub.quality_score || 0 },
+            { key: "verdict", label: "Verdict", sortable: false, render: (r) => NG.chip(r.mismatch ? "Divergent" : "Match", r.mismatch ? "divergent" : "match") },
+          ],
         });
       }
-      tb.innerHTML = rows.join("") || `<tr><td colspan="7" class="hint">No probe cycle yet — set targets, enable, and Run now.</td></tr>`;
     } catch (e) { /* auth chip explains */ }
   }
 
@@ -2291,27 +2653,23 @@
   document.getElementById("probe-run-now")?.addEventListener("click", runProbeNow);
 
   function renderCostSummary(s) {
-    document.getElementById("c-total").textContent = usd(s.total_cost_usd);
-    const savingsEl = document.getElementById("c-savings");
-    if (savingsEl) {
-      savingsEl.textContent = usd(s.subscription_savings_usd);
-      savingsEl.title = "What Anthropic/OpenAI metered billing WOULD have cost — covered by your Max subscription via OAuth passthrough.";
+    const tokens = (s.total_prompt_tokens || 0) + (s.total_completion_tokens || 0);
+    const avg = s.total_cost_usd && s.total_calls ? s.total_cost_usd / s.total_calls : null;
+    const emptySub = [];
+    if (s.empty_count != null) emptySub.push(`${s.empty_count} empty`);
+    if (s.rate_limited_count) emptySub.push(`${s.rate_limited_count}× 429`);
+    const kpis = document.getElementById("cost-kpis");
+    if (kpis) {
+      NG.statRow(kpis, [
+        NG.statCard({ label: "Metered spend", value: usd(s.total_cost_usd), sub: `${(s.total_calls ?? 0).toLocaleString()} calls` }),
+        NG.statCard({ label: "Subscription saved", value: usd(s.subscription_savings_usd), sub: "notional · covered by subscription", highlight: true }),
+        NG.statCard({ label: "Requests", value: (s.total_calls ?? 0).toLocaleString(), sub: emptySub.join(" · ") || "no anomalies" }),
+        NG.statCard({ label: "Avg / call", value: usd(avg), sub: `${fmtNum(tokens)} tokens` }),
+      ]);
     }
-    document.getElementById("c-calls").textContent = s.total_calls ?? 0;
-    const avg =
-      s.total_cost_usd && s.total_calls
-        ? s.total_cost_usd / s.total_calls
-        : null;
-    document.getElementById("c-avg").textContent = usd(avg);
-    document.getElementById("c-tokens").textContent =
-      ((s.total_prompt_tokens || 0) + (s.total_completion_tokens || 0)).toLocaleString();
-    const emptyEl = document.getElementById("c-empty");
-    if (emptyEl) emptyEl.textContent = s.empty_count != null ? String(s.empty_count) : "—";
-    const rlEl = document.getElementById("c-ratelimit");
-    if (rlEl) rlEl.textContent = s.rate_limited_count != null ? String(s.rate_limited_count) : "—";
 
-    fillCostProviderTable(s.by_provider);
-    fillCostModelTable(s.by_model);
+    renderCostProviderCard(s.by_provider);
+    renderCostModelTable(s.by_model);
     fillCostTierTable("cost-tier", s.by_tier);
 
     // by_agent table — only rendered when we asked for the aggregate view.
@@ -2357,59 +2715,64 @@
       .join("");
   }
 
-  function fillCostProviderTable(rows) {
-    const tbody = document.querySelector("#cost-provider tbody");
-    tbody.innerHTML = (rows || [])
-      .map((r) => `
-        <tr>
-          <td>${esc(r.key || "—")}</td>
-          <td>${usd(r.cost_usd)}</td>
-          <td class="cost-notional">${r.notional_cost_usd != null ? usd(r.notional_cost_usd) : "—"}</td>
-          <td>${r.calls || 0}</td>
-        </tr>`)
-      .join("");
+  const COST_DONUT_COLORS = ["#E8833A", "#4C8DFF", "#3FB950", "#9A6CE0", "#8893A4"];
+  function renderCostProviderCard(rows) {
+    const mount = document.getElementById("cost-provider-card");
+    if (!mount) return;
+    rows = (rows || []).slice().sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
+    const total = rows.reduce((s, r) => s + (r.cost_usd || 0), 0);
+    const segs = rows.map((r, i) => ({ label: r.key || "—", value: r.cost_usd || 0, color: COST_DONUT_COLORS[i % COST_DONUT_COLORS.length] }));
+    const split = NG.el("div", { class: "v2-provider-split" });
+    if (!rows.length || total <= 0) {
+      split.appendChild(NG.el("div", { class: "hint" }, "No spend in this window."));
+    } else {
+      split.appendChild(NG.donut({ segments: segs, centerValue: usd(total), centerLabel: "total", size: 104, stroke: 15 }));
+      split.appendChild(NG.legend(segs.map((sg) => ({
+        label: sg.label, color: sg.color,
+        value: total ? Math.round((sg.value / total) * 100) + "%" : "—",
+      }))));
+    }
+    mount.innerHTML = "";
+    mount.appendChild(NG.card({ title: "Cost by provider", body: split }));
   }
 
-  function fillCostModelTable(rows) {
-    const tbody = document.querySelector("#cost-model tbody");
-    tbody.innerHTML = (rows || [])
-      .map((r) => {
-        const totalCalls = r.calls || 1;
-        const dollarPerCall = (r.cost_usd || 0) / totalCalls;
-        const latency = r.avg_latency_ms != null ? Math.round(r.avg_latency_ms) + " ms" : "—";
-        const emptyPct = totalCalls > 0
-          ? ((r.empty_count || 0) / totalCalls * 100).toFixed(0) + "%"
-          : "—";
-        return `
-          <tr class="cost-model-row" data-model="${esc(r.key)}">
-            <td><b>${esc(r.key || "—")}</b></td>
-            <td>${usd(r.cost_usd)}</td>
-            <td class="cost-notional">${r.notional_cost_usd != null ? usd(r.notional_cost_usd) : "—"}</td>
-            <td>${totalCalls}</td>
-            <td>${dollarPerCall > 0 ? "$" + dollarPerCall.toFixed(4) : "—"}</td>
-            <td>${(r.prompt_tokens || 0).toLocaleString()} / ${(r.completion_tokens || 0).toLocaleString()}</td>
-            <td>${latency}</td>
-            <td>${r.empty_count || 0} (${emptyPct})</td>
-          </tr>`;
-      })
-      .join("");
-    // Wire row clicks → jump to Audit Log filtered by model.
-    document.querySelectorAll(".cost-model-row").forEach((row) => {
-      row.addEventListener("click", () => {
-        const model = row.dataset.model;
-        if (!model) return;
-        activateTab("audit");
-        // The audit tab doesn't expose a model filter yet; show a hint
-        // toast so the user knows where to look. Click-through is best-effort
-        // until the Audit tab supports model filtering directly.
-        const hintEl = document.querySelector("#tab-audit .hint");
-        if (hintEl) {
-          const orig = hintEl.textContent;
-          hintEl.textContent = `Filtered hint: showing recent calls. Look for model=${model}.`;
-          setTimeout(() => { hintEl.textContent = orig; }, 4000);
-        }
-      });
+  function renderCostModelTable(rows) {
+    const mount = document.getElementById("cost-model-card");
+    if (!mount) return;
+    rows = rows || [];
+    const table = NG.DataTable(mount, {
+      title: "By model",
+      countLabel: (n) => `${n} model${n === 1 ? "" : "s"}`,
+      search: true,
+      searchPlaceholder: "Filter models…",
+      defaultSort: { key: "spend", dir: "desc" },
+      emptyText: "No spend in this window.",
+      rows: rows,
+      onRowClick: (r) => jumpToAuditForModel(r.key),
+      columns: [
+        { key: "key", label: "Model", render: (r) => NG.el("span", { class: "v2-strong" }, r.key || "—"), sortValue: (r) => r.key || "" },
+        { key: "provider", label: "Provider", render: (r) => NG.providerTag(r.provider || r.key_provider || "—"), sortValue: (r) => r.provider || "", required: false },
+        { key: "spend", label: "Spend", align: "right", render: (r) => usd(r.cost_usd), sortValue: (r) => r.cost_usd || 0 },
+        { key: "notional", label: "Notional", align: "right", render: (r) => (r.notional_cost_usd != null ? usd(r.notional_cost_usd) : "—"), sortValue: (r) => r.notional_cost_usd || 0 },
+        { key: "calls", label: "Calls", align: "right", render: (r) => (r.calls || 0).toLocaleString(), sortValue: (r) => r.calls || 0 },
+        { key: "percall", label: "$/call", align: "right", render: (r) => { const c = r.calls || 1; const d = (r.cost_usd || 0) / c; return d > 0 ? "$" + d.toFixed(4) : "—"; }, sortValue: (r) => (r.cost_usd || 0) / (r.calls || 1) },
+        { key: "tokens", label: "Tokens in / out", align: "right", render: (r) => `${fmtNum(r.prompt_tokens || 0)} / ${fmtNum(r.completion_tokens || 0)}`, sortValue: (r) => (r.prompt_tokens || 0) + (r.completion_tokens || 0) },
+        { key: "latency", label: "Avg latency", align: "right", render: (r) => (r.avg_latency_ms != null ? Math.round(r.avg_latency_ms).toLocaleString() + " ms" : "—"), sortValue: (r) => r.avg_latency_ms || 0 },
+        { key: "empty", label: "Empty", align: "right", render: (r) => { const c = r.calls || 1; const p = ((r.empty_count || 0) / c * 100).toFixed(0); return `${r.empty_count || 0} (${p}%)`; }, sortValue: (r) => r.empty_count || 0 },
+      ],
     });
+    return table;
+  }
+
+  function jumpToAuditForModel(model) {
+    if (!model) return;
+    activateTab("audit");
+    const hintEl = document.querySelector("#tab-audit .hint");
+    if (hintEl) {
+      const orig = hintEl.textContent;
+      hintEl.textContent = `Filtered hint: showing recent calls. Look for model=${model}.`;
+      setTimeout(() => { hintEl.textContent = orig; }, 4000);
+    }
   }
 
   function fillCostTierTable(id, rows) {
@@ -2423,54 +2786,45 @@
   }
 
   function renderCostChart(ts) {
-    const canvas = document.getElementById("cost-chart");
-    if (!canvas || !window.Chart) return;
+    const mount = document.getElementById("cost-spend-card");
+    if (!mount) return;
+    const series = (ts && ts.series) || [];
 
-    // Build a unified x-axis (all unique bucket timestamps, sorted).
+    // Build a unified x-axis (all unique bucket timestamps, sorted → epoch s).
     const allTs = new Set();
-    ts.series.forEach((s) => s.points.forEach((p) => allTs.add(p.ts)));
+    series.forEach((s) => (s.points || []).forEach((p) => allTs.add(p.ts)));
     const labels = Array.from(allTs).sort();
-
-    // Convert each series to a value array aligned to `labels`.
-    const palette = ["#c2410c", "#10b981", "#f59e0b", "#ef4444", "#a78bfa", "#22d3ee"];
-    const datasets = ts.series.map((s, i) => {
-      const byTs = Object.fromEntries(s.points.map((p) => [p.ts, p.cost_usd]));
+    const x = labels.map((iso) => Math.floor(new Date(iso).getTime() / 1000));
+    const chartSeries = series.map((s, i) => {
+      const byTs = Object.fromEntries((s.points || []).map((p) => [p.ts, p.cost_usd]));
       return {
-        label: s.provider,
-        data: labels.map((t) => byTs[t] ?? 0),
-        borderColor: palette[i % palette.length],
-        backgroundColor: palette[i % palette.length] + "33",
-        tension: 0.3,
-        fill: false,
+        label: s.provider || "—",
+        values: labels.map((t) => byTs[t] ?? 0),
+        color: COST_DONUT_COLORS[i % COST_DONUT_COLORS.length],
       };
     });
 
-    if (costChart) costChart.destroy();
-    costChart = new Chart(canvas, {
-      type: "line",
-      data: { labels: labels.map(shortLabel), datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { labels: { color: "#d8e0ec" } },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => `${ctx.dataset.label}: ${usd(ctx.parsed.y)}`,
-            },
-          },
-        },
-        scales: {
-          x: { ticks: { color: "#7a8595" }, grid: { color: "#1f2630" } },
-          y: {
-            ticks: {
-              color: "#7a8595",
-              callback: (v) => "$" + Number(v).toFixed(4),
-            },
-            grid: { color: "#1f2630" },
-          },
-        },
-      },
+    // Inline legend + chart inside one card.
+    const body = NG.el("div");
+    const chartEl = NG.el("div", { class: "v2-chart" });
+    body.appendChild(chartEl);
+    const legendChips = chartSeries.map((s) => {
+      const c = NG.el("span", { class: "v2-chart-legend-item" });
+      c.appendChild(NG.el("span", { class: "v2-legend-dot", style: { background: s.color } }));
+      c.appendChild(NG.el("span", null, s.label));
+      return c;
+    });
+    mount.innerHTML = "";
+    mount.appendChild(NG.card({ title: "Spend over time", actions: legendChips, body }));
+
+    if (!x.length) { chartEl.innerHTML = '<div class="v2-chart-fallback">No spend in this window.</div>'; return; }
+    NG.chart(chartEl, {
+      type: "area",
+      x,
+      series: chartSeries,
+      height: 236,
+      fmtY: (v) => "$" + Number(v).toFixed(Number(v) < 1 ? 2 : 0),
+      fmtX: (epoch) => shortLabel(new Date(epoch * 1000).toISOString()),
     });
   }
 
@@ -2491,22 +2845,32 @@
   // --- Models / Provider health ------------------------------------------
 
   async function loadModels() {
+    if (!getToken()) return;
     try {
       const r = await api("/v1/models");
       // Models tab shows the JSON.
-      document.getElementById("models-json").textContent = JSON.stringify(r, null, 2);
-      // Health tab shows a table.
-      const tbody = document.getElementById("health-tbody");
-      tbody.innerHTML = (r.data || [])
-        .filter((m) => m.id !== "auto")
-        .map((m) => {
-          const tag = m.nautgate_unhealthy
-            ? '<span class="tag unhealthy">unhealthy</span>'
-            : '<span class="tag healthy">ok</span>';
-          const tiers = (m.nautgate_tiers || []).join(", ");
-          return `<tr><td>${esc(m.nautgate_provider)}</td><td>${esc(m.id)}</td><td>${esc(tiers)}</td><td>${tag}</td></tr>`;
-        })
-        .join("");
+      const mj = document.getElementById("models-json");
+      if (mj) mj.textContent = JSON.stringify(r, null, 2);
+      // Provider Health tab shows a kit DataTable.
+      const healthCard = document.getElementById("health-card");
+      if (healthCard) {
+        const rows = (r.data || []).filter((m) => m.id !== "auto");
+        NG.DataTable(healthCard, {
+          title: "Provider health",
+          countLabel: (n) => `${n} model${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter models…",
+          defaultSort: { key: "provider", dir: "asc" },
+          emptyText: "No models reported.",
+          rows,
+          rowClass: (m) => (m.nautgate_unhealthy ? "v2-row-bad" : null),
+          columns: [
+            { key: "provider", label: "Provider", render: (m) => NG.providerTag(m.nautgate_provider), sortValue: (m) => m.nautgate_provider || "" },
+            { key: "model", label: "Model", render: (m) => NG.el("span", { class: "v2-strong" }, m.id), sortValue: (m) => m.id || "" },
+            { key: "tiers", label: "Tiers", render: (m) => (m.nautgate_tiers || []).join(", ") || "—", sortValue: (m) => (m.nautgate_tiers || []).join(",") },
+            { key: "status", label: "Status", sortable: false, render: (m) => NG.chip(m.nautgate_unhealthy ? "Unhealthy" : "Healthy", m.nautgate_unhealthy ? "bad" : "good") },
+          ],
+        });
+      }
     } catch (e) {
       /* swallow */
     }
@@ -2738,14 +3102,6 @@
     qualityModelFilter = e.target.value || "*";
     loadQuality();
   });
-
-  function _heatmapColor(rate) {
-    if (rate == null) return "transparent";
-    const r = Math.max(0, Math.min(1, rate));
-    // green -> amber -> red
-    const hue = (1 - r) * 120;
-    return `hsla(${hue}, 70%, 35%, ${0.25 + r * 0.55})`;
-  }
 
   // ---- Judge health card --------------------------------------------------
   document.getElementById("qe-health-reload")?.addEventListener("click", () => loadQualityHealth());
@@ -3012,6 +3368,7 @@
   }
 
   async function loadQuality() {
+    if (!getToken()) return;
     // Health + anti-patterns load independently of the summary.
     loadQualityHealth();
     loadAntiPatterns();
@@ -3022,71 +3379,79 @@
       const qs = `?hours=${qualityWindow.hours}` +
         (qualityModelFilter && qualityModelFilter !== "*" ? `&model=${encodeURIComponent(qualityModelFilter)}` : "");
       const s = await api("/v1/quality/summary" + qs);
-      const t = s.totals || {};
-      document.getElementById("q-total").textContent = (t.evaluations || 0).toLocaleString();
-      document.getElementById("q-completion").textContent =
-        t.avg_task_completion != null ? Number(t.avg_task_completion).toFixed(2) : "—";
-      document.getElementById("q-failure-rate").textContent =
-        t.failure_rate != null ? (Number(t.failure_rate) * 100).toFixed(1) + "%" : "—";
-      document.getElementById("q-judge-cost").textContent =
-        t.judge_spend_usd != null ? "$" + Number(t.judge_spend_usd).toFixed(4) : "$—";
 
-      // Heatmap
+      // Heatmap — failure rate by model × complexity bucket
       const buckets = ["0_2", "2_4", "4_6", "6_8", "8_10"];
-      const heatBody = document.querySelector("#quality-heatmap tbody");
-      heatBody.innerHTML = (s.heatmap || []).map((r) => {
-        const cells = buckets.map((b) => {
-          const v = r.buckets ? r.buckets[b] : null;
-          const c = r.counts ? r.counts[b] : 0;
-          const display = v == null ? "—" : (v * 100).toFixed(0) + "%";
-          const title = c ? `${c} evals` : "no evals";
-          return `<td style="background:${_heatmapColor(v)}" title="${title}">${display}</td>`;
-        }).join("");
-        return `<tr><td><span class="tag">${esc(r.model)}</span></td>${cells}</tr>`;
-      }).join("") || `<tr><td colspan="6" class="hint">no evaluations yet — they'll start landing within seconds of your next LLM call</td></tr>`;
+      const heatCard = document.getElementById("q-heatmap-card");
+      if (heatCard) {
+        const hmRows = (s.heatmap || []).map((r) => ({
+          label: r.model,
+          cells: buckets.map((b) => {
+            const v = r.buckets ? r.buckets[b] : null;
+            const c = r.counts ? r.counts[b] : 0;
+            return { value: v, display: v == null ? "—" : (v * 100).toFixed(0) + "%", title: c ? `${c} evals` : "no evals" };
+          }),
+        }));
+        heatCard.innerHTML = "";
+        const body = hmRows.length
+          ? NG.heatmap({ rowLabel: "Model", colLabels: ["0–2", "2–4", "4–6", "6–8", "8–10"], rows: hmRows })
+          : NG.el("div", { class: "hint" }, "No evaluations yet — they'll start landing within seconds of your next LLM call.");
+        heatCard.appendChild(NG.card({ title: "Failure rate by model & task complexity", meta: "judged on classified_score 0–10", body }));
+      }
 
-      // Failure modes
-      const fmBody = document.querySelector("#quality-failure-modes tbody");
-      fmBody.innerHTML = (s.failure_modes || []).map((r) => `
-        <tr>
-          <td>${esc(r.model)}</td>
-          <td>${r.evaluations || 0}</td>
-          <td>${r.over_thinking || 0}</td>
-          <td>${r.off_task || 0}</td>
-          <td>${r.looped || 0}</td>
-          <td>${r.hallucination || 0}</td>
-          <td>${r.partial_answer || 0}</td>
-          <td>${r.refusal || 0}</td>
-          <td>${r.tool_misuse || 0}</td>
-        </tr>`).join("") || `<tr><td colspan="9" class="hint">no failure-mode data yet</td></tr>`;
-
-      // Worst recent
-      const wBody = document.querySelector("#quality-worst tbody");
-      wBody.innerHTML = (s.worst_recent || []).map((r) => {
-        const tags = (r.failure_tags || []).map(
-          (t) => `<span class="failure-tag failure-tag-${esc(t)}">${esc(t.replace(/_/g, " "))}</span>`
-        ).join(" ");
-        return `
-          <tr class="worst-row" data-decision="${esc(r.decision_id)}">
-            <td>${tsShort(r.ts)}</td>
-            <td>${esc(r.model)}</td>
-            <td><span class="tag tier">${esc(r.tier || "—")}</span></td>
-            <td>${r.completion != null ? r.completion.toFixed(1) : "—"}</td>
-            <td>${tags}</td>
-            <td>${esc(r.coach_notes || "")}</td>
-          </tr>`;
-      }).join("") || `<tr><td colspan="6" class="hint">no failures detected in this window</td></tr>`;
-
-      // Click a worst-row to jump to the Audit Log filtered to that call.
-      document.querySelectorAll(".worst-row").forEach((row) => {
-        row.addEventListener("click", () => {
-          activateTab("audit");
-          setTimeout(() => {
-            auditExpandedId = null;
-            toggleAuditDetail(row.dataset.decision);
-          }, 200);
+      // Failure modes — share of judged calls tagged (percentages, colored)
+      const fmCard = document.getElementById("q-failuremodes-card");
+      if (fmCard) {
+        const pctCell = (count, evals) => {
+          if (!evals) return NG.el("span", { class: "hint" }, "—");
+          const r = count / evals;
+          const color = r > 0.25 ? "var(--bad)" : r > 0.12 ? "var(--warn)" : r > 0 ? "#C2CAD6" : "var(--text-dim)";
+          return NG.el("span", { style: { color } }, (r * 100).toFixed(0) + "%");
+        };
+        const fmCol = (key, label) => ({ key, label, align: "right", render: (r) => pctCell(r[key] || 0, r.evaluations || 0), sortValue: (r) => (r.evaluations ? (r[key] || 0) / r.evaluations : 0) });
+        NG.DataTable(fmCard, {
+          title: "Failure modes by model", meta: "share of judged calls tagged",
+          countLabel: (n) => `${n} model${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter models…",
+          defaultSort: { key: "over_thinking", dir: "desc" },
+          emptyText: "No failure-mode data yet.",
+          rows: s.failure_modes || [],
+          columns: [
+            { key: "model", label: "Model", render: (r) => NG.el("span", { class: "v2-strong" }, r.model), sortValue: (r) => r.model || "" },
+            fmCol("over_thinking", "Over-thinking"),
+            fmCol("off_task", "Off-task"),
+            fmCol("looped", "Looped"),
+            fmCol("hallucination", "Hallucination"),
+            fmCol("partial_answer", "Partial"),
+          ],
         });
-      });
+      }
+
+      // Worst recent calls
+      const worstCard = document.getElementById("q-worst-card");
+      if (worstCard) {
+        NG.DataTable(worstCard, {
+          title: "Worst recent calls",
+          countLabel: (n) => `${n} call${n === 1 ? "" : "s"}`,
+          searchPlaceholder: "Filter…",
+          defaultSort: { key: "completion", dir: "asc" },
+          emptyText: "No failures detected in this window.",
+          rows: s.worst_recent || [],
+          onRowClick: (r) => { activateTab("audit"); setTimeout(() => { auditExpandedId = null; toggleAuditDetail(r.decision_id); }, 200); },
+          columns: [
+            { key: "ts", label: "Time", render: (r) => tsShort(r.ts), sortValue: (r) => r.ts || "" },
+            { key: "model", label: "Model", render: (r) => r.model || "—", sortValue: (r) => r.model || "" },
+            { key: "tier", label: "Tier", render: (r) => NG.tierPill(r.tier || "—"), sortValue: (r) => r.tier || "" },
+            { key: "completion", label: "Completion", align: "right", render: (r) => (r.completion != null ? r.completion.toFixed(1) : "—"), sortValue: (r) => r.completion == null ? 99 : r.completion },
+            { key: "tags", label: "Tags", sortable: false, render: (r) => {
+                const w = NG.el("span", { class: "sc-incidents" });
+                (r.failure_tags || []).forEach((tg) => w.appendChild(NG.el("span", { class: "failure-tag failure-tag-" + tg }, tg.replace(/_/g, " "))));
+                return w.children.length ? w : "—";
+              } },
+            { key: "coach", label: "Coach note", sortable: false, render: (r) => r.coach_notes || "" },
+          ],
+        });
+      }
 
       // Populate model filter from observed evaluations on first paint.
       const sel = document.getElementById("quality-model-filter");
@@ -3124,32 +3489,42 @@
   }
 
   async function loadBehavior() {
-    const tbody = document.querySelector("#behavior-per-model tbody");
-    if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="10" class="hint">loading…</td></tr>';
+    if (!getToken()) return;
+    const mount = document.getElementById("behavior-permodel-card");
+    if (!mount) return;
     try {
       const r = await api("/v1/behavior/per-model?hours=" + behaviorWindowH);
       const rows = r.data || [];
-      if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="hint">No quality evals in window.</td></tr>';
-        return;
-      }
-      tbody.innerHTML = rows.map(m => `
-        <tr>
-          <td><b>${esc(m.model || "—")}</b></td>
-          <td>${m.evals}</td>
-          <td>${fmt5(m.avg_action_compliance)}</td>
-          <td>${fmt5(m.avg_task_completion)}</td>
-          <td>${fmt5(m.avg_reasoning_efficiency)}</td>
-          <td>${fmtMs(m.avg_duration_ms)}</td>
-          <td>${fmtPct(m.skipped_doc_rate)}</td>
-          <td>${fmtPct(m.edit_without_read_rate)}</td>
-          <td>${fmtPct(m.premature_action_rate)}</td>
-          <td>${fmtPct(m.retry_loop_rate)}</td>
-        </tr>
-      `).join("");
+      // rate cell: higher = worse → amber/red tint
+      const rate = (v) => {
+        if (v == null) return NG.el("span", { class: "hint" }, "—");
+        const color = v > 0.25 ? "var(--bad)" : v > 0.1 ? "var(--warn)" : "#C2CAD6";
+        return NG.el("span", { style: { color } }, (v * 100).toFixed(1) + "%");
+      };
+      const score = (v) => (v == null ? NG.el("span", { class: "hint" }, "—") : v.toFixed(2));
+      NG.DataTable(mount, {
+        title: "Per-model behavioral profile",
+        countLabel: (n) => `${n} model${n === 1 ? "" : "s"}`,
+        searchPlaceholder: "Filter models…",
+        defaultSort: { key: "evals", dir: "desc" },
+        emptyText: "No quality evals in window.",
+        rows,
+        columns: [
+          { key: "model", label: "Model", render: (m) => NG.el("span", { class: "v2-strong" }, m.model || "—"), sortValue: (m) => m.model || "" },
+          { key: "evals", label: "Evals", align: "right", render: (m) => m.evals || 0, sortValue: (m) => m.evals || 0 },
+          { key: "ac", label: "Action compliance", align: "right", render: (m) => score(m.avg_action_compliance), sortValue: (m) => m.avg_action_compliance || 0 },
+          { key: "tc", label: "Task completion", align: "right", render: (m) => score(m.avg_task_completion), sortValue: (m) => m.avg_task_completion || 0 },
+          { key: "eff", label: "Efficiency", align: "right", render: (m) => score(m.avg_reasoning_efficiency), sortValue: (m) => m.avg_reasoning_efficiency || 0 },
+          { key: "dur", label: "Duration", align: "right", render: (m) => fmtMs(m.avg_duration_ms), sortValue: (m) => m.avg_duration_ms || 0 },
+          { key: "skip", label: "Skipped doc", align: "right", render: (m) => rate(m.skipped_doc_rate), sortValue: (m) => m.skipped_doc_rate || 0 },
+          { key: "edit", label: "Edit w/o read", align: "right", render: (m) => rate(m.edit_without_read_rate), sortValue: (m) => m.edit_without_read_rate || 0 },
+          { key: "prem", label: "Premature action", align: "right", render: (m) => rate(m.premature_action_rate), sortValue: (m) => m.premature_action_rate || 0 },
+          { key: "loop", label: "Retry loop", align: "right", render: (m) => rate(m.retry_loop_rate), sortValue: (m) => m.retry_loop_rate || 0 },
+        ],
+      });
+      return;
     } catch (e) {
-      tbody.innerHTML = `<tr><td colspan="10" class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</td></tr>`;
+      mount.innerHTML = `<div class="v2-card"><p class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</p></div>`;
       console.error("loadBehavior failed", e);
     }
     // Also surface any prior comparison run so the user doesn't have to click reload.
@@ -3668,6 +4043,33 @@
   // Start notification poller — runs every 60s while the tab is open.
   loadNotifications();
   setInterval(loadNotifications, 60_000);
+
+  // Global chrome pollers (header status pill, sidebar live dots/badges).
+  // These run regardless of active tab so trouble is visible everywhere.
+  loadGlobalStatus();
+  setInterval(loadGlobalStatus, 60_000);
+  loadDriftBadge();
+  setInterval(loadDriftBadge, 60_000);
+
+  // ⌘K / Ctrl-K focuses the header search.
+  const searchInput = document.getElementById("global-search-input");
+  document.getElementById("global-search")?.addEventListener("click", () => searchInput?.focus());
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      searchInput?.focus();
+    }
+  });
+
+  // Help & Ask — slide-in panel is wired in Phase 4. For now the entry
+  // points are live but the panel is a no-op placeholder.
+  function openHelp() {
+    // TODO(phase4): mount the help-module slide-in panel here.
+    searchInput?.blur();
+    console.info("[nautgate] Help & Ask panel — coming in the redesign (Phase 4).");
+  }
+  document.getElementById("nav-help")?.addEventListener("click", (ev) => { ev.preventDefault(); openHelp(); });
+  document.getElementById("header-help-btn")?.addEventListener("click", (ev) => { ev.preventDefault(); openHelp(); });
   if (importedLabel) {
     // Tiny toast: 4s pinned banner on the Overview Sessions section.
     const banner = document.createElement("div");

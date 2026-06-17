@@ -4,62 +4,160 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NautGate</title>
+  <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <h1>NautGate <span class="version" id="version">v0.1</span></h1>
+ <div class="app-shell">
+  <!-- ===== Sidebar ===================================================== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><span></span></div>
+      <div>
+        <div class="brand-name">NautGate <span class="version" id="version" hidden></span></div>
+        <div class="brand-sub">memory-aware gateway</div>
+      </div>
+    </div>
+
     <nav>
-      <a href="#overview" data-tab="overview" class="active">Overview</a>
-      <a href="#audit" data-tab="audit">Audit Log</a>
-      <a href="#scorecard" data-tab="scorecard">Scorecard</a>
-      <a href="#drift" data-tab="drift">Drift</a>
-      <a href="#probe" data-tab="probe">LLM Probing</a>
-      <a href="#quality" data-tab="quality">Quality</a>
-      <a href="#behavior" data-tab="behavior">Behavior</a>
-      <a href="#cost" data-tab="cost">Cost</a>
-      <a href="#cache" data-tab="cache">Cache</a>
-      <a href="#privacy" data-tab="privacy">Privacy</a>
-      <a href="#decisions" data-tab="decisions">Decisions</a>
-      <a href="#health" data-tab="health">Provider health</a>
-      <a href="#models" data-tab="models">Models</a>
-      <a href="#settings" data-tab="settings">Settings</a>
+      <a class="nav-item active" href="#overview" data-tab="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        <span class="nav-label">Overview</span>
+      </a>
+
+      <div class="nav-group-label">Observe</div>
+      <a class="nav-item" href="#audit" data-tab="audit">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
+        <span class="nav-label">Audit Log</span>
+      </a>
+      <a class="nav-item" href="#decisions" data-tab="decisions">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 8v8M6 12h6a4 4 0 004-4"/></svg>
+        <span class="nav-label">Decisions</span>
+      </a>
+      <a class="nav-item" href="#health" data-tab="health">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>
+        <span class="nav-label">Provider Health</span>
+        <span class="nav-dot" id="nav-health-dot" hidden></span>
+      </a>
+
+      <div class="nav-group-label">Quality</div>
+      <a class="nav-item" href="#scorecard" data-tab="scorecard">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="M9 13l2 2 4-4"/></svg>
+        <span class="nav-label">Scorecard</span>
+      </a>
+      <a class="nav-item" href="#behavior" data-tab="behavior">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="nav-label">Behavior</span>
+      </a>
+      <a class="nav-item" href="#drift" data-tab="drift">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12c3-6 6 6 9 0s6-6 9 0"/></svg>
+        <span class="nav-label">Drift</span>
+        <span class="nav-badge" id="nav-drift-badge" hidden></span>
+      </a>
+      <a class="nav-item" href="#quality" data-tab="quality">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l2.4 5 5.6.8-4 4 1 5.6-5-2.8-5 2.8 1-5.6-4-4 5.6-.8z"/></svg>
+        <span class="nav-label">Quality</span>
+      </a>
+      <a class="nav-item" href="#probe" data-tab="probe">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
+        <span class="nav-label">LLM Probing</span>
+      </a>
+
+      <div class="nav-group-label">Spend</div>
+      <a class="nav-item" href="#cost" data-tab="cost">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 7v10M9.5 9.2c.4-.7 1.3-1.1 2.5-1.1 1.5 0 2.5.7 2.5 1.8 0 2.5-5 1.3-5 3.8 0 1.1 1 1.8 2.5 1.8 1.2 0 2.1-.4 2.5-1.1"/></svg>
+        <span class="nav-label">Cost</span>
+      </a>
+      <a class="nav-item" href="#cache" data-tab="cache">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg>
+        <span class="nav-label">Cache</span>
+      </a>
+
+      <div class="nav-group-label">Govern</div>
+      <a class="nav-item" href="#privacy" data-tab="privacy">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
+        <span class="nav-label">Privacy</span>
+      </a>
     </nav>
-    <div class="auth">
-      <span class="auth-state-label">session:</span>
+
+    <div class="sidebar-footer">
+      <a class="nav-item nav-help" id="nav-help" href="#help">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.5 7.2L4 21l1.8-5.5A8 8 0 1121 12z"/><path d="M9.8 9.6a2.2 2.2 0 014.2.9c0 1.5-2 1.8-2 3" stroke-width="1.5"/><circle cx="12" cy="16.6" r=".7" fill="currentColor" stroke="none"/></svg>
+        <span class="nav-label">Help &amp; Ask</span>
+        <span class="nav-chip">AI</span>
+      </a>
+      <a class="nav-item" href="#settings" data-tab="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12c0-.5 0-.9-.1-1.3l1.9-1.4-2-3.4-2.2 1a7 7 0 00-1.7-1L14.5 3h-4l-.3 2.5a7 7 0 00-1.7 1l-2.2-1-2 3.4 1.9 1.4c-.1.4-.1.8-.1 1.3s0 .9.1 1.3L4.3 15.7l2 3.4 2.2-1a7 7 0 001.7 1l.3 2.5h4l.3-2.5a7 7 0 001.7-1l2.2 1 2-3.4-1.9-1.4c.1-.4.1-.8.1-1.3z"/></svg>
+        <span class="nav-label">Settings</span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ===== Main column ================================================ -->
+  <div class="appmain">
+    <header class="appheader">
+      <div class="page-heading">
+        <div class="page-title" id="page-title">Overview</div>
+        <div class="page-subtitle" id="page-subtitle"></div>
+      </div>
+
+      <div class="global-search" id="global-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
+        <input id="global-search-input" type="text" placeholder="Search models, providers, agents…" autocomplete="off" />
+        <span class="kbd">⌘K</span>
+      </div>
+
+      <div class="header-spacer"></div>
+
+      <button class="header-action" id="header-action" hidden></button>
+
+      <div class="header-status nodata" id="header-status" title="Live provider status">
+        <span class="hs-dot"></span>
+        <span class="hs-label" id="header-status-label">—</span>
+        <span class="hs-detail" id="header-status-detail"></span>
+      </div>
+
+      <button class="icon-btn" id="header-help-btn" title="Help &amp; Ask">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.5 7.2L4 21l1.8-5.5A8 8 0 1121 12z"/><path d="M9.8 9.6a2.2 2.2 0 014.2.9c0 1.5-2 1.8-2 3" stroke-width="1.5"/><circle cx="12" cy="16.6" r=".7" fill="currentColor" stroke="none"/></svg>
+      </button>
+
       <button id="session-pill" class="session-pill" title="Click to manage sessions on the Overview tab">
         <span id="auth-state" class="auth-state">no session</span>
       </button>
-    </div>
-  </header>
+    </header>
 
-  <!-- Global notification strip: open drift alerts, budget warnings,
-       subscription savings, rate-limit events. Polls every 60s. -->
-  <div id="notif-strip" class="notif-strip" hidden></div>
+    <!-- Global notification strip: open drift alerts, budget warnings,
+         subscription savings, rate-limit events. Polls every 60s. -->
+    <div id="notif-strip" class="notif-strip" hidden></div>
 
-  <main>
+    <main class="appcontent">
     <!-- Overview ------------------------------------------------------------>
     <section id="tab-overview" class="tab active">
-      <h2>Provider status <span class="hint" style="font-weight:400">— live, refreshes every 60s</span></h2>
-      <p class="hint">Active heartbeat + the last 10&nbsp;min of real traffic. A <b>529 Overloaded</b> is Anthropic shedding load — NautGate auto-retries it, and the badge shows the true overload rate (incl. retries it absorbed for you).</p>
-      <div id="provider-strip" class="status-strip"></div>
+      <div class="page-toolbar">
+        <span class="window-buttons" id="overview-window">
+          <button data-hours="24" data-bucket="hour" class="active">Today</button>
+          <button data-hours="168" data-bucket="day">This week</button>
+          <button data-hours="336" data-bucket="day">2 weeks</button>
+          <button data-hours="672" data-bucket="day">4 weeks</button>
+          <button data-hours="2160" data-bucket="day">3 months</button>
+          <button data-hours="4320" data-bucket="day">6 months</button>
+          <button data-hours="8760" data-bucket="day">12 months</button>
+          <button data-hours="87600" data-bucket="day">All time</button>
+        </span>
+      </div>
+      <div id="provider-strip" class="prov-strip v2-section"></div>
 
-      <h2 style="margin-top:24px">Last 24h</h2>
-      <div class="grid">
-        <div class="card"><div class="metric" id="m-total">—</div><div class="label">requests</div></div>
-        <div class="card"><div class="metric" id="m-empty">—</div><div class="label">empty rate</div></div>
-        <div class="card"><div class="metric" id="m-p50">—</div><div class="label">p50 latency</div></div>
-        <div class="card"><div class="metric" id="m-p95">—</div><div class="label">p95 latency</div></div>
+      <div id="overview-kpis" class="v2-section"></div>
+
+      <div class="v2-grid-2 v2-section">
+        <div id="overview-requests-card"></div>
+        <div id="overview-tier-card"></div>
       </div>
 
-      <h3>By tier</h3>
-      <div id="tier-bars" class="bars"></div>
-
-      <h3>By inbound format</h3>
-      <div id="format-bars" class="bars"></div>
-
-      <h2 style="margin-top:24px">Sessions</h2>
-      <p class="hint">Saved bearer tokens. Click <b>Activate</b> to switch which one the dashboard uses for all API calls. Each session shows its agent identity (from <code>/v1/whoami</code>). Tokens are stored in your browser only — never sent anywhere except NautGate itself.</p>
+      <div class="v2-card">
+        <div class="v2-card-head">
+          <div class="v2-card-title-wrap"><span class="v2-card-title">Sessions</span><span class="v2-card-meta" id="sessions-meta">saved bearer tokens</span></div>
+        </div>
       <div id="sessions-list"></div>
       <div id="sessions-pager" class="pager">
         <button id="sessions-prev">‹ prev</button>
@@ -78,11 +176,12 @@
           <div id="add-error" class="hint" style="color:#ff5c5c"></div>
         </div>
       </details>
+      </div><!-- /.v2-card sessions -->
     </section>
 
     <!-- Cost ---------------------------------------------------------------->
     <section id="tab-cost" class="tab">
-      <h2>Cost
+      <div class="page-toolbar">
         <span class="window-buttons">
           <button data-window="1" data-bucket="hour">1h</button>
           <button data-window="24" data-bucket="hour" class="active">24h</button>
@@ -99,16 +198,9 @@
             <option value="*" selected>All agents</option>
           </select>
         </span>
-      </h2>
-      <div class="grid">
-        <div class="card"><div class="metric" id="c-total">$0.00</div><div class="label">metered spend</div></div>
-        <div class="card cost-savings"><div class="metric" id="c-savings">$0.00</div><div class="label">subscription savings</div></div>
-        <div class="card"><div class="metric" id="c-calls">—</div><div class="label">calls</div></div>
-        <div class="card"><div class="metric" id="c-avg">—</div><div class="label">avg / call</div></div>
-        <div class="card"><div class="metric" id="c-tokens">—</div><div class="label">total tokens</div></div>
-        <div class="card"><div class="metric" id="c-empty">—</div><div class="label">empty responses</div></div>
-        <div class="card"><div class="metric" id="c-ratelimit">—</div><div class="label">rate-limited (429)</div></div>
       </div>
+
+      <div id="cost-kpis" class="v2-section"></div>
 
       <!-- OpenRouter live credit balance — live from openrouter.ai/api/v1/credits.
            Days-left uses 7-day local audit-log spend as the burn projection. -->
@@ -134,22 +226,12 @@
         <div class="or-credits-bar"><div class="or-credits-bar-fill" id="or-credits-bar-fill"></div></div>
       </div>
 
-      <h3>Spend over time, by provider</h3>
-      <div class="chart-wrap"><canvas id="cost-chart"></canvas></div>
-
-      <div class="grid-2">
-        <div>
-          <h3>By provider</h3>
-          <table id="cost-provider"><thead><tr><th>provider</th><th>metered</th><th>notional</th><th>calls</th></tr></thead><tbody></tbody></table>
-        </div>
-        <div>
-          <h3>By model</h3>
-          <p class="hint">Click any row for hourly drill-down.</p>
-          <table id="cost-model"><thead><tr>
-            <th>model</th><th>metered</th><th>notional</th><th>calls</th><th>$/call</th><th>tokens in/out</th><th>avg latency</th><th>empty</th>
-          </tr></thead><tbody></tbody></table>
-        </div>
+      <div class="v2-grid-2 v2-section">
+        <div id="cost-spend-card"></div>
+        <div id="cost-provider-card"></div>
       </div>
+
+      <div id="cost-model-card" class="v2-section"></div>
 
       <h3>By tier</h3>
       <table id="cost-tier"><thead><tr><th>tier</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody></table>
@@ -167,138 +249,97 @@
 
     <!-- LLM Probing (provenance + degradation monitoring) ------------------->
     <section id="tab-probe" class="tab">
-      <h2>LLM Probing <button class="reload" id="probe-reload">↻</button></h2>
-      <p class="hint">Scheduled probes fire a fixed suite at each max-subscription model on <b>both</b> the subscription path (OAuth) and a metered twin (OpenRouter/API), then compare. Detects silent <b>model swaps</b> (returned model ≠ requested), <b>tokenizer shifts</b> (tokens/byte vs baseline), <b>latency</b> and <b>quality</b> drift, and <b>cross-path divergence</b> (your subscription answering differently than metered for the same prompt). <em>This is statistical evidence, not cryptographic proof — we can't see which weights actually ran.</em></p>
+      <p class="hint" style="max-width:920px">Scheduled probes fire a fixed suite at each max-subscription model on <b>both</b> the subscription path (OAuth) and a metered twin (OpenRouter/API), then compare. Detects silent <b>model swaps</b>, <b>tokenizer shifts</b>, <b>latency</b>/<b>quality</b> drift, and <b>cross-path divergence</b>. <em>Statistical evidence, not cryptographic proof.</em></p>
 
-      <div class="card" style="margin-bottom:16px">
-        <div class="anatomy-section"><b>Config</b></div>
-        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 0">
-          <label><input type="checkbox" id="probe-enabled"> autonomous probing</label>
-          <label>every <input type="number" id="probe-interval" min="1" max="168" style="width:60px"> h</label>
-          <button id="probe-save">Save</button>
-          <button id="probe-run-now" class="dr-report-btn">▶ Run now</button>
-          <span id="probe-state" class="hint"></span>
+      <div id="probe-kpis" class="v2-section"></div>
+      <div id="probe-fingerprint-card" class="v2-section"></div>
+      <div id="probe-compare-card" class="v2-section"></div>
+
+      <details class="v2-more">
+        <summary>Config, targets &amp; open alerts</summary>
+        <div class="v2-card v2-section">
+          <div class="v2-card-head">
+            <div class="v2-card-title-wrap"><span class="v2-card-title">Config</span></div>
+            <div class="v2-card-actions">
+              <span id="probe-state" class="hint"></span>
+              <button class="reload" id="probe-reload" title="reload">↻</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:2px 0 10px">
+            <label style="margin:0"><input type="checkbox" id="probe-enabled"> autonomous probing</label>
+            <label style="margin:0">every <input type="number" id="probe-interval" min="1" max="168" style="width:60px"> h</label>
+            <button id="probe-save">Save</button>
+            <button id="probe-run-now">▶ Run now</button>
+          </div>
+          <div style="padding:4px 0">
+            <label class="hint">targets (one <code>provider/model</code> per line — e.g. <code>anthropic/claude-opus-4-8</code>, <code>openrouter/anthropic/claude-sonnet-4</code>):</label>
+            <textarea id="probe-targets" rows="3" style="width:100%;font-family:var(--mono);font-size:12px"></textarea>
+          </div>
+          <p class="hint" id="probe-cred-note">Subscription legs need <code>NAUTGATE_ANTHROPIC_OAUTH_TOKEN</code> / <code>NAUTGATE_CHATGPT_OAUTH_TOKEN</code> in deploy/.env. These OAuth tokens expire — an <code>auth_expired</code> alert means re-paste it.</p>
         </div>
-        <div style="padding:4px 0">
-          <label class="hint">targets (one <code>provider/model</code> per line — e.g. <code>anthropic/claude-opus-4-8</code>, <code>openrouter/anthropic/claude-sonnet-4</code>):</label>
-          <textarea id="probe-targets" rows="3" style="width:100%;font-family:var(--mono);font-size:12px"></textarea>
-        </div>
-        <p class="hint" id="probe-cred-note">Subscription legs need <code>NAUTGATE_ANTHROPIC_OAUTH_TOKEN</code> / <code>NAUTGATE_CHATGPT_OAUTH_TOKEN</code> in deploy/.env. These OAuth tokens expire — an <code>auth_expired</code> alert means re-paste it.</p>
-      </div>
-
-      <h3>Open alerts</h3>
-      <table id="probe-alerts"><thead><tr><th>time</th><th>model</th><th>type</th><th>severity</th><th>detail</th></tr></thead><tbody></tbody></table>
-
-      <h3>Latest cycle — subscription vs metered</h3>
-      <p class="hint">Per target: the model the provider <em>says</em> it ran on each leg, tokenizer fingerprint (tokens/byte), TTFT, and judged quality. Mismatched rows are flagged.</p>
-      <table id="probe-targets-tbl"><thead><tr><th>requested</th><th>leg</th><th>observed model</th><th>tokens/byte</th><th>TTFT</th><th>quality</th><th>refused</th></tr></thead><tbody></tbody></table>
+        <div id="probe-alerts-card" class="v2-section"></div>
+      </details>
     </section>
 
     <!-- Cache (prompt-cache accounting + leak detector) --------------------->
     <section id="tab-cache" class="tab">
-      <h2>Prompt cache
+      <div class="page-toolbar">
         <span class="window-buttons">
           <button data-window="24" class="active">24h</button>
           <button data-window="168">7d</button>
           <button data-window="720">30d</button>
         </span>
         <select id="cache-model-filter"><option value="*" selected>All models</option></select>
-        <button class="reload" id="cache-reload">↻</button>
-      </h2>
-      <p class="hint">What prompt caching is actually doing for you. Providers serve a repeated prefix (system prompt + tool defs) from cache at ~1/10th the input price; the first call <em>writes</em> it (Anthropic charges a 25% premium), later calls <em>read</em> it cheap. <b>Hit rate</b> = share of input tokens served from cache. <b>Saved</b> = read discount minus write premium. The <b>leak detector</b> finds prefixes that write but rarely read back — usually a timestamp or ID sneaking into an otherwise-stable prompt and silently busting the cache.</p>
-      <div class="grid">
-        <div class="card"><div class="metric" id="ch-hitrate">—</div><div class="label">cache hit rate</div></div>
-        <div class="card cost-savings"><div class="metric" id="ch-saved">$0.00</div><div class="label">saved by caching</div></div>
-        <div class="card"><div class="metric" id="ch-split">—</div><div class="label">fresh / read / write tokens</div></div>
-        <div class="card"><div class="metric" id="ch-ratio">—</div><div class="label">write : read ratio</div></div>
+        <button class="reload" id="cache-reload" title="reload">↻</button>
       </div>
-
-      <h3>By model — cost with caching off vs on</h3>
-      <p class="hint">Input-side cost only (caching doesn't touch output). <b>off</b> = what this volume would cost billed entirely at the fresh input rate; <b>on</b> = actual, with cache-read discount and write premium applied.</p>
-      <table id="cache-model"><thead><tr>
-        <th>model</th><th>hit rate</th><th>fresh</th><th>cache read</th><th>cache write</th><th>cache off</th><th>cache on</th><th>saved</th><th>calls</th>
-      </tr></thead><tbody></tbody></table>
-
-      <div class="grid-2">
-        <div>
-          <h3>Top reused prefixes</h3>
-          <p class="hint">Caching working as intended — stable prefixes read back many times.</p>
-          <table id="cache-reused"><thead><tr><th>prefix</th><th>model</th><th>reads</th><th>writes</th><th>reuse</th><th>calls</th></tr></thead><tbody></tbody></table>
-        </div>
-        <div>
-          <h3>⚠ Leaky prefixes</h3>
-          <p class="hint">Wrote to cache but barely read back (reuse &lt; 1). Something tiny is mutating the prefix — check for an injected timestamp/ID.</p>
-          <table id="cache-leaky"><thead><tr><th>prefix</th><th>model</th><th>writes</th><th>reads</th><th>reuse</th><th>calls</th></tr></thead><tbody></tbody></table>
-        </div>
-      </div>
-
-      <h3>Cache warmth — TTFT by prefix <span class="hint" style="font-weight:400">(the speed lens — works for local models too)</span></h3>
-      <p class="hint">Time-to-first-token grouped by prompt prefix. A repeated prefix with low, stable TTFT = KV cache warm (prefill skipped). A wide spread (p90 − p50) = the cache is going cold or thrashing between calls. This is how cache effectiveness shows up for <b>local models</b> (Ollama/vLLM), which report no cache tokens — only speed. Sorted worst-spread first.</p>
-      <table id="cache-warmth"><thead><tr><th>prefix</th><th>model</th><th>median TTFT</th><th>spread (p90−p50)</th><th>min</th><th>max</th><th>timed calls</th></tr></thead><tbody></tbody></table>
+      <p class="hint" style="max-width:920px">What prompt caching is actually doing for you. The first call <em>writes</em> a repeated prefix (25% premium), later calls <em>read</em> it at ~1/10th input price. <b>Hit rate</b> = input tokens served from cache. <b>Saved</b> = read discount minus write premium. The <b>leak detector</b> flags prefixes that write but rarely read back — usually a timestamp/ID sneaking into an otherwise-stable prompt.</p>
+      <div id="cache-kpis" class="v2-section"></div>
+      <div id="cache-prefix-card" class="v2-section"></div>
     </section>
 
     <!-- Audit Log (per-call live feed) -------------------------------------->
     <section id="tab-audit" class="tab">
-      <h2>Audit log <button class="reload" id="audit-reload">↻</button></h2>
-      <p class="hint">Every LLM call as it happens. The token bar shows where the tokens *go* — system / tools / history / current user — so you can spot CLI bloat (a "hi" prompt shouldn't ship 30 KB of system + 12 tool defs). Click any row for full metadata.</p>
-      <div id="audit-list"></div>
+      <button class="reload" id="audit-reload" hidden>↻</button>
+      <div class="audit-split">
+        <div class="audit-feed-col">
+          <div id="audit-list"></div>
+        </div>
+        <aside class="audit-detail-col">
+          <div id="audit-detail-panel"><p class="hint" style="padding:18px">Select a call to inspect its token anatomy, prompt &amp; response.</p></div>
+        </aside>
+      </div>
     </section>
 
     <!-- Scorecard (brain layer) --------------------------------------------->
     <section id="tab-scorecard" class="tab">
-      <h2>Model Scorecard <button class="reload" id="sc-reload">↻</button></h2>
-      <p class="hint">The brain layer. Each (provider, model, tier) accumulates a score in [0, 1] starting at 0.50. Bloat findings (excessive context, history dominance, unused tools, oversized payload) subtract; clean requests slowly add. Score &lt; 0.30 → routing demotes the model and falls through to the tier's fallback. Penalties decay with a 7-day half-life. Click an incident to see the audit detail.</p>
-      <table id="sc-table" class="clickable">
-        <thead>
-          <tr>
-            <th>provider</th><th>model</th><th>tier</th>
-            <th>score</th><th>samples</th><th>waste</th>
-            <th>status</th><th>recent incidents</th>
-          </tr>
-        </thead>
-        <tbody id="sc-tbody"></tbody>
-      </table>
+      <div class="page-toolbar">
+        <p class="hint" style="flex:1;margin:0">The brain layer. Each (provider, model, tier) accumulates a score in [0, 1] starting at 0.50. Bloat findings subtract; clean requests slowly add. Score &lt; 0.30 → routing demotes the model and falls through to the tier's fallback. Penalties decay with a 7-day half-life.</p>
+        <button class="reload" id="sc-reload" title="reload">↻</button>
+      </div>
+      <div id="sc-kpis" class="v2-section"></div>
+      <div id="sc-bars-card" class="v2-section"></div>
+      <div id="sc-table-card" class="v2-section"></div>
     </section>
 
     <!-- Drift (behavior-change detection) ----------------------------------->
     <section id="tab-drift" class="tab">
-      <h2>Behavior Drift
-        <button class="reload" id="dr-reload">↻</button>
-        <button class="dr-report-btn" id="dr-report-btn" title="Run tokenizer canaries across every drifting model + generate a one-page report you can share">📄 Generate report</button>
-      </h2>
-      <p class="hint">Catches silent provider-side changes. Per (provider, model, metric) we maintain an EWMA baseline and z-score every new sample. <b>3+ consecutive |z| &gt; 3 anomalies</b> raise an alert. Tracked: <code>input_tokens_per_byte</code> (tokenizer/cache change), <code>response_size_bytes</code> (verbosity drift), <code>first_byte_ms</code>, <code>duration_ms</code>, and <code>messages_count_delta</code> (compaction events). Compaction fires immediately on a sharp drop, not after warmup.</p>
+      <!-- report button kept (hidden) so existing handlers bind; header mirrors it -->
+      <button class="dr-report-btn" id="dr-report-btn" hidden>📄 Generate report</button>
+      <button class="reload" id="dr-reload" hidden>↻</button>
 
-      <h3>Open alerts</h3>
-      <div id="dr-alerts"></div>
+      <div id="dr-alerts" class="v2-section"></div>
+      <div id="dr-band-card" class="v2-section"></div>
+      <div id="dr-history-card" class="v2-section"></div>
 
-      <h3>All alerts (open + resolved)</h3>
-      <table id="dr-alerts-history" class="clickable">
-        <thead>
-          <tr>
-            <th>provider</th><th>model</th><th>metric</th><th>direction</th>
-            <th>peak z</th><th>peak observed</th><th>baseline</th>
-            <th>samples</th><th>started</th><th>status</th>
-          </tr>
-        </thead>
-        <tbody id="dr-alerts-tbody"></tbody>
-      </table>
-
-      <h3>Baselines</h3>
-      <table id="dr-baselines" class="clickable">
-        <thead>
-          <tr>
-            <th>provider</th><th>model</th><th>metric</th>
-            <th>mean</th><th>stddev</th><th>samples</th>
-            <th>last observed</th><th>last z</th><th>updated</th>
-          </tr>
-        </thead>
-        <tbody id="dr-baselines-tbody"></tbody>
-      </table>
+      <details class="v2-more">
+        <summary>Baselines — per (provider, model, metric) EWMA</summary>
+        <div id="dr-baselines-card" class="v2-section"></div>
+      </details>
     </section>
 
     <!-- Quality (LLM-as-judge over the audit log) --------------------------->
     <section id="tab-quality" class="tab">
-      <h2>Quality
+      <div class="page-toolbar">
         <span class="window-buttons">
           <button data-window="24" data-bucket="hour" class="active">24h</button>
           <button data-window="168" data-bucket="hour">7d</button>
@@ -310,7 +351,14 @@
             <option value="*" selected>All models</option>
           </select>
         </span>
-      </h2>
+      </div>
+
+      <!-- Mock hero: failure heatmap + failure-modes table -->
+      <div id="q-heatmap-card" class="v2-section"></div>
+      <div id="q-failuremodes-card" class="v2-section"></div>
+
+      <details class="v2-more" open>
+        <summary>Deeper analytics — prompt anti-patterns, per-agent / per-session, delegation, worst calls</summary>
       <p class="hint">Post-hoc evaluations from the configured judge model. Anomalies (empty responses, errors, disconnects, high bloat) are always evaluated; everything else is sampled at the rate set in <a href="#settings" data-tab="settings">Settings</a>. Each call's eval is visible in the <a href="#audit" data-tab="audit">Audit Log</a> drawer under "Coach".</p>
 
       <!-- Judge health card — shows whether the judge is alive, recent
@@ -361,42 +409,8 @@
       <p class="hint">When one agent dispatches work to another (via <code>coms_send</code>, <code>Task</code>, <code>dispatch</code>, etc.), this captures the edge. Failure rate = % of those calls scored &lt; 3/5 by the judge. The edge with the worst failure rate is where to focus the next system-prompt edit.</p>
       <div class="qe-edges-list" id="qe-edges-list"></div>
 
-      <div class="grid">
-        <div class="card"><div class="metric" id="q-total">—</div><div class="label">evaluations</div></div>
-        <div class="card"><div class="metric" id="q-completion">—</div><div class="label">avg task completion (0-5)</div></div>
-        <div class="card"><div class="metric" id="q-failure-rate">—</div><div class="label">failure rate</div></div>
-        <div class="card"><div class="metric" id="q-judge-cost">—</div><div class="label">judge spend (window)</div></div>
-      </div>
-
-      <h3>Failure rate by model &amp; task complexity</h3>
-      <p class="hint">Per-model failure rate across complexity buckets of the inbound prompt (NautGate's classified_score). A row that's green at low scores and red at high scores tells you that model's ceiling.</p>
-      <table id="quality-heatmap">
-        <thead><tr>
-          <th>model</th>
-          <th>score 0–2</th><th>2–4</th><th>4–6</th><th>6–8</th><th>8–10</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-
-      <h3>Failure modes by model</h3>
-      <table id="quality-failure-modes">
-        <thead><tr>
-          <th>model</th><th>evals</th>
-          <th>over-thinking</th><th>off-task</th><th>looped</th>
-          <th>hallucination</th><th>partial</th><th>refusal</th><th>tool-misuse</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-
-      <h3>Worst recent calls</h3>
-      <p class="hint">Click any row to jump to it in the Audit Log.</p>
-      <table id="quality-worst">
-        <thead><tr>
-          <th>time</th><th>model</th><th>tier</th><th>completion</th>
-          <th>tags</th><th>coach note</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
+      <div id="q-worst-card" class="v2-section"></div>
+      </details>
     </section>
 
     <!-- Behavior — prompt→action compliance ───────────────────────────────── -->
@@ -412,21 +426,7 @@
       <p class="hint">Until you've accumulated ~10 evals on a model after the rubric update, scores show as <code>—</code>. Send a few normal claudeps prompts and reload.</p>
 
       <h3>Per-model behavioral profile</h3>
-      <table id="behavior-per-model">
-        <thead><tr>
-          <th>model</th>
-          <th>evals</th>
-          <th title="0-5; how well tool sequence matched the user's intent">action compliance</th>
-          <th title="0-5; did the model complete the task">task completion</th>
-          <th title="0-5; reasoning proportional to task">efficiency</th>
-          <th title="avg ms per call">duration</th>
-          <th title="user named a doc/file; Read/Grep never fired on it">skipped doc</th>
-          <th title="Edit/Write fired on a file with no prior Read in the sequence">edit w/o read</th>
-          <th title="user asked to investigate/understand; first tool was action not discovery">premature action</th>
-          <th title="same tool called with very similar args >2× in a row">retry loop</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
+      <div id="behavior-permodel-card"></div>
 
       <h3>Apples-to-apples model comparison</h3>
       <p class="hint">Runs the same 5 cowboy-probing prompts through 2+ models via OpenRouter (default: <code>anthropic/claude-opus-4-7</code> vs <code>anthropic/claude-opus-4-8</code>) and scores each with the same judge + rubric. One click = ~30s and ~$0.05. Requires <code>OPENROUTER_API_KEY</code> in the gateway env.</p>
@@ -458,6 +458,7 @@
       </h2>
       <p class="hint">Lighthouse-style audit of recent prompts. Severity-weighted score across credentials, secrets, PII, and infrastructure findings.</p>
 
+      <div id="privacy-loading" hidden></div>
       <div class="lh-hero">
         <canvas id="lh-score" width="160" height="160"></canvas>
         <div class="lh-hero-text">
@@ -484,18 +485,11 @@
 
     <!-- Decisions ----------------------------------------------------------->
     <section id="tab-decisions" class="tab">
-      <h2>Recent decisions <button class="reload" id="dec-reload">↻</button></h2>
-      <p class="hint">Auto-refresh every 5s while this tab is open. Click any row for full metadata.</p>
-      <table id="dec-table" class="clickable">
-        <thead>
-          <tr>
-            <th>ts</th><th>fmt</th><th>tier</th><th>score</th>
-            <th>sens</th><th>provider</th><th>model</th>
-            <th>status</th><th>ms</th><th>tok</th><th>cost</th>
-          </tr>
-        </thead>
-        <tbody id="dec-tbody"></tbody>
-      </table>
+      <div class="page-toolbar">
+        <p class="hint" style="flex:1;margin:0">Auto-refreshes every 5s while this tab is open. Click any row for full metadata.</p>
+        <button class="reload" id="dec-reload" title="reload">↻</button>
+      </div>
+      <div id="dec-card" class="v2-section"></div>
     </section>
 
     <!-- Decision detail drawer (hidden until row clicked) ------------------->
@@ -510,21 +504,14 @@
 
     <!-- Provider health ----------------------------------------------------->
     <section id="tab-health" class="tab">
-      <h2>Provider health</h2>
       <p class="hint">Computed from <code>/v1/models</code> + the in-process health tracker. Models flagged unhealthy here are auto-skipped on the next routing decision.</p>
-      <table id="health-table">
-        <thead>
-          <tr><th>provider</th><th>model</th><th>tiers</th><th>status</th></tr>
-        </thead>
-        <tbody id="health-tbody"></tbody>
-      </table>
+      <div id="health-card" class="v2-section"></div>
     </section>
 
     <!-- Models -------------------------------------------------------------->
     <section id="tab-models" class="tab">
-      <h2>Models</h2>
       <p class="hint">Routes from <code>config/routing.yaml</code>. Edit that file + restart to change.</p>
-      <pre id="models-json" class="code"></pre>
+      <div class="v2-card"><pre id="models-json" class="code" style="margin:0;border:none;background:transparent;max-height:none"></pre></div>
     </section>
 
     <!-- Settings ------------------------------------------------------------>
@@ -664,9 +651,13 @@
         <pre id="keys-status" class="code">checking…</pre>
       </div>
     </section>
-  </main>
+    </main>
+  </div><!-- /.appmain -->
+ </div><!-- /.app-shell -->
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="/static/vendor/uPlot.iife.min.js"></script>
+  <script src="/static/kit.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

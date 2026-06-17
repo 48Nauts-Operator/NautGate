@@ -221,8 +221,9 @@ def create_app() -> FastAPI:
             try:
                 css_v = int((static_dir / "style.css").stat().st_mtime)
                 js_v = int((static_dir / "app.js").stat().st_mtime)
+                kit_v = int((static_dir / "kit.js").stat().st_mtime)
             except OSError:
-                css_v = js_v = 0
+                css_v = js_v = kit_v = 0
             index_html = _read_index()
             html = index_html.replace(
                 'href="/static/style.css"',
@@ -230,6 +231,9 @@ def create_app() -> FastAPI:
             ).replace(
                 'src="/static/app.js"',
                 f'src="/static/app.js?v={js_v}"',
+            ).replace(
+                'src="/static/kit.js"',
+                f'src="/static/kit.js?v={kit_v}"',
             )
             # If a local admin token is configured, inject it into a <meta> tag
             # so the JS skips manual entry. Token is server-rendered into the
