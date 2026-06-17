@@ -398,14 +398,13 @@
 
   // --- Tab routing --------------------------------------------------------
 
-  // Only bind to anchors that declare a top-level tab via data-tab. This
-  // matters because nested <nav> elements (e.g. the Settings sub-nav) would
-  // otherwise be captured by `nav a` and call activateTab(undefined),
-  // wiping the page until the next refresh.
-  document.querySelectorAll("nav a[data-tab]").forEach((a) => {
-    a.addEventListener("click", () => {
-      const tab = a.dataset.tab;
-      activateTab(tab);
+  // Bind every sidebar item that declares a top-level tab — this includes the
+  // footer (Settings) which lives outside <nav>. Scoped to `.sidebar` so the
+  // Settings sub-nav (data-subtab, in page content) is never captured here.
+  document.querySelectorAll(".sidebar a[data-tab]").forEach((a) => {
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      activateTab(a.dataset.tab);
     });
   });
 
@@ -450,7 +449,7 @@
 
   function activateTab(name) {
     activeTab = name;
-    document.querySelectorAll("nav a[data-tab]").forEach((a) =>
+    document.querySelectorAll(".sidebar a[data-tab]").forEach((a) =>
       a.classList.toggle("active", a.dataset.tab === name)
     );
     document.querySelectorAll(".tab").forEach((s) =>
@@ -2419,6 +2418,30 @@
     }
   }
 
+  // Click a cache prefix row → explain it in the right drawer.
+  function openCachePrefixDetail(r) {
+    const reuse = r.reuse_ratio == null ? "—" : r.reuse_ratio.toFixed(1) + "×";
+    document.getElementById("detail-id").textContent = shortHash(r.prefix_hash) + (r._leaky ? " · leaky" : " · reused");
+    let html = "";
+    html += '<div class="section-title">What you\'re looking at</div>';
+    html += `<p class="hint" style="line-height:1.5">A <b>prompt-cache prefix</b> is the stable head of your requests (system prompt + tool defs) the provider can serve from cache. This one ran on <b>${esc(shortModelName(r.model) || "—")}</b>.</p>`;
+    html += '<div class="kv">';
+    html += `<div class="k">prefix hash</div><div class="v" style="word-break:break-all">${esc(r.prefix_hash || "—")}</div>`;
+    html += `<div class="k">reads</div><div class="v">${(r.reads || 0).toLocaleString()}</div>`;
+    html += `<div class="k">writes</div><div class="v" style="color:${r._leaky ? "var(--bad)" : "var(--text)"}">${(r.writes || 0).toLocaleString()}</div>`;
+    html += `<div class="k">reuse ratio</div><div class="v" style="color:${r._leaky ? "var(--bad)" : "var(--good)"}">${esc(reuse)}</div>`;
+    html += `<div class="k">calls</div><div class="v">${(r.calls || 0).toLocaleString()}</div>`;
+    html += "</div>";
+    html += '<div class="section-title">Verdict</div>';
+    if (r._leaky) {
+      html += '<p class="hint" style="line-height:1.5"><b style="color:var(--bad)">Leaky.</b> Written to cache far more than read back (reuse &lt; 1). Something tiny is mutating the supposedly-stable head — usually an injected <b>timestamp, request id, or random value</b> in the system prompt or tool defs. Each call writes a fresh entry (Anthropic charges a 25% write premium) that\'s never reused, so you pay the premium with none of the discount. Find and pin the changing value.</p>';
+    } else {
+      html += '<p class="hint" style="line-height:1.5"><b style="color:var(--good)">Reused.</b> Caching is working — this stable prefix is read back many times, so you pay the cheap cache-read rate (~1/10th of fresh input) on the bulk of these tokens.</p>';
+    }
+    document.getElementById("detail-body").innerHTML = html;
+    drawer.classList.remove("hidden");
+  }
+
   function renderCache(s, p) {
     const t = (s && s.totals) || {};
     const leakyCount = ((p && p.leaky) || []).length;
@@ -2462,6 +2485,7 @@
         defaultSort: { key: "reuse", dir: "desc" },
         emptyText: "No cacheable prefixes seen yet.",
         rows: all,
+        onRowClick: (r) => openCachePrefixDetail(r),
         rowClass: (r) => (r._leaky ? "v2-row-bad" : null),
         columns: [
           { key: "prefix_hash", label: "Prefix", mono: true, render: (r) => NG.el("code", { title: r.prefix_hash }, shortHash(r.prefix_hash)), sortValue: (r) => r.prefix_hash || "" },
@@ -2519,6 +2543,7 @@
         return { model: t.model, sub: sub || {}, met: met || {}, mismatch: modelMism || tpbMism };
       });
       let divergent = cmpRows.filter((r) => r.mismatch).length;
+      lastProbeSummary = { count: targets.length, divergent, alerts: openAlerts.length, rows: cmpRows };
 
       // KPIs — integrity / models probed / open alerts / last cycle
       const lastRun = cfg.last_run_at ? fmtAge(cfg.last_run_at) : "never";
@@ -2629,16 +2654,51 @@
     }
   }
 
+  let lastProbeSummary = null;
+
+  function renderProbeRunning(targets) {
+    const chips = targets.map((t) => `<span class="probe-target-chip pending"><span class="dot"></span>${esc(shortModelName(t))}</span>`).join("");
+    return `<div class="probe-run running">
+      <div class="probe-run-head"><span class="v2-spinner"></span> Running probe cycle…</div>
+      <div class="probe-run-sub">Probing ${targets.length} target${targets.length === 1 ? "" : "s"} on <b>both</b> the subscription (OAuth) and metered paths, then judging each. This takes a few seconds.</div>
+      <div class="probe-run-bar"><div></div></div>
+      <div class="probe-run-targets">${chips}</div>
+    </div>`;
+  }
+
+  function renderProbeResult(ok, targets, summary, err) {
+    if (!ok) {
+      return `<div class="probe-run bad">
+        <div class="probe-run-head" style="color:var(--bad)">✗ Probe run failed</div>
+        <div class="probe-run-sub">${esc(err || "unknown error")}${/no targets/i.test(err || "") ? " — add <code>provider/model</code> lines in Config below." : / 401| 403|auth/i.test(err || "") ? " — the OAuth/API credentials in deploy/.env are missing or expired." : ""}</div>
+      </div>`;
+    }
+    const s = summary || { count: targets.length, divergent: 0, alerts: 0, rows: [] };
+    const verdictByModel = {};
+    (s.rows || []).forEach((r) => { verdictByModel[r.model] = r.mismatch ? "divergent" : "match"; });
+    const chips = targets.map((t) => {
+      const v = verdictByModel[t] || "match";
+      return `<span class="probe-target-chip ${v}"><span class="dot"></span>${esc(shortModelName(t))} · ${v === "divergent" ? "divergent" : "match"}</span>`;
+    }).join("");
+    const sub = `${s.count} target${s.count === 1 ? "" : "s"} probed · <b style="color:${s.divergent ? "var(--bad)" : "var(--good)"}">${s.divergent} divergent</b> · ${s.alerts} open alert${s.alerts === 1 ? "" : "s"}. Detail in the comparison + fingerprint below.`;
+    return `<div class="probe-run ok">
+      <div class="probe-run-head" style="color:var(--good)">✓ Probe cycle complete</div>
+      <div class="probe-run-sub">${sub}</div>
+      <div class="probe-run-targets">${chips}</div>
+    </div>`;
+  }
+
   async function runProbeNow() {
-    // Give feedback on whichever button the user actually sees: the header
-    // action on the Probe tab, otherwise the (collapsed) config button.
+    // Visible feedback: the header action on the Probe tab, else the config button.
     const headerBtn = document.getElementById("header-action");
     const cfgBtn = document.getElementById("probe-run-now");
     const btn = (headerBtn && !headerBtn.hidden) ? headerBtn : cfgBtn;
     const orig = btn ? btn.textContent : "";
-    const stateEl = document.getElementById("probe-state");
-    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running probe…"; }
-    if (stateEl) stateEl.textContent = "running probe cycle…";
+    const statusEl = document.getElementById("probe-run-status");
+    const targets = (document.getElementById("probe-targets")?.value || "")
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+    if (statusEl) { statusEl.hidden = false; statusEl.innerHTML = renderProbeRunning(targets); statusEl.scrollIntoView({ block: "nearest" }); }
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running…"; }
     try {
       await saveProbeConfig();
       const t = getToken();
@@ -2646,13 +2706,18 @@
         method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" },
         body: "{}",
       });
-      if (!res.ok) throw new Error("http_" + res.status);
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).detail || ""; } catch (_e) { /* ignore */ }
+        throw new Error(detail || ("http_" + res.status));
+      }
       if (btn) btn.textContent = "✓ Done";
-      await loadProbe();
+      await loadProbe();                    // refreshes comparison/fingerprint + lastProbeSummary
+      if (statusEl) statusEl.innerHTML = renderProbeResult(true, targets, lastProbeSummary);
       setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 1500);
     } catch (e) {
-      if (btn) btn.textContent = "✗ Run failed";
-      if (stateEl) stateEl.textContent = "run failed (" + (e.message || e) + ") — check targets/credentials in Config";
+      if (btn) btn.textContent = "✗ Failed";
+      if (statusEl) { statusEl.hidden = false; statusEl.innerHTML = renderProbeResult(false, targets, null, e.message || String(e)); }
       setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 3000);
     }
   }
@@ -2735,7 +2800,7 @@
     if (!rows.length || total <= 0) {
       split.appendChild(NG.el("div", { class: "hint" }, "No spend in this window."));
     } else {
-      split.appendChild(NG.donut({ segments: segs, centerValue: usd(total), centerLabel: "total", size: 104, stroke: 15 }));
+      split.appendChild(NG.donut({ segments: segs, centerValue: usd(total), centerLabel: "total", size: 150, stroke: 22 }));
       split.appendChild(NG.legend(segs.map((sg) => ({
         label: sg.label, color: sg.color,
         value: total ? Math.round((sg.value / total) * 100) + "%" : "—",
@@ -4073,9 +4138,20 @@
   // Help & Ask — slide-in panel is wired in Phase 4. For now the entry
   // points are live but the panel is a no-op placeholder.
   function openHelp() {
-    // TODO(phase4): mount the help-module slide-in panel here.
+    // Phase 4: the @48nauts/help-module is React; wiring it into this vanilla
+    // dashboard is deferred. Give visible feedback so the click isn't silent.
     searchInput?.blur();
-    console.info("[nautgate] Help & Ask panel — coming in the redesign (Phase 4).");
+    let toast = document.getElementById("ng-help-toast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "ng-help-toast";
+      toast.className = "ng-toast";
+      document.body.appendChild(toast);
+    }
+    toast.textContent = "Help & Ask — coming soon (chat assistant).";
+    toast.classList.add("show");
+    clearTimeout(openHelp._t);
+    openHelp._t = setTimeout(() => toast.classList.remove("show"), 2600);
   }
   document.getElementById("nav-help")?.addEventListener("click", (ev) => { ev.preventDefault(); openHelp(); });
   document.getElementById("header-help-btn")?.addEventListener("click", (ev) => { ev.preventDefault(); openHelp(); });
