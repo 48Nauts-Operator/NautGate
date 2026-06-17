@@ -118,21 +118,40 @@ async def lifespan(app: FastAPI):
     # Background backup scheduler: ticks every minute, fires a backup when
     # backup_config.next_run_at has passed.
     app.state.backup_task = None
+    app.state.llm_probe_task = None
+    app.state.heartbeat_task = None
+    # Live provider-status heartbeat results, keyed by transport label.
+    app.state.provider_status = {}
     if app.state.db is not None:
         import asyncio as _asyncio
 
         from app.backup import run_scheduler as _backup_scheduler
         app.state.backup_task = _asyncio.create_task(_backup_scheduler(app.state.db))
 
+        # LLM-Probing scheduler — disabled by default in config, so this idles
+        # until the operator enables it + sets targets on the dashboard.
+        from app.llm_probe_scheduler import run_scheduler as _probe_scheduler
+        app.state.llm_probe_task = _asyncio.create_task(
+            _probe_scheduler(app.state.db, pricing=app.state.pricing,
+                             judge_client=app.state.quality_judge))
+
+        # Active provider-status heartbeat (60s) → app.state.provider_status.
+        from app.provider_heartbeat import run_scheduler as _heartbeat_scheduler
+        app.state.heartbeat_task = _asyncio.create_task(
+            _heartbeat_scheduler(app.state.db, pricing=app.state.pricing,
+                                 state=app.state.provider_status))
+
     try:
         yield
     finally:
-        if getattr(app.state, "backup_task", None) is not None:
-            app.state.backup_task.cancel()
-            try:
-                await app.state.backup_task
-            except BaseException:
-                pass
+        for _tname in ("backup_task", "llm_probe_task", "heartbeat_task"):
+            _t = getattr(app.state, _tname, None)
+            if _t is not None:
+                _t.cancel()
+                try:
+                    await _t
+                except BaseException:
+                    pass
         if getattr(app.state, "plugins", None) is not None:
             await app.state.plugins.aclose()
         try:

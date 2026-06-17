@@ -24,6 +24,7 @@ shows the operator what they saved.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time as _time
 import uuid
@@ -40,6 +41,23 @@ from app.streaming import parse_sse_for_outcome
 from app.usage import cache_prefix_hash, normalize_usage
 
 log = structlog.get_logger()
+
+# Overload-retry policy (529 capacity-shedding). Capped exponential backoff.
+_MAX_OVERLOAD_RETRIES = 3
+_RETRY_BASE_S = 0.4
+_RETRY_CAP_S = 4.0
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header (delta-seconds form). Ignores HTTP-date form."""
+    if not value:
+        return None
+    try:
+        secs = float(value.strip())
+        return max(0.0, min(secs, _RETRY_CAP_S))
+    except (ValueError, TypeError):
+        return None
+
 
 ANTHROPIC_HOST = "api.anthropic.com"
 # Marker prefix Anthropic uses for OAuth Access Tokens (vs sk-ant-api03 for
@@ -264,14 +282,31 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
         url = f"{url}?{request.url.query}"
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), http2=False)
+    # Transparent retry on 529/Overloaded (and 429) — Anthropic sheds ~1-in-4
+    # requests under load; a couple of retries clears almost all of them before
+    # the client ever sees an error. Safe because the status is known at headers,
+    # before any body is streamed, and raw_body is already buffered.
+    overload_retries = 0
     try:
-        upstream = await client.send(
-            client.build_request(
-                method=request.method, url=url,
-                headers=fwd_headers, content=raw_body,
-            ),
-            stream=True,
-        )
+        for _attempt in range(_MAX_OVERLOAD_RETRIES + 1):
+            upstream = await client.send(
+                client.build_request(
+                    method=request.method, url=url,
+                    headers=fwd_headers, content=raw_body,
+                ),
+                stream=True,
+            )
+            if upstream.status_code not in (429, 529) or _attempt == _MAX_OVERLOAD_RETRIES:
+                break
+            retry_after = _parse_retry_after(upstream.headers.get("retry-after"))
+            if upstream.status_code == 529:
+                overload_retries += 1
+            await upstream.aclose()  # drain the failed response before retrying
+            delay = retry_after if retry_after is not None else min(
+                _RETRY_CAP_S, _RETRY_BASE_S * (2 ** _attempt)) + 0.05 * _attempt
+            log.info("anthropic_oauth_retry", status=upstream.status_code,
+                     attempt=_attempt + 1, delay_s=round(delay, 2))
+            await asyncio.sleep(delay)
     except httpx.HTTPError as exc:
         await client.aclose()
         log.error("anthropic_oauth_forward_failed", error=str(exc))
@@ -285,6 +320,8 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     }
     response_headers["X-Nautgate-Decision-Id"] = str(decision_id)
     response_headers["X-Nautgate-OAuth-Passthrough"] = "anthropic"
+    if overload_retries:
+        response_headers["X-Nautgate-Overload-Retries"] = str(overload_retries)
 
     upstream_status = upstream.status_code
     was_rate_limited = upstream_status == 429
@@ -372,6 +409,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         cost_usd=0.0,
                         notional_cost_usd=notional,
                         rate_limited_429=was_rate_limited,
+                        upstream_overload_retries=overload_retries,
                         response_body=response_captured.body,
                         response_body_truncated_at_byte=response_captured.truncated_at_byte,
                         response_size_bytes=len(body_buf),

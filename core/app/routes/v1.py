@@ -1256,6 +1256,155 @@ async def cache_prefixes(request: Request) -> Response:
     return JSONResponse(await queries.get_prefix_reuse(pool, hours=hours))
 
 
+_PROVIDER_LABELS = {
+    "anthropic-oauth": "Anthropic (Max)",
+    "anthropic": "Anthropic",
+    "openrouter": "OpenRouter",
+    "chatgpt-oauth": "Codex",
+    "passthrough": "Passthrough",
+}
+_STATUS_RANK = {"up": 0, "ok": 0, "no-data": 1, "no-cred": 1, "degraded": 2, "down": 3}
+
+
+@router.get("/health/providers")
+async def health_providers(request: Request) -> Response:
+    """Live provider status for the Overview strip: passive (real-traffic status
+    codes, last 10min) merged with the active heartbeat (app.state)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+
+    passive = await queries.get_provider_status(pool, minutes=10)
+    heartbeat = dict(getattr(request.app.state, "provider_status", {}) or {})
+
+    keys = set(passive) | set(heartbeat) | {"anthropic-oauth", "openrouter", "chatgpt-oauth"}
+    providers = []
+    for key in keys:
+        p = passive.get(key)
+        hb = heartbeat.get(key)
+        # Passive is primary (real subscription pool); heartbeat is the fallback
+        # signal when there's no recent traffic.
+        if p and p["status"] != "no-data":
+            status = p["status"]
+        elif hb:
+            status = {"ok": "up"}.get(hb["status"], hb["status"])
+        else:
+            status = "no-data"
+        # Overall = worst of passive + heartbeat.
+        if hb and _STATUS_RANK.get({"ok": "up"}.get(hb["status"], hb["status"]), 1) > _STATUS_RANK.get(status, 1):
+            status = {"ok": "up"}.get(hb["status"], hb["status"])
+        providers.append({
+            "key": key,
+            "label": _PROVIDER_LABELS.get(key, key),
+            "status": status,
+            "overload_pct": (p or {}).get("overload_pct", 0.0),
+            "overloaded": (p or {}).get("overloaded", 0),
+            "retries_absorbed": (p or {}).get("retries_absorbed", 0),
+            "rate_limited": (p or {}).get("rate_limited", 0),
+            "success": (p or {}).get("success", 0),
+            "total": (p or {}).get("total", 0),
+            "heartbeat": hb,
+        })
+    providers.sort(key=lambda x: (-_STATUS_RANK.get(x["status"], 1), x["label"]))
+    # Overall reflects only providers that have a real signal — a missing Codex
+    # credential shouldn't make the whole gateway look down.
+    live_ranks = [_STATUS_RANK.get(p["status"], 1) for p in providers
+                  if p["status"] in ("up", "ok", "degraded", "down")]
+    overall = {0: "up", 2: "degraded", 3: "down"}.get(max(live_ranks), "up") if live_ranks else "no-data"
+    return JSONResponse({"providers": providers, "overall": overall, "window_minutes": 10})
+
+
+# ── LLM-Probing ─────────────────────────────────────────────────────────────
+
+
+@router.get("/probe/summary")
+async def probe_summary(request: Request) -> Response:
+    """Latest probe cycle per target (subscription vs metered legs) + open alerts."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    cfg = await queries.get_probe_config(pool)
+    summary = await queries.get_probe_summary(pool, hours=hours)
+    summary["config"] = cfg
+    return JSONResponse(summary)
+
+
+@router.get("/probe/history")
+async def probe_history(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    model = request.query_params.get("model")
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    try:
+        hours = int(request.query_params.get("hours", "720"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    return JSONResponse({"model": model, "runs": await queries.get_probe_history(pool, model=model, hours=hours)})
+
+
+@router.get("/probe/config")
+async def probe_config_get(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    return JSONResponse(await queries.get_probe_config(pool))
+
+
+@router.put("/probe/config")
+async def probe_config_put(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    body = await request.json()
+    enabled = body.get("enabled")
+    interval_hours = body.get("interval_hours")
+    targets = body.get("targets")
+    if interval_hours is not None and (int(interval_hours) < 1 or int(interval_hours) > 168):
+        raise HTTPException(status_code=400, detail="interval_hours must be in 1..168")
+    if targets is not None and not isinstance(targets, list):
+        raise HTTPException(status_code=400, detail="targets must be a list of 'provider/model'")
+    await queries.update_probe_config(
+        pool,
+        enabled=bool(enabled) if enabled is not None else None,
+        interval_hours=int(interval_hours) if interval_hours is not None else None,
+        targets=[str(t) for t in targets] if targets is not None else None,
+    )
+    return JSONResponse(await queries.get_probe_config(pool))
+
+
+@router.post("/probe/run")
+async def probe_run_now(request: Request) -> Response:
+    """Fire one probe cycle immediately against the configured targets."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    cfg = await queries.get_probe_config(pool)
+    targets = cfg.get("targets") or []
+    if not targets:
+        raise HTTPException(status_code=400, detail="no targets configured")
+    from app.app_config import quality_eval_config
+    from app.llm_probe import run_probe_cycle
+    judge_config = await quality_eval_config(pool)
+    cycle_id = await run_probe_cycle(
+        pool=pool, pricing=getattr(request.app.state, "pricing", None),
+        judge_client=getattr(request.app.state, "quality_judge", None),
+        judge_config=judge_config, targets=list(targets),
+    )
+    return JSONResponse({"cycle_id": str(cycle_id), "targets": list(targets)})
+
+
 @router.get("/decisions/recent")
 async def decisions_recent(request: Request) -> Response:
     """Recent route_decisions joined with outcomes.

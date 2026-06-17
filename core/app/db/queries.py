@@ -118,6 +118,7 @@ async def write_outcome(
     actual_provider: str | None = None,
     notional_cost_usd: float | None = None,
     rate_limited_429: bool = False,
+    upstream_overload_retries: int = 0,
 ) -> None:
     tool_calls_json = json.dumps(tool_calls_made) if tool_calls_made else None
     async with pool.acquire() as conn:
@@ -132,9 +133,9 @@ async def write_outcome(
                  response_body, response_body_truncated_at_byte,
                  response_size_bytes, tool_calls_made,
                  actual_model, actual_provider,
-                 notional_cost_usd, rate_limited_429)
+                 notional_cost_usd, rate_limited_429, upstream_overload_retries)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                    $18, $19, $20, $21::jsonb, $22, $23, $24, $25)
+                    $18, $19, $20, $21::jsonb, $22, $23, $24, $25, $26)
             """,
             decision_id,
             status_code,
@@ -161,6 +162,7 @@ async def write_outcome(
             actual_provider,
             notional_cost_usd,
             rate_limited_429,
+            upstream_overload_retries,
         )
 
 
@@ -1512,3 +1514,252 @@ def excerpt_last_user_message(messages: list[dict] | None, *, max_chars: int = 2
                         return text[:max_chars]
         return None
     return None
+
+
+# ── LLM-Probing ─────────────────────────────────────────────────────────────
+
+
+async def get_probe_config(pool: asyncpg.Pool) -> dict:
+    row = await pool.fetchrow(
+        """SELECT enabled, interval_hours, targets, last_run_at, next_run_at, updated_at
+             FROM nautgate.llm_probe_config WHERE id = 1"""
+    )
+    if row is None:
+        return {"enabled": False, "interval_hours": 6, "targets": [],
+                "last_run_at": None, "next_run_at": None}
+    d = dict(row)
+    d["targets"] = list(d.get("targets") or [])
+    for k in ("last_run_at", "next_run_at", "updated_at"):
+        if d.get(k) is not None:
+            d[k] = d[k].isoformat()
+    return d
+
+
+async def update_probe_config(
+    pool: asyncpg.Pool,
+    *,
+    enabled: bool | None = None,
+    interval_hours: int | None = None,
+    targets: list[str] | None = None,
+    last_run_at=None,
+    next_run_at=None,
+    touch_runs: bool = False,
+) -> None:
+    """Patch the singleton probe config. Only non-None fields are written.
+
+    ``touch_runs=True`` writes last_run_at/next_run_at literally (used by the
+    scheduler after a cycle); otherwise those are left untouched unless passed.
+    """
+    sets: list[str] = ["updated_at = now()"]
+    params: list = []
+
+    def _set(col: str, val) -> None:
+        params.append(val)
+        sets.append(f"{col} = ${len(params)}")
+
+    if enabled is not None:
+        _set("enabled", enabled)
+    if interval_hours is not None:
+        _set("interval_hours", interval_hours)
+    if targets is not None:
+        _set("targets", targets)
+    if touch_runs or last_run_at is not None:
+        _set("last_run_at", last_run_at)
+    if touch_runs or next_run_at is not None:
+        _set("next_run_at", next_run_at)
+    await pool.execute(
+        f"UPDATE nautgate.llm_probe_config SET {', '.join(sets)} WHERE id = 1", *params
+    )
+
+
+async def insert_probe_run(pool: asyncpg.Pool, **f) -> None:
+    await pool.execute(
+        """
+        INSERT INTO nautgate.llm_probe_runs
+            (cycle_id, probe_name, provider, model, via, observed_model,
+             prompt_bytes, prompt_tokens, completion_tokens, tokens_per_byte,
+             response_sha, response_text, first_byte_ms, duration_ms,
+             status_code, quality_score, refused, cost_usd, error)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        """,
+        f["cycle_id"], f["probe_name"], f["provider"], f["model"], f["via"],
+        f.get("observed_model"), f.get("prompt_bytes"), f.get("prompt_tokens"),
+        f.get("completion_tokens"), f.get("tokens_per_byte"), f.get("response_sha"),
+        f.get("response_text"), f.get("first_byte_ms"), f.get("duration_ms"),
+        f.get("status_code"), f.get("quality_score"), bool(f.get("refused", False)),
+        f.get("cost_usd"), f.get("error"),
+    )
+
+
+async def insert_probe_alert(pool: asyncpg.Pool, **f) -> None:
+    await pool.execute(
+        """
+        INSERT INTO nautgate.llm_probe_alerts
+            (cycle_id, provider, model, alert_type, severity, detail)
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+        """,
+        f.get("cycle_id"), f["provider"], f["model"], f["alert_type"],
+        f.get("severity", "warning"), json.dumps(f.get("detail") or {}),
+    )
+
+
+async def get_probe_alerts(pool: asyncpg.Pool, *, hours: int = 168) -> list[dict]:
+    rows = await pool.fetch(
+        """SELECT id::text, ts, provider, model, alert_type, severity, detail, resolved_at
+             FROM nautgate.llm_probe_alerts
+            WHERE ts > NOW() - make_interval(hours => $1)
+            ORDER BY ts DESC LIMIT 200""",
+        hours,
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["ts"] = d["ts"].isoformat() if d["ts"] else None
+        d["resolved_at"] = d["resolved_at"].isoformat() if d["resolved_at"] else None
+        out.append(d)
+    return out
+
+
+async def get_probe_baseline(pool, *, provider, via, model, metric) -> dict | None:
+    row = await pool.fetchrow(
+        """SELECT ewma_mean, ewma_variance, sample_count, consecutive_anomalies
+             FROM nautgate.llm_probe_baselines
+            WHERE provider=$1 AND via=$2 AND model=$3 AND metric=$4""",
+        provider, via, model, metric,
+    )
+    return dict(row) if row else None
+
+
+async def upsert_probe_baseline(pool, *, provider, via, model, metric,
+                                ewma_mean, ewma_variance, sample_count,
+                                consecutive_anomalies, last_observed, last_z_score) -> None:
+    await pool.execute(
+        """
+        INSERT INTO nautgate.llm_probe_baselines
+            (provider, via, model, metric, ewma_mean, ewma_variance, sample_count,
+             consecutive_anomalies, last_observed, last_z_score, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+        ON CONFLICT (provider, via, model, metric) DO UPDATE SET
+            ewma_mean=$5, ewma_variance=$6, sample_count=$7,
+            consecutive_anomalies=$8, last_observed=$9, last_z_score=$10, updated_at=now()
+        """,
+        provider, via, model, metric, ewma_mean, ewma_variance, sample_count,
+        consecutive_anomalies, last_observed, last_z_score,
+    )
+
+
+async def get_probe_summary(pool: asyncpg.Pool, *, hours: int = 168) -> dict:
+    """Latest cycle's runs per (provider, model), split by transport leg, so the
+    dashboard can show subscription vs metered side-by-side + provenance."""
+    latest = await pool.fetchval("SELECT cycle_id FROM nautgate.llm_probe_runs ORDER BY ts DESC LIMIT 1")
+    targets: dict = {}
+    if latest is not None:
+        rows = await pool.fetch(
+            """SELECT probe_name, provider, model, via, observed_model, tokens_per_byte,
+                      first_byte_ms, duration_ms, quality_score, refused, status_code, error
+                 FROM nautgate.llm_probe_runs WHERE cycle_id = $1 ORDER BY model, via""",
+            latest,
+        )
+        for r in rows:
+            key = f"{r['provider']}/{r['model']}"
+            t = targets.setdefault(key, {"provider": r["provider"], "model": r["model"], "legs": {}})
+            leg = t["legs"].setdefault(r["via"], {
+                "via": r["via"], "observed_model": None, "tokens_per_byte": None,
+                "first_byte_ms": None, "quality_score": None, "refused": False,
+                "status_code": r["status_code"], "error": None,
+            })
+            # Pull each fingerprint from its dedicated probe, not whichever row
+            # sorted first (provenance_ping's tiny prompt has a different ratio).
+            if leg["observed_model"] is None and r["observed_model"]:
+                leg["observed_model"] = r["observed_model"]
+            if r["probe_name"] == "tokenizer_fp" and r["tokens_per_byte"] is not None:
+                leg["tokens_per_byte"] = float(r["tokens_per_byte"])
+            if r["probe_name"] == "latency_ping" and r["first_byte_ms"] is not None:
+                leg["first_byte_ms"] = r["first_byte_ms"]
+            if r["probe_name"] == "quality_reason" and r["quality_score"] is not None:
+                leg["quality_score"] = float(r["quality_score"])
+            if r["refused"]:
+                leg["refused"] = True
+            if r["error"] and leg["error"] is None:
+                leg["error"] = r["error"]
+    return {
+        "latest_cycle": str(latest) if latest else None,
+        "targets": list(targets.values()),
+        "alerts": await get_probe_alerts(pool, hours=hours),
+    }
+
+
+async def get_probe_history(pool: asyncpg.Pool, *, model: str, hours: int = 720) -> list[dict]:
+    rows = await pool.fetch(
+        """SELECT ts, via, probe_name, tokens_per_byte, first_byte_ms,
+                  quality_score, observed_model, refused
+             FROM nautgate.llm_probe_runs
+            WHERE model = $1 AND ts > NOW() - make_interval(hours => $2)
+            ORDER BY ts DESC LIMIT 500""",
+        model, hours,
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["ts"] = d["ts"].isoformat() if d["ts"] else None
+        d["tokens_per_byte"] = float(d["tokens_per_byte"]) if d["tokens_per_byte"] is not None else None
+        d["quality_score"] = float(d["quality_score"]) if d["quality_score"] is not None else None
+        out.append(d)
+    return out
+
+
+async def get_provider_status(pool: asyncpg.Pool, *, minutes: int = 10) -> dict:
+    """Per-provider liveness from the last N minutes of REAL traffic.
+
+    Buckets outcomes into success (2xx) / overloaded (529 + retries absorbed) /
+    rate_limited (429) / error (other >=400). status:
+      down     — recent calls but no success and overload/error dominate
+      degraded — some overload/429/error mixed with success
+      up       — overwhelmingly 2xx
+      no-data  — no calls in the window
+    """
+    rows = await pool.fetch(
+        """
+        SELECT d.decision_provider AS provider,
+               COUNT(*)                                                   AS total,
+               COUNT(*) FILTER (WHERE o.status_code BETWEEN 200 AND 299)  AS ok,
+               COUNT(*) FILTER (WHERE o.status_code = 529)                AS overloaded,
+               COUNT(*) FILTER (WHERE o.status_code = 429)                AS rate_limited,
+               COUNT(*) FILTER (WHERE o.status_code >= 400 AND o.status_code NOT IN (429,529)) AS errors,
+               COALESCE(SUM(o.upstream_overload_retries), 0)::INT         AS retries_absorbed,
+               MAX(o.ts)                                                  AS last_seen
+          FROM nautgate.route_outcomes o
+          JOIN nautgate.route_decisions d ON d.id = o.decision_id
+         WHERE o.ts > NOW() - make_interval(mins => $1)
+         GROUP BY d.decision_provider
+        """,
+        minutes,
+    )
+    out = {}
+    for r in rows:
+        total = int(r["total"] or 0)
+        ok = int(r["ok"] or 0)
+        overloaded = int(r["overloaded"] or 0)
+        retries = int(r["retries_absorbed"] or 0)
+        rl = int(r["rate_limited"] or 0)
+        errors = int(r["errors"] or 0)
+        # True overload events include the ones a retry absorbed (final row was 2xx).
+        overload_events = overloaded + retries
+        denom = ok + overload_events + rl + errors
+        overload_pct = (overload_events / denom) if denom else 0.0
+        bad = overloaded + rl + errors
+        if total == 0:
+            status = "no-data"
+        elif ok == 0 and bad > 0:
+            status = "down"
+        elif overload_pct >= 0.05 or rl > 0 or errors > 0:
+            status = "degraded"
+        else:
+            status = "up"
+        out[r["provider"]] = {
+            "status": status, "total": total, "success": ok,
+            "overloaded": overloaded, "rate_limited": rl, "errors": errors,
+            "retries_absorbed": retries, "overload_pct": round(overload_pct, 4),
+            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+        }
+    return out

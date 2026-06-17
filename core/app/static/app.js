@@ -140,16 +140,40 @@
     return Math.floor(ms / 86400000) + "d ago";
   }
 
+  let sessionPage = 0;
+  let sessionPageSize = 10;
+
+  function renderSessionsPager(total) {
+    const pager = document.getElementById("sessions-pager");
+    const range = document.getElementById("sessions-range");
+    if (!pager || !range) return;
+    if (total <= sessionPageSize) { pager.style.display = "none"; return; }
+    pager.style.display = "flex";
+    const start = sessionPage * sessionPageSize;
+    const end = Math.min(start + sessionPageSize, total);
+    range.textContent = `${start + 1}–${end} of ${total}`;
+    const prev = document.getElementById("sessions-prev");
+    const next = document.getElementById("sessions-next");
+    if (prev) prev.disabled = sessionPage === 0;
+    if (next) next.disabled = end >= total;
+  }
+
   function renderSessions() {
     const list = document.getElementById("sessions-list");
     if (!list) return;
-    const sessions = loadSessions();
-    const activeId = getActiveSessionId() || (sessions[0]?.id ?? "");
+    const allSessions = loadSessions();
+    const activeId = getActiveSessionId() || (allSessions[0]?.id ?? "");
 
-    if (!sessions.length) {
+    if (!allSessions.length) {
       list.innerHTML = '<p class="hint">No saved sessions. Add one below — paste a bearer token (ng_…) and optionally label it.</p>';
+      renderSessionsPager(0);
       return;
     }
+
+    const maxPage = Math.max(0, Math.ceil(allSessions.length / sessionPageSize) - 1);
+    if (sessionPage > maxPage) sessionPage = maxPage;
+    const sessions = allSessions.slice(sessionPage * sessionPageSize, sessionPage * sessionPageSize + sessionPageSize);
+    renderSessionsPager(allSessions.length);
 
     list.innerHTML = '<table class="sessions-table"><thead><tr><th></th><th>label</th><th>agent</th><th>token</th><th>last used</th><th></th></tr></thead><tbody>'
       + sessions.map(s => {
@@ -400,6 +424,9 @@
       refreshTimer = setInterval(loadDecisions, REFRESH_MS);
     } else if (name === "audit") {
       refreshTimer = setInterval(loadAudit, REFRESH_MS);
+    } else if (name === "overview") {
+      // Live provider status without re-pulling the whole overview.
+      refreshTimer = setInterval(loadProviderStatus, 60000);
     }
   }
 
@@ -445,6 +472,7 @@
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "scorecard") loadScorecard();
     else if (activeTab === "drift") loadDrift();
+    else if (activeTab === "probe") loadProbe();
     else if (activeTab === "quality") loadQuality();
     else if (activeTab === "behavior") loadBehavior();
     else if (activeTab === "health" || activeTab === "models") loadModels();
@@ -481,6 +509,7 @@
     // Sessions section gets re-rendered every Overview load so the
     // last-used timestamps stay fresh as the active session makes calls.
     renderSessions();
+    loadProviderStatus();
     try {
       const s = await api("/v1/stats?hours=24");
       document.getElementById("m-total").textContent = s.requests_total ?? "0";
@@ -493,6 +522,47 @@
       // Silently leave dashes; auth state above will explain.
     }
   }
+
+  async function loadProviderStatus() {
+    if (!getToken()) return;
+    try {
+      renderProviderStatus(await api("/v1/health/providers"));
+    } catch (e) { /* leave prior state */ }
+  }
+
+  function renderProviderStatus(d) {
+    const strip = document.getElementById("provider-strip");
+    if (!strip) return;
+    const dot = { up: "up", degraded: "degraded", down: "down", "no-data": "nodata" };
+    strip.innerHTML = (d.providers || []).map(p => {
+      const cls = dot[p.status] || "nodata";
+      let detail;
+      if (p.status === "degraded" || p.status === "down") {
+        const pctOv = (p.overload_pct * 100).toFixed(0);
+        const bits = [];
+        if (p.overload_pct > 0) bits.push(`${pctOv}% overloaded`);
+        if (p.retries_absorbed) bits.push(`${p.retries_absorbed} absorbed`);
+        if (p.rate_limited) bits.push(`${p.rate_limited}× 429`);
+        detail = bits.join(" · ") || "errors";
+      } else if (p.status === "up") {
+        detail = p.total ? `${p.success}/${p.total} ok (10m)` : "reachable";
+      } else {
+        detail = p.heartbeat && p.heartbeat.status === "no-cred" ? "no credential" : "no recent calls";
+      }
+      const hb = p.heartbeat && p.heartbeat.latency_ms != null ? ` · ${p.heartbeat.latency_ms}ms` : "";
+      return `<div class="status-badge ${cls}">
+        <span class="status-dot"></span>
+        <span class="status-label">${esc(p.label)}</span>
+        <span class="status-detail">${esc(detail)}${hb}</span>
+      </div>`;
+    }).join("") || '<span class="hint">No provider data yet.</span>';
+  }
+
+  document.getElementById("sessions-prev")?.addEventListener("click", () => { sessionPage--; renderSessions(); });
+  document.getElementById("sessions-next")?.addEventListener("click", () => { sessionPage++; renderSessions(); });
+  document.getElementById("sessions-page-size")?.addEventListener("change", (e) => {
+    sessionPageSize = Number(e.target.value) || 10; sessionPage = 0; renderSessions();
+  });
 
   function renderBars(id, dict) {
     const el = document.getElementById(id);
@@ -2122,6 +2192,103 @@
   });
   document.getElementById("cache-model-filter")?.addEventListener("change", loadCache);
   document.getElementById("cache-reload")?.addEventListener("click", loadCache);
+
+  // --- LLM Probing -------------------------------------------------------
+  async function loadProbe() {
+    if (!getToken()) return;
+    try {
+      const s = await api("/v1/probe/summary?hours=168");
+      const cfg = s.config || {};
+      document.getElementById("probe-enabled").checked = !!cfg.enabled;
+      document.getElementById("probe-interval").value = cfg.interval_hours || 6;
+      const tEl = document.getElementById("probe-targets");
+      if (document.activeElement !== tEl) tEl.value = (cfg.targets || []).join("\n");
+      document.getElementById("probe-state").textContent =
+        cfg.last_run_at ? "last run " + new Date(cfg.last_run_at).toLocaleString() : "never run";
+
+      const al = document.querySelector("#probe-alerts tbody");
+      al.innerHTML = (s.alerts || []).filter(a => !a.resolved_at).map(a => `
+        <tr class="${a.severity === 'critical' ? 'leak-row' : ''}">
+          <td>${new Date(a.ts).toLocaleString()}</td>
+          <td>${esc(a.model)}</td>
+          <td><b>${esc(a.alert_type)}</b></td>
+          <td>${esc(a.severity)}</td>
+          <td><code>${esc(JSON.stringify(a.detail || {}))}</code></td>
+        </tr>`).join("") || `<tr><td colspan="5" class="hint">No open alerts.</td></tr>`;
+
+      const tb = document.querySelector("#probe-targets-tbl tbody");
+      const rows = [];
+      for (const t of s.targets || []) {
+        const legs = Object.values(t.legs || {});
+        if (!legs.length) continue;
+        legs.forEach((leg, i) => {
+          const mism = leg.observed_model && !modelsLooseMatch(t.model, leg.observed_model);
+          rows.push(`<tr class="${mism ? 'leak-row' : ''}">
+            <td>${i === 0 ? '<b>' + esc(t.model) + '</b>' : ''}</td>
+            <td>${esc(leg.via)}</td>
+            <td>${esc(leg.observed_model || (leg.error ? '— (' + (leg.status_code||'err') + ')' : '—'))}</td>
+            <td>${leg.tokens_per_byte != null ? leg.tokens_per_byte.toFixed(4) : '—'}</td>
+            <td>${leg.first_byte_ms != null ? leg.first_byte_ms + ' ms' : '—'}</td>
+            <td>${leg.quality_score != null ? leg.quality_score + '/5' : '—'}</td>
+            <td>${leg.refused ? '⚠' : ''}</td>
+          </tr>`);
+        });
+      }
+      tb.innerHTML = rows.join("") || `<tr><td colspan="7" class="hint">No probe cycle yet — set targets, enable, and Run now.</td></tr>`;
+    } catch (e) { /* auth chip explains */ }
+  }
+
+  function modelsLooseMatch(req, obs) {
+    if (!obs) return true;
+    const core = (m) => {
+      m = m.toLowerCase();
+      for (const p of ["openrouter/anthropic/", "openrouter/openai/", "openrouter/", "anthropic/", "openai/"])
+        if (m.startsWith(p)) m = m.slice(p.length);
+      return m;
+    };
+    const a = core(req), b = core(obs);
+    return a.includes(b) || b.includes(a);
+  }
+
+  async function saveProbeConfig() {
+    const targets = document.getElementById("probe-targets").value
+      .split("\n").map(s => s.trim()).filter(Boolean);
+    const body = {
+      enabled: document.getElementById("probe-enabled").checked,
+      interval_hours: Number(document.getElementById("probe-interval").value) || 6,
+      targets,
+    };
+    document.getElementById("probe-state").textContent = "saving…";
+    try {
+      await apiPut("/v1/probe/config", body);
+      document.getElementById("probe-state").textContent = "saved";
+    } catch (e) {
+      document.getElementById("probe-state").textContent = "save failed";
+    }
+  }
+
+  async function runProbeNow() {
+    const btn = document.getElementById("probe-run-now");
+    btn.disabled = true; btn.textContent = "running…";
+    try {
+      await saveProbeConfig();
+      const t = getToken();
+      const res = await fetch("/v1/probe/run", {
+        method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      await loadProbe();
+    } catch (e) {
+      document.getElementById("probe-state").textContent = "run failed (" + e.message + ")";
+    } finally {
+      btn.disabled = false; btn.textContent = "▶ Run now";
+    }
+  }
+
+  document.getElementById("probe-reload")?.addEventListener("click", loadProbe);
+  document.getElementById("probe-save")?.addEventListener("click", saveProbeConfig);
+  document.getElementById("probe-run-now")?.addEventListener("click", runProbeNow);
 
   function renderCostSummary(s) {
     document.getElementById("c-total").textContent = usd(s.total_cost_usd);

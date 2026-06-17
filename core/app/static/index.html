@@ -14,6 +14,7 @@
       <a href="#audit" data-tab="audit">Audit Log</a>
       <a href="#scorecard" data-tab="scorecard">Scorecard</a>
       <a href="#drift" data-tab="drift">Drift</a>
+      <a href="#probe" data-tab="probe">LLM Probing</a>
       <a href="#quality" data-tab="quality">Quality</a>
       <a href="#behavior" data-tab="behavior">Behavior</a>
       <a href="#cost" data-tab="cost">Cost</a>
@@ -39,18 +40,9 @@
   <main>
     <!-- Overview ------------------------------------------------------------>
     <section id="tab-overview" class="tab active">
-      <h2>Sessions</h2>
-      <p class="hint">Saved bearer tokens. Click <b>Activate</b> to switch which one the dashboard uses for all API calls. Each session shows its agent identity (from <code>/v1/whoami</code>). Tokens are stored in your browser only — never sent anywhere except NautGate itself.</p>
-      <div id="sessions-list"></div>
-      <details id="sessions-add" class="sessions-add">
-        <summary>+ Add session</summary>
-        <div class="sessions-add-form">
-          <input id="add-token" type="password" placeholder="Bearer token (ng_…)" />
-          <input id="add-label" type="text" placeholder="Label (optional, e.g. 'Pi', 'Claude Code')" />
-          <button id="add-save">Save session</button>
-          <div id="add-error" class="hint" style="color:#ff5c5c"></div>
-        </div>
-      </details>
+      <h2>Provider status <span class="hint" style="font-weight:400">— live, refreshes every 60s</span></h2>
+      <p class="hint">Active heartbeat + the last 10&nbsp;min of real traffic. A <b>529 Overloaded</b> is Anthropic shedding load — NautGate auto-retries it, and the badge shows the true overload rate (incl. retries it absorbed for you).</p>
+      <div id="provider-strip" class="status-strip"></div>
 
       <h2 style="margin-top:24px">Last 24h</h2>
       <div class="grid">
@@ -65,6 +57,27 @@
 
       <h3>By inbound format</h3>
       <div id="format-bars" class="bars"></div>
+
+      <h2 style="margin-top:24px">Sessions</h2>
+      <p class="hint">Saved bearer tokens. Click <b>Activate</b> to switch which one the dashboard uses for all API calls. Each session shows its agent identity (from <code>/v1/whoami</code>). Tokens are stored in your browser only — never sent anywhere except NautGate itself.</p>
+      <div id="sessions-list"></div>
+      <div id="sessions-pager" class="pager">
+        <button id="sessions-prev">‹ prev</button>
+        <span id="sessions-range" class="hint"></span>
+        <button id="sessions-next">next ›</button>
+        <label class="hint">show
+          <select id="sessions-page-size"><option>10</option><option>25</option><option>50</option></select>
+        </label>
+      </div>
+      <details id="sessions-add" class="sessions-add">
+        <summary>+ Add session</summary>
+        <div class="sessions-add-form">
+          <input id="add-token" type="password" placeholder="Bearer token (ng_…)" />
+          <input id="add-label" type="text" placeholder="Label (optional, e.g. 'Pi', 'Claude Code')" />
+          <button id="add-save">Save session</button>
+          <div id="add-error" class="hint" style="color:#ff5c5c"></div>
+        </div>
+      </details>
     </section>
 
     <!-- Cost ---------------------------------------------------------------->
@@ -150,6 +163,35 @@
       <table id="cost-agent" style="display:none">
         <thead><tr><th>agent</th><th>cost</th><th>calls</th><th>tokens (in / out)</th></tr></thead><tbody></tbody>
       </table>
+    </section>
+
+    <!-- LLM Probing (provenance + degradation monitoring) ------------------->
+    <section id="tab-probe" class="tab">
+      <h2>LLM Probing <button class="reload" id="probe-reload">↻</button></h2>
+      <p class="hint">Scheduled probes fire a fixed suite at each max-subscription model on <b>both</b> the subscription path (OAuth) and a metered twin (OpenRouter/API), then compare. Detects silent <b>model swaps</b> (returned model ≠ requested), <b>tokenizer shifts</b> (tokens/byte vs baseline), <b>latency</b> and <b>quality</b> drift, and <b>cross-path divergence</b> (your subscription answering differently than metered for the same prompt). <em>This is statistical evidence, not cryptographic proof — we can't see which weights actually ran.</em></p>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="anatomy-section"><b>Config</b></div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 0">
+          <label><input type="checkbox" id="probe-enabled"> autonomous probing</label>
+          <label>every <input type="number" id="probe-interval" min="1" max="168" style="width:60px"> h</label>
+          <button id="probe-save">Save</button>
+          <button id="probe-run-now" class="dr-report-btn">▶ Run now</button>
+          <span id="probe-state" class="hint"></span>
+        </div>
+        <div style="padding:4px 0">
+          <label class="hint">targets (one <code>provider/model</code> per line — e.g. <code>anthropic/claude-opus-4-8</code>, <code>openrouter/anthropic/claude-sonnet-4</code>):</label>
+          <textarea id="probe-targets" rows="3" style="width:100%;font-family:var(--mono);font-size:12px"></textarea>
+        </div>
+        <p class="hint" id="probe-cred-note">Subscription legs need <code>NAUTGATE_ANTHROPIC_OAUTH_TOKEN</code> / <code>NAUTGATE_CHATGPT_OAUTH_TOKEN</code> in deploy/.env. These OAuth tokens expire — an <code>auth_expired</code> alert means re-paste it.</p>
+      </div>
+
+      <h3>Open alerts</h3>
+      <table id="probe-alerts"><thead><tr><th>time</th><th>model</th><th>type</th><th>severity</th><th>detail</th></tr></thead><tbody></tbody></table>
+
+      <h3>Latest cycle — subscription vs metered</h3>
+      <p class="hint">Per target: the model the provider <em>says</em> it ran on each leg, tokenizer fingerprint (tokens/byte), TTFT, and judged quality. Mismatched rows are flagged.</p>
+      <table id="probe-targets-tbl"><thead><tr><th>requested</th><th>leg</th><th>observed model</th><th>tokens/byte</th><th>TTFT</th><th>quality</th><th>refused</th></tr></thead><tbody></tbody></table>
     </section>
 
     <!-- Cache (prompt-cache accounting + leak detector) --------------------->

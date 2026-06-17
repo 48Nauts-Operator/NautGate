@@ -391,7 +391,19 @@ def _select_transports(
             api_key_env="OPENROUTER_API_KEY",
         ))
         return out
-    if pl in ("openai", "chatgpt-oauth") and ("gpt-" in ml or "o1-" in ml or "o3-" in ml):
+    if pl in ("openai", "chatgpt-oauth") and (
+        "gpt-" in ml or "o1-" in ml or "o3-" in ml or "codex" in ml
+    ):
+        # Subscription leg: Codex OAuth → chatgpt.com Responses API (free on the
+        # ChatGPT plan). Requires the operator to export the token + account id.
+        if prefer_oauth and os.environ.get("NAUTGATE_CHATGPT_OAUTH_TOKEN"):
+            acct = os.environ.get("NAUTGATE_CHATGPT_ACCOUNT_ID", "")
+            out.append(TargetTransport(
+                via="chatgpt-oauth",
+                base_url="https://chatgpt.com/backend-api/codex",
+                api_key_env="NAUTGATE_CHATGPT_OAUTH_TOKEN",
+                extra_headers=({"chatgpt-account-id": acct} if acct else {}),
+            ))
         if os.environ.get("OPENAI_API_KEY"):
             out.append(TargetTransport(
                 via="openai-metered",
@@ -432,6 +444,7 @@ class CanaryResult:
     status_code: int
     cost_usd: float | None
     error: str | None
+    observed_model: str | None = None  # the `model` string the provider returned
 
 
 def _is_anthropic_messages_target(via: str) -> bool:
@@ -459,7 +472,20 @@ async def _run_canary(
     headers.update(transport.extra_headers)
 
     use_anthropic = _is_anthropic_messages_target(transport.via)
-    if use_anthropic:
+    use_codex = transport.via == "chatgpt-oauth"
+    if use_codex:
+        # ChatGPT/Codex subscription leg — OpenAI Responses API shape. Best-effort:
+        # this is a semi-private contract, so a wrong shape surfaces as a captured
+        # error rather than a crash. Verified legs are Anthropic-OAuth + OpenRouter.
+        url = f"{transport.base_url}/responses"
+        body = {
+            "model": target_model,
+            "input": canary.prompt,
+            "max_output_tokens": canary.max_tokens,
+            "temperature": canary.temperature,
+            "stream": False,
+        }
+    elif use_anthropic:
         url = f"{transport.base_url}/v1/messages"
         # Anthropic Messages API shape. Strip "openrouter/anthropic/" → "claude-…"
         ant_model = target_model
@@ -498,6 +524,7 @@ async def _run_canary(
     response_text = ""
     prompt_tokens = None
     completion_tokens = None
+    observed_model = None
 
     try:
         resp = await client.post(url, json=body, headers=headers, timeout=30.0)
@@ -508,6 +535,7 @@ async def _run_canary(
             error = f"http_{resp.status_code}: {body_bytes[:200].decode('utf-8', errors='replace')}"
         else:
             payload = json.loads(body_bytes.decode("utf-8", errors="replace"))
+            observed_model = payload.get("model")
             if use_anthropic:
                 # Anthropic shape: {content: [{type:'text', text:'…'}], usage: {input_tokens, output_tokens}}
                 usage = payload.get("usage") or {}
@@ -516,6 +544,19 @@ async def _run_canary(
                 for block in payload.get("content") or []:
                     if isinstance(block, dict) and block.get("type") == "text":
                         response_text += block.get("text") or ""
+            elif use_codex:
+                # Responses shape: {model, output: [{content: [{type:'output_text', text}]}],
+                #                   usage: {input_tokens, output_tokens}}
+                usage = payload.get("usage") or {}
+                prompt_tokens = usage.get("input_tokens") or usage.get("prompt_tokens")
+                completion_tokens = usage.get("output_tokens") or usage.get("completion_tokens")
+                if isinstance(payload.get("output_text"), str):
+                    response_text = payload["output_text"]
+                else:
+                    for item in payload.get("output") or []:
+                        for block in (item or {}).get("content") or []:
+                            if isinstance(block, dict) and block.get("type") in ("output_text", "text"):
+                                response_text += block.get("text") or ""
             else:
                 # OpenAI shape: {choices: [{message: {content: '…'}}], usage: {prompt_tokens, completion_tokens}}
                 usage = payload.get("usage") or {}
@@ -564,6 +605,7 @@ async def _run_canary(
         status_code=status_code,
         cost_usd=cost,
         error=error,
+        observed_model=observed_model,
     )
 
 

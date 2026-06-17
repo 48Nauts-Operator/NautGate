@@ -11,9 +11,18 @@ Tech Paper §7.3 also describes lands later when we have a budget for an extra h
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.cards import is_valid_card_number
 from app.findings import SEVERITY as _SEV
+
+# Per-rule match validators. A regex match for one of these rules only counts
+# when its validator returns True — used to suppress the huge false-positive
+# rate of the cheap `credit_card_like` digit-run regex (timestamps, IDs, etc.).
+_MATCH_VALIDATORS: dict[str, Callable[[str], bool]] = {
+    "credit_card_like": is_valid_card_number,
+}
 
 # Rules are baked in for v1; move to config/sensitivity_rules.yaml when ops needs to tweak.
 # Each entry: (rule_id, sensitivity, compiled_regex). Order doesn't affect correctness —
@@ -22,7 +31,16 @@ _PII_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("email", re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b")),
     ("phone_us", re.compile(r"\b(?:\+?1[\s\-.]?)?\(?\d{3}\)?[\s\-.]\d{3}[\s\-.]\d{4}\b")),
     ("ssn_us", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
-    ("credit_card_like", re.compile(r"\b(?:\d[ \-]?){13,19}\b")),
+    # Candidate shapes only — a real PAN is 13–19 contiguous digits, or digits
+    # in regular 4-groups (4-4-4-4[-3]) or Amex 4-6-5. The old "(?:\d[ -]?){13,19}"
+    # allowed a separator after EVERY digit, which welded space-separated numeric
+    # columns (an `ls -l` size/date/time row) into a fake 16-digit "card". Every
+    # candidate is still Luhn+IIN validated by _MATCH_VALIDATORS before it counts.
+    ("credit_card_like", re.compile(
+        r"\b\d{13,19}\b"
+        r"|\b\d{4}(?:[ \-]\d{4}){2,3}(?:[ \-]\d{1,4})?\b"
+        r"|\b\d{4}[ \-]\d{6}[ \-]\d{5}\b"
+    )),
 ]
 
 _SECRET_RULES: list[tuple[str, re.Pattern[str]]] = [
@@ -122,6 +140,14 @@ class Classification:
         }
 
 
+def _validated(rule_id: str, matches: list) -> list:
+    """Drop matches that fail the rule's validator (e.g. non-card digit runs)."""
+    v = _MATCH_VALIDATORS.get(rule_id)
+    if not v:
+        return matches
+    return [m for m in matches if isinstance(m, str) and v(m)]
+
+
 def _signal(rule_id: str, sensitivity: str, count: int) -> dict:
     """Standard signal shape — includes Lighthouse-audit severity from findings.SEVERITY."""
     return {
@@ -148,7 +174,7 @@ def classify(text: str | None) -> Classification:
 
     if worst != "secret":
         for rule_id, pattern in _PII_RULES:
-            matches = pattern.findall(text)
+            matches = _validated(rule_id, pattern.findall(text))
             if matches:
                 signals.append(_signal(rule_id, "pii", len(matches)))
                 if _RANK["pii"] > _RANK[worst]:
@@ -159,7 +185,7 @@ def classify(text: str | None) -> Classification:
         for rule_id, pattern in _PII_RULES:
             if any(s["rule_id"] == rule_id for s in signals):
                 continue
-            matches = pattern.findall(text)
+            matches = _validated(rule_id, pattern.findall(text))
             if matches:
                 signals.append(_signal(rule_id, "pii", len(matches)))
 
@@ -180,10 +206,15 @@ def scan_for_findings(text: str | None) -> list[dict]:
     seen: set[tuple[str, str]] = set()
     for rule_list, sensitivity in ((_SECRET_RULES, "secret"), (_PII_RULES, "pii")):
         for rule_id, pattern in rule_list:
+            validator = _MATCH_VALIDATORS.get(rule_id)
             for m in pattern.finditer(text):
                 # If the rule has a capture group (e.g. generic_secret), prefer it
                 # so we don't store the surrounding label.
                 sample = m.group(1) if m.groups() else m.group(0)
+                # Suppress matches that fail the rule's validator (e.g. a digit
+                # run that isn't a real card number — timestamps, IDs).
+                if validator and not validator(sample):
+                    continue
                 key = (rule_id, sample[:20])
                 if key in seen:
                     continue

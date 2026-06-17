@@ -21,6 +21,7 @@ NautGate without juggling auth modes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -30,6 +31,12 @@ import structlog
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.anthropic_oauth_forwarder import (
+    _MAX_OVERLOAD_RETRIES,
+    _RETRY_BASE_S,
+    _RETRY_CAP_S,
+    _parse_retry_after,
+)
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.streaming import _iter_sse_events
@@ -193,14 +200,27 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
     # potentially-long-running SSE streams.
     client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), http2=False)
 
+    overload_retries = 0
     try:
-        upstream = await client.send(
-            client.build_request(
-                method=request.method, url=url,
-                headers=fwd_headers, content=raw_body,
-            ),
-            stream=True,
-        )
+        for _attempt in range(_MAX_OVERLOAD_RETRIES + 1):
+            upstream = await client.send(
+                client.build_request(
+                    method=request.method, url=url,
+                    headers=fwd_headers, content=raw_body,
+                ),
+                stream=True,
+            )
+            if upstream.status_code not in (429, 529) or _attempt == _MAX_OVERLOAD_RETRIES:
+                break
+            retry_after = _parse_retry_after(upstream.headers.get("retry-after"))
+            if upstream.status_code == 529:
+                overload_retries += 1
+            await upstream.aclose()
+            delay = retry_after if retry_after is not None else min(
+                _RETRY_CAP_S, _RETRY_BASE_S * (2 ** _attempt)) + 0.05 * _attempt
+            log.info("chatgpt_oauth_retry", status=upstream.status_code,
+                     attempt=_attempt + 1, delay_s=round(delay, 2))
+            await asyncio.sleep(delay)
     except httpx.HTTPError as exc:
         await client.aclose()
         log.error("oauth_forward_failed", error=str(exc))
@@ -255,6 +275,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         status_code=upstream.status_code,
                         duration_ms=duration_ms,
                         first_byte_ms=first_byte_ms,
+                        upstream_overload_retries=overload_retries,
                         prompt_tokens=cu.prompt_tokens,
                         completion_tokens=cu.completion_tokens,
                         reasoning_tokens=cu.reasoning_tokens,
