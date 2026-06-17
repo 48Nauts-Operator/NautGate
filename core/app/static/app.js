@@ -2630,8 +2630,15 @@
   }
 
   async function runProbeNow() {
-    const btn = document.getElementById("probe-run-now");
-    btn.disabled = true; btn.textContent = "running…";
+    // Give feedback on whichever button the user actually sees: the header
+    // action on the Probe tab, otherwise the (collapsed) config button.
+    const headerBtn = document.getElementById("header-action");
+    const cfgBtn = document.getElementById("probe-run-now");
+    const btn = (headerBtn && !headerBtn.hidden) ? headerBtn : cfgBtn;
+    const orig = btn ? btn.textContent : "";
+    const stateEl = document.getElementById("probe-state");
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running probe…"; }
+    if (stateEl) stateEl.textContent = "running probe cycle…";
     try {
       await saveProbeConfig();
       const t = getToken();
@@ -2640,11 +2647,13 @@
         body: "{}",
       });
       if (!res.ok) throw new Error("http_" + res.status);
+      if (btn) btn.textContent = "✓ Done";
       await loadProbe();
+      setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 1500);
     } catch (e) {
-      document.getElementById("probe-state").textContent = "run failed (" + e.message + ")";
-    } finally {
-      btn.disabled = false; btn.textContent = "▶ Run now";
+      if (btn) btn.textContent = "✗ Run failed";
+      if (stateEl) stateEl.textContent = "run failed (" + (e.message || e) + ") — check targets/credentials in Config";
+      setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 3000);
     }
   }
 
