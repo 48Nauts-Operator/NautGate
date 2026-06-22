@@ -1322,6 +1322,63 @@ async def health_providers(request: Request) -> Response:
     return JSONResponse({"providers": providers, "overall": overall, "window_minutes": 10})
 
 
+# ── API key management (Settings → Keys) ────────────────────────────────────
+_KEY_TTL_MAX_DAYS = 90
+
+
+@router.get("/keys")
+async def keys_list(request: Request) -> Response:
+    """List all NautGate API keys with status (no secrets)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    return JSONResponse({"keys": await queries.list_api_keys(pool)})
+
+
+@router.post("/keys")
+async def keys_create(request: Request) -> Response:
+    """Mint a named key with an optional TTL (max 90 days). The plaintext token
+    is returned ONCE — it is never stored and cannot be retrieved later."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    agent_id = (body.get("agent_id") or "").strip()
+    profile = (body.get("profile") or "auto").strip() or "auto"
+    ttl_days = body.get("ttl_days")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    if ttl_days is not None:
+        try:
+            ttl_days = int(ttl_days)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ttl_days must be an integer") from None
+        if ttl_days < 1 or ttl_days > _KEY_TTL_MAX_DAYS:
+            raise HTTPException(status_code=400, detail=f"ttl_days must be in 1..{_KEY_TTL_MAX_DAYS}")
+    created = await queries.create_api_key(
+        pool, name=name, agent_id=agent_id, ttl_days=ttl_days, profile=profile,
+    )
+    return JSONResponse(created)
+
+
+@router.post("/keys/{key_id}/revoke")
+async def keys_revoke(key_id: str, request: Request) -> Response:
+    """Soft-revoke a key — takes effect within the auth cache TTL (≤5 min)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    ok = await queries.revoke_api_key(pool, key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="key not found or already revoked")
+    return JSONResponse({"ok": True, "id": key_id})
+
+
 # ── LLM-Probing ─────────────────────────────────────────────────────────────
 
 

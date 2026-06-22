@@ -3982,22 +3982,105 @@
     await Promise.all([
       loadBackupConfig(), loadBackupList(), loadSBConfig(), loadQualityConfig(),
     ]);
-    // Provider keys: read-only env hint. We don't have an endpoint that
-    // exposes which keys are set (and shouldn't, for security). Hint at the
-    // env-var contract instead.
-    document.getElementById("keys-status").textContent =
+    // NautGate API keys (ng_…) — full management.
+    loadKeys();
+    // Provider keys: read-only env hint (different concept).
+    const ks = document.getElementById("keys-status");
+    if (ks) ks.textContent =
       [
         "Provider keys live as env vars on the gateway:",
-        "  ANTHROPIC_API_KEY",
-        "  OPENAI_API_KEY",
-        "  GEMINI_API_KEY",
-        "  OPENROUTER_API_KEY",
-        "  LMSTUDIO_BASE_URL",
+        "  ANTHROPIC_API_KEY   OPENAI_API_KEY   GEMINI_API_KEY",
+        "  OPENROUTER_API_KEY  LMSTUDIO_BASE_URL",
         "",
         "Set them in deploy/.env and `docker compose up -d` to rotate.",
-        "UI-managed key rotation is on the v2 roadmap.",
       ].join("\n");
   }
+
+  // --- NautGate API key management (Settings → Keys) --------------------
+  async function loadKeys() {
+    const mount = document.getElementById("keys-card");
+    if (!mount || !getToken()) return;
+    try {
+      const r = await api("/v1/keys");
+      const rows = r.keys || [];
+      NG.DataTable(mount, {
+        title: "Keys", countLabel: (n) => `${n} key${n === 1 ? "" : "s"}`,
+        searchPlaceholder: "Filter…",
+        defaultSort: { key: "created", dir: "desc" },
+        emptyText: "No keys yet — create one above.",
+        rows,
+        rowClass: (k) => (k.status === "revoked" || k.status === "expired" ? "v2-row-bad" : null),
+        columns: [
+          { key: "name", label: "Name", render: (k) => NG.el("span", { class: "v2-strong" }, k.name || "—"), sortValue: (k) => k.name || "" },
+          { key: "agent_id", label: "Agent", render: (k) => k.agent_id || "—", sortValue: (k) => k.agent_id || "" },
+          { key: "created", label: "Created", render: (k) => (k.created_at ? fmtAge(k.created_at) : "—"), sortValue: (k) => k.created_at || "" },
+          { key: "last_used", label: "Last used", render: (k) => (k.last_used_at ? fmtAge(k.last_used_at) : "never"), sortValue: (k) => k.last_used_at || "" },
+          { key: "expires", label: "Expires", render: (k) => (k.expires_at ? fmtAge(k.expires_at) : "never"), sortValue: (k) => k.expires_at || "" },
+          { key: "status", label: "Status", sortable: false, render: (k) => NG.chip(k.status, k.status === "active" ? "good" : k.status === "expired" ? "warn" : "bad") },
+          { key: "act", label: "", sortable: false, render: (k) => {
+              if (k.status !== "active") return "";
+              const b = NG.el("button", { class: "v2-pg-btn" }, "Revoke");
+              b.addEventListener("click", (e) => { e.stopPropagation(); revokeKey(k.id, k.name); });
+              return b;
+            } },
+        ],
+      });
+    } catch (e) {
+      mount.innerHTML = `<div class="v2-card"><p class="hint">load failed: ${esc(e.message || e)}</p></div>`;
+    }
+  }
+
+  async function createKey() {
+    const name = document.getElementById("key-name").value.trim();
+    const agent = document.getElementById("key-agent").value.trim();
+    const ttl = Number(document.getElementById("key-ttl").value) || 30;
+    const stateEl = document.getElementById("key-create-state");
+    const out = document.getElementById("key-created");
+    if (!name || !agent) { if (stateEl) stateEl.textContent = "name + agent id required"; return; }
+    if (stateEl) stateEl.textContent = "creating…";
+    try {
+      const t = getToken();
+      const res = await fetch("/v1/keys", {
+        method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" },
+        body: JSON.stringify({ name, agent_id: agent, ttl_days: ttl }),
+      });
+      if (!res.ok) { let d = ""; try { d = (await res.json()).detail || ""; } catch (_e) {} throw new Error(d || ("http_" + res.status)); }
+      const k = await res.json();
+      if (stateEl) stateEl.textContent = "";
+      if (out) {
+        out.hidden = false;
+        out.innerHTML = "";
+        out.appendChild(NG.el("div", { class: "v2-card-meta", style: { marginBottom: "8px" } }, `Key “${name}” created — copy it now, it won't be shown again:`));
+        const row = NG.el("div", { class: "key-created-row" });
+        const code = NG.el("code", null, k.token);
+        const copy = NG.el("button", { class: "v2-pg-btn" }, "Copy");
+        copy.addEventListener("click", () => { navigator.clipboard?.writeText(k.token); copy.textContent = "Copied ✓"; setTimeout(() => copy.textContent = "Copy", 1500); });
+        row.appendChild(code); row.appendChild(copy);
+        out.appendChild(row);
+        out.appendChild(NG.el("div", { class: "key-created-warn" }, k.expires_at ? `Expires ${new Date(k.expires_at).toLocaleString()}.` : "No expiry."));
+      }
+      document.getElementById("key-name").value = "";
+      loadKeys();
+    } catch (e) {
+      if (stateEl) stateEl.textContent = "failed: " + (e.message || e);
+    }
+  }
+
+  async function revokeKey(id, name) {
+    const stateEl = document.getElementById("key-create-state");
+    try {
+      const t = getToken();
+      const res = await fetch("/v1/keys/" + encodeURIComponent(id) + "/revoke", {
+        method: "POST", headers: { Authorization: "Bearer " + t },
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      if (stateEl) stateEl.textContent = `revoked “${name || id}”`;
+      loadKeys();
+    } catch (e) {
+      if (stateEl) stateEl.textContent = "revoke failed: " + (e.message || e);
+    }
+  }
+  document.getElementById("key-create")?.addEventListener("click", createKey);
 
   // --- Helpers -----------------------------------------------------------
 

@@ -83,7 +83,7 @@ async def test_stats_respects_hours_query_param(stats_app):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad", ["0", "-5", "721", "abc", "1.5"])
+@pytest.mark.parametrize("bad", ["0", "-5", "87601", "abc", "1.5"])
 async def test_stats_rejects_invalid_hours(stats_app, bad):
     app, _ = stats_app
     transport = httpx.ASGITransport(app=app)

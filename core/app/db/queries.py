@@ -6,6 +6,7 @@ DB and gets a durable-spool fallback (Day 4d).
 """
 
 import json
+from datetime import UTC
 from uuid import UUID
 
 import asyncpg
@@ -1763,3 +1764,68 @@ async def get_provider_status(pool: asyncpg.Pool, *, minutes: int = 10) -> dict:
             "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
         }
     return out
+
+
+# --- API key management (Settings → Keys: name + TTL + revoke) ----------
+async def create_api_key(
+    pool: asyncpg.Pool, *, name: str, agent_id: str, ttl_days: int | None, profile: str = "auto"
+) -> dict:
+    """Mint a key with a name + optional TTL. Returns metadata + the plaintext
+    token (shown once, never stored)."""
+    from app.auth import issue_key
+
+    plaintext, key_id, key_hash = issue_key()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO nautgate.api_keys (id, key_hash, agent_id, name, default_profile, expires_at)
+            VALUES ($1, $2, $3, $4, $5,
+                    CASE WHEN $6::int IS NULL THEN NULL ELSE NOW() + make_interval(days => $6) END)
+            RETURNING id::text, name, agent_id, default_profile, created_at, expires_at
+            """,
+            key_id, key_hash, agent_id, name, profile, ttl_days,
+        )
+    d = dict(row)
+    for k in ("created_at", "expires_at"):
+        d[k] = d[k].isoformat() if d[k] else None
+    d["token"] = plaintext
+    return d
+
+
+async def list_api_keys(pool: asyncpg.Pool) -> list[dict]:
+    """All keys with status metadata (no secrets)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, name, agent_id, default_profile,
+                   created_at, last_used_at, expires_at, revoked_at
+            FROM nautgate.api_keys
+            ORDER BY created_at DESC
+            """
+        )
+    from datetime import datetime
+
+    now = datetime.now(UTC)
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d["revoked_at"] is not None:
+            d["status"] = "revoked"
+        elif d["expires_at"] is not None and d["expires_at"] < now:
+            d["status"] = "expired"
+        else:
+            d["status"] = "active"
+        for k in ("created_at", "last_used_at", "expires_at", "revoked_at"):
+            d[k] = d[k].isoformat() if d[k] else None
+        out.append(d)
+    return out
+
+
+async def revoke_api_key(pool: asyncpg.Pool, key_id: str) -> bool:
+    """Soft-revoke a key. Returns True if a row was revoked."""
+    async with pool.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE nautgate.api_keys SET revoked_at = NOW() WHERE id = $1::uuid AND revoked_at IS NULL",
+            key_id,
+        )
+    return res.endswith("1")

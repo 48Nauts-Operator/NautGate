@@ -115,7 +115,7 @@ async def test_summary_hours_param(app_with_cost):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad", ["0", "-1", "721", "abc"])
+@pytest.mark.parametrize("bad", ["0", "-1", "87601", "abc"])
 async def test_summary_rejects_invalid_hours(app_with_cost, bad):
     app, _ = app_with_cost
     transport = httpx.ASGITransport(app=app)
@@ -177,6 +177,6 @@ async def test_timeseries_rejects_invalid_hours(app_with_cost):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
         resp = await c.get(
-            "/v1/cost/timeseries?hours=999", headers={"Authorization": "Bearer ng_test"}
+            "/v1/cost/timeseries?hours=87601", headers={"Authorization": "Bearer ng_test"}
         )
     assert resp.status_code == 400

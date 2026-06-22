@@ -647,9 +647,35 @@
 
       <!-- Keys sub-pane -->
       <div class="settings-pane" data-pane="keys" hidden>
-        <h2>Provider keys</h2>
-        <p class="hint">Provider API keys (Anthropic, OpenAI, Gemini, …) live as environment variables on the gateway and require a container restart to rotate. Editing keys from the UI is on the v2 roadmap.</p>
-        <pre id="keys-status" class="code">checking…</pre>
+        <h2>NautGate API keys</h2>
+        <p class="hint">Keys your clients use to authenticate to NautGate (<code>ng_…</code>, sent as the Bearer/x-api-key). Name each one, set an expiry, and revoke when done. The token is shown <b>once</b> on creation — copy it then.</p>
+
+        <div class="v2-card v2-section">
+          <div class="v2-card-head"><div class="v2-card-title-wrap"><span class="v2-card-title">Create a key</span></div></div>
+          <div class="keys-form">
+            <label>Name <input id="key-name" type="text" placeholder="e.g. Claude Code · laptop" /></label>
+            <label>Agent ID <input id="key-agent" type="text" placeholder="e.g. me, ops, ci" /></label>
+            <label>Expires
+              <select id="key-ttl">
+                <option value="7">7 days</option>
+                <option value="30" selected>30 days</option>
+                <option value="60">60 days</option>
+                <option value="90">90 days (max)</option>
+              </select>
+            </label>
+            <button id="key-create">Create key</button>
+            <span id="key-create-state" class="hint"></span>
+          </div>
+          <div id="key-created" class="key-created" hidden></div>
+        </div>
+
+        <div id="keys-card" class="v2-section"></div>
+
+        <details class="v2-more">
+          <summary>Provider keys (Anthropic / OpenAI / OpenRouter …)</summary>
+          <p class="hint">These are different — they live as environment variables on the gateway and need a restart to rotate.</p>
+          <pre id="keys-status" class="code">checking…</pre>
+        </details>
       </div>
     </section>
     </main>

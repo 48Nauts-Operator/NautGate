@@ -1890,6 +1890,20 @@ html, body { height: 100%; }
 .v2-more > summary::before { content: "▸ "; color: var(--text-dim); }
 .v2-more[open] > summary::before { content: "▾ "; }
 
+/* Settings → Keys */
+.keys-form { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-end; }
+.keys-form label { display: flex; flex-direction: column; gap: 5px; margin: 0; font-size: 12px; color: var(--text-dim); }
+.keys-form input, .keys-form select {
+  height: 34px; background: #0E121A; border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 0 10px; font-size: 13px; font-family: inherit; min-width: 200px;
+}
+.keys-form select { min-width: 130px; }
+.keys-form #key-create { height: 34px; }
+.key-created { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: rgba(63,185,80,0.07); border: 1px solid rgba(63,185,80,0.35); }
+.key-created-row { display: flex; align-items: center; gap: 10px; }
+.key-created code { flex: 1; font-size: 12.5px; word-break: break-all; background: #0E121A; padding: 8px 10px; border-radius: 6px; color: var(--accent-bright); }
+.key-created-warn { font-size: 12px; color: var(--warn); margin-top: 8px; }
+
 /* transient toast (bottom-center) */
 .ng-toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(12px);

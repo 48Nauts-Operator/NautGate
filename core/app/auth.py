@@ -16,6 +16,7 @@ the response surface doesn't leak which part of the token was bad.
 import secrets
 import time
 import uuid
+from datetime import UTC, datetime
 
 import asyncpg
 from argon2 import PasswordHasher
@@ -143,7 +144,8 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT key_hash, agent_id, project_id FROM nautgate.api_keys WHERE id = $1",
+            "SELECT key_hash, agent_id, project_id, expires_at, revoked_at "
+            "FROM nautgate.api_keys WHERE id = $1",
             key_id,
         )
     if row is None:
@@ -153,6 +155,17 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
         _PH.verify(row["key_hash"], secret)
     except (VerifyMismatchError, InvalidHashError):
         raise _BAD_TOKEN from None
+
+    # Reject revoked or expired keys. Columns added in migration 021; tolerate
+    # their absence (fake rows in tests / pre-021 schema) like project_id below.
+    try:
+        if row["revoked_at"] is not None:
+            raise _BAD_TOKEN
+        _exp = row["expires_at"]
+        if _exp is not None and _exp < datetime.now(UTC):
+            raise _BAD_TOKEN
+    except (KeyError, IndexError):
+        pass
 
     agent_id = row["agent_id"]
     # `project_id` was added in migration 009. Tolerate fake rows in tests
