@@ -38,6 +38,16 @@ _DEFAULTS: dict[str, Any] = {
         "judge_model": "openai/gpt-4o-mini",
         "judge_base_url": "https://openrouter.ai/api",
     },
+    # Champion–challenger shadow testing (app/shadow.py). Disabled by default;
+    # toggled from the Insights page.
+    "shadow": {
+        "enabled": False,
+        "sample_rate": 0.10,
+        "challenger_provider": "openrouter",
+        "challenger_model": "openrouter/openai/gpt-4o-mini",
+        "daily_cost_cap_usd": 2.00,
+        "max_prompt_bytes": 131072,
+    },
 }
 
 

@@ -228,12 +228,20 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     # PRECAPTURE — synchronous, before forwarding (durability §9).
     if pool is not None:
         try:
+            from app.classify import assemble_user_text, classify
+            from app.drift import compute_session_id
             from app.scoring import score
             score_vector = score(payload or {})
             messages = (payload or {}).get("messages") if isinstance(payload, dict) else None
-            captured_body = capture_prompt(messages, "none") if messages else None
+            # NAUTGATE-1: the passthrough path used to hardcode sensitivity="none",
+            # so the Privacy/Lighthouse audit was blind on all OAuth (Max) traffic
+            # — 84% of volume. Run the same classifier the routed path uses; its
+            # result gates body capture and drives the sensitivity/signals columns.
+            classification = classify(assemble_user_text(messages))
+            sensitivity = classification.sensitivity
+            captured_body = capture_prompt(messages, sensitivity) if messages else None
             captured_tools = (
-                capture_tools(payload.get("tools"), "none")
+                capture_tools(payload.get("tools"), sensitivity)
                 if isinstance(payload, dict) and payload.get("tools") else None
             )
             await queries.precapture(
@@ -244,7 +252,9 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                 model_requested=requested_model,
                 classified_tier="passthrough",
                 classified_score=score_vector.aggregate,
-                classified_sensitivity="none",
+                classified_sensitivity=sensitivity,
+                classified_signals=classification.signals,
+                session_id=compute_session_id(agent_id, messages),
                 decision_provider="anthropic-oauth",
                 decision_model=requested_model or "claude-default",
                 decision_reason="anthropic-oauth:passthrough",
@@ -437,6 +447,39 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         log.warning(
                             "anthropic_oauth_quality_failed", error=str(exc),
                         )
+                    # Brain layer (bloat findings + scorecard) and shadow
+                    # trials — passthrough traffic is most of the gateway's
+                    # volume; excluding it made the trust score a 46-sample
+                    # sliver. Waste figures stay NOTIONAL (estimated at list
+                    # price); real cost accounting is untouched.
+                    try:
+                        from app.scorecard import process_brain as _process_brain
+                        await _process_brain(
+                            pool, pricing,
+                            decision_id=decision_id,
+                            actual_model=meta.get("actual_model"),
+                        )
+                    except Exception as exc:
+                        log.warning("anthropic_oauth_brain_failed", error=str(exc))
+                    # NAUTGATE-1: drift detection was dark on OAuth traffic —
+                    # zero model_baselines rows despite it being most of volume.
+                    # Additive + fire-and-forget; keyed on (provider, model) like
+                    # the scorecard, using the session_id set in PRECAPTURE.
+                    try:
+                        from app.drift_engine import process_drift as _process_drift
+                        await _process_drift(pool, decision_id=decision_id)
+                    except Exception as exc:
+                        log.warning("anthropic_oauth_drift_failed", error=str(exc))
+                    try:
+                        from app.shadow import process_shadow as _process_shadow
+                        await _process_shadow(
+                            pool,
+                            decision_id=decision_id,
+                            shadow_client=getattr(request.app.state, "quality_judge", None),
+                            pricing=pricing,
+                        )
+                    except Exception as exc:
+                        log.warning("anthropic_oauth_shadow_failed", error=str(exc))
                     # Engram-OSS / SecondBrain memory ingest — byte-by-byte
                     # parity with flow-memory-proxy's storeDelta:
                     #   - agent_id constant "claude-code" (matches proxy.js:138)

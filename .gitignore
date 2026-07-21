@@ -42,3 +42,6 @@ logs/
 
 # Docker
 *.pid
+
+# Pi agent tool state (not project source)
+.pi/

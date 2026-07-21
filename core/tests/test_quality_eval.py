@@ -242,3 +242,32 @@ async def test_process_quality_skips_when_disabled(monkeypatch):
     # If it tried to call the judge, this would explode.
     await quality_eval.process_quality(fake_pool, decision_id="abc",
                                         judge_client=fake_client)
+
+
+def test_should_evaluate_skips_machine_probe():
+    # The real-world shape: Claude Code's model-switch quota probe that 404s.
+    # Without the filter, status_404 would anomaly-trigger a judge eval.
+    decision, outcome = _make_pair(
+        decision={"prompt_body": '[{"role":"user","content":"quota"}]',
+                  "prompt_excerpt": "quota"},
+        outcome={"status_code": 404},
+    )
+    assert quality_eval.should_evaluate(decision, outcome, _config(sample_rate=1.0)) \
+        == (False, "machine_probe")
+
+
+def test_is_machine_probe_shapes():
+    # Anthropic content-blocks form
+    assert quality_eval.is_machine_probe(
+        {"prompt_body": '[{"role":"user","content":[{"type":"text","text":"quota"}]}]'})
+    # dict-wrapped messages form
+    assert quality_eval.is_machine_probe(
+        {"prompt_body": '{"messages":[{"role":"user","content":"PING"}]}'})
+    # excerpt-only fallback (body suppressed by capture policy)
+    assert quality_eval.is_machine_probe({"prompt_body": None, "prompt_excerpt": "quota"})
+    # real prompts that merely mention quota are NOT probes
+    assert not quality_eval.is_machine_probe(
+        {"prompt_body": '[{"role":"user","content":"what is my API quota this month?"}]'})
+    # multi-message conversations are never probes
+    assert not quality_eval.is_machine_probe(
+        {"prompt_body": '[{"role":"user","content":"quota"},{"role":"assistant","content":"?"},{"role":"user","content":"quota"}]'})

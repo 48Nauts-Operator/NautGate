@@ -827,6 +827,162 @@ table.clickable tbody tr { cursor: pointer; }
   vertical-align: middle;
 }
 
+/* --- Session pulse (Audit page) ------------------------------------------ */
+#audit-pulse { margin-bottom: 14px; }
+.pulse-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 72px;
+  padding: 4px 2px 0;
+  overflow-x: auto;
+}
+.pulse-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  cursor: pointer;
+  padding: 2px 1px 0;
+  border-radius: 2px;
+}
+.pulse-slot:hover, .pulse-slot.selected { background: rgba(232, 131, 58, 0.14); }
+.pulse-bar {
+  width: 7px;
+  min-height: 4px;
+  border-radius: 1px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pulse-think { background: rgba(255, 255, 255, 0.45); width: 100%; }
+.pulse-mark {
+  font-size: 8px;
+  line-height: 1;
+  color: var(--warn);
+  margin-bottom: 1px;
+}
+.pulse-legend { margin: 4px 0 0; }
+.audit-report-frame { flex: 1; width: 100%; border: none; background: var(--bg); }
+
+/* --- Insights ------------------------------------------------------------- */
+.in-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.in-table th { text-align: left; color: var(--label); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.in-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.in-table .num { text-align: right; font-family: var(--mono); }
+.in-eff-row { display: grid; grid-template-columns: 64px minmax(180px, 1fr) 2fr; gap: 14px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.in-eff-score { font-size: 26px; font-weight: 700; font-family: var(--mono); text-align: center; }
+.in-eff-comps { display: flex; flex-direction: column; gap: 3px; }
+.in-comp { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.in-comp-label { width: 64px; color: var(--label); }
+.in-comp-track { flex: 1; height: 5px; background: var(--bg-raised); border-radius: 3px; overflow: hidden; }
+.in-comp-fill { display: block; height: 100%; border-radius: 3px; }
+.in-comp-val { width: 26px; text-align: right; font-family: var(--mono); color: var(--text-dim); }
+.in-spc-model { padding: 10px 12px 4px; border-bottom: 1px solid var(--border); }
+.in-spc-head { margin-bottom: 4px; font-size: 13px; }
+.in-metric-sel { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; padding: 3px 6px; }
+.in-scatter, .in-sankey { width: 100%; display: block; }
+.in-scatter { height: 240px; }
+.in-axis { fill: var(--label); font-size: 11px; font-family: var(--mono); }
+.in-shadow-exp { padding: 12px; border-bottom: 1px solid var(--border); }
+.in-shadow-head { display: flex; align-items: center; gap: 8px; font-size: 14px; flex-wrap: wrap; }
+.in-shadow-badge { font-size: 11px; padding: 2px 10px; border-radius: 10px; border: 1px solid var(--border); }
+.in-shadow-badge.good { color: var(--good); border-color: var(--good); }
+.in-shadow-badge.bad { color: var(--bad); border-color: var(--bad); }
+.in-shadow-badge.dim { color: var(--text-dim); }
+.in-shadow-stats { display: flex; gap: 16px; margin-top: 6px; font-size: 13px; font-family: var(--mono); flex-wrap: wrap; }
+.in-trial-row { display: grid; grid-template-columns: 84px 1fr auto auto; gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 12px; }
+.in-trial-row:hover { background: var(--bg-raised); }
+.in-trial-prompt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.in-verdict { font-size: 11px; padding: 1px 8px; border-radius: 8px; text-align: center; font-family: var(--mono); }
+.in-verdict-champion { background: rgba(76,141,255,0.15); color: var(--info); }
+.in-verdict-challenger { background: rgba(63,185,80,0.15); color: var(--good); }
+.in-verdict-tie { background: var(--bg-raised); color: var(--text-dim); }
+.in-verdict-error { background: rgba(229,72,77,0.15); color: var(--bad); }
+.in-trial-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr; gap: 10px; padding: 12px 16px; overflow: auto; }
+.in-trial-promptbox { grid-column: 1 / -1; }
+.in-trial-col-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--label); margin-bottom: 4px; }
+.in-trial-body { max-height: 320px; overflow: auto; margin: 0; }
+.in-trial-won .in-trial-col-head { color: var(--good); }
+
+/* --- Improvements (prompt coaching) --------------------------------------- */
+.imp-summary-grid { display: grid; grid-template-columns: minmax(300px, 460px) 1fr; gap: 24px; padding: 12px; }
+.imp-habit { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; border-bottom: 1px dotted var(--border); font-size: 13px; }
+.imp-habit-n { font-family: var(--mono); color: var(--warn); min-width: 34px; }
+.imp-card { padding: 14px 14px 12px; border-bottom: 1px solid var(--border); }
+.imp-card-head { display: flex; gap: 10px; align-items: baseline; }
+.imp-orig { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.imp-clarity { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 8px; }
+.imp-clarity-bad { background: rgba(229,72,77,0.15); color: var(--bad); }
+.imp-clarity-warn { background: rgba(214,161,0,0.15); color: var(--warn); }
+.imp-clarity-good { background: rgba(63,185,80,0.15); color: var(--good); }
+.imp-anti { color: var(--warn); font-size: 12px; margin-top: 6px; }
+.imp-notes { margin-top: 2px; }
+.imp-suggest { margin-top: 8px; }
+.imp-suggest-text { margin: 4px 0; max-height: 120px; overflow: auto; }
+.imp-actions { display: flex; gap: 8px; margin-top: 4px; }
+.imp-sim-result { margin-top: 10px; }
+.imp-sim-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; flex-wrap: wrap; }
+.imp-sim-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* --- UI v3: Experiments hero cards ---------------------------------------- */
+.exp-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; }
+.exp-card { display: flex; flex-direction: column; gap: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+.exp-tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.05em; color: var(--text-dim); background: var(--bg-raised); border-radius: 8px; padding: 2px 8px; }
+.exp-hero { display: flex; align-items: baseline; gap: 12px; }
+.exp-hero-num { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; line-height: 38px; }
+.exp-evidence-row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+.exp-bar { height: 5px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; }
+.exp-bar-fill { display: block; height: 100%; border-radius: 3px; }
+.exp-foot { display: flex; align-items: center; gap: 14px; border-top: 1px solid var(--border); padding-top: 11px; }
+.exp-promote { background: var(--accent); color: #0A0D12; border: none; border-radius: 8px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.exp-promote:hover { background: var(--accent-bright); }
+.nav-badge-live { background: #1f3d2a !important; color: var(--good) !important; }
+
+/* --- UI v3: Model Health --------------------------------------------------- */
+.mh-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.mh-card { display: flex; flex-direction: column; gap: 9px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; padding: 16px 18px; }
+.mh-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mh-name { font-size: 14px; font-weight: 600; }
+.mh-status { font-family: var(--mono); font-size: 10.5px; white-space: nowrap; }
+.mh-score { display: flex; align-items: baseline; gap: 8px; }
+.mh-score-num { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
+.mh-signal { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--bg-raised); cursor: pointer; }
+.mh-signal:hover { background: var(--bg-raised); }
+.mh-signal:last-child { border-bottom: none; }
+.mh-chip { width: 64px; flex-shrink: 0; text-align: center; font-family: var(--mono); font-size: 10.5px; border: 1px solid; border-radius: 8px; padding: 2px 0; }
+.mh-signal-text { flex: 1; font-size: 13px; color: var(--text); }
+.mh-signal-action { flex-shrink: 0; font-size: 12px; color: var(--accent-bright); }
+
+/* --- UI v3: Overview intelligence strip ------------------------------------ */
+.intel-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; font-size: 11.5px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-dim); }
+.intel-head .hint { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.intel-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.intel-tile { display: flex; flex-direction: column; gap: 8px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; padding: 16px 18px; cursor: pointer; }
+.intel-tile:hover { border-color: var(--accent); }
+.intel-label { font-size: 11.5px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-dim); }
+.intel-value { font-size: 27px; font-weight: 500; letter-spacing: -0.02em; line-height: 34px; }
+.intel-unit { font-size: 14px; color: var(--label); margin-left: 2px; }
+.intel-live { display: inline-block; vertical-align: middle; margin-left: 6px; background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.4); border-radius: 9px; padding: 1px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--good); }
+
+/* --- Bench ------------------------------------------------------------------ */
+.bn-prompt { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: inherit; font-size: 13px; resize: vertical; }
+.bn-models-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+.bn-model { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-family: var(--mono); font-size: 11.5px; }
+.bn-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.bn-tools-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+.bn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.bn-card { display: flex; flex-direction: column; gap: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; padding: 14px 16px; }
+.bn-card-err { border-color: rgba(229,72,77,0.4); }
+.bn-card-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: 13.5px; }
+.bn-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.bn-stat { display: flex; justify-content: space-between; font-size: 12px; border-bottom: 1px dotted var(--bg-raised); padding: 2px 0; }
+.bn-stat-label { color: var(--label); }
+.bn-stat-val { font-family: var(--mono); }
+.bn-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.bn-response summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+.bn-response pre { margin-top: 6px; max-height: 260px; }
+
 /* --- Lighthouse / Privacy ----------------------------------------------- */
 .lh-hero {
   display: flex;
@@ -1520,6 +1676,23 @@ html, body { height: 100%; }
 
 .app-shell { display: flex; height: 100vh; overflow: hidden; }
 
+/* --- Mobile drawer: hamburger + backdrop (desktop = hidden) ------------- */
+.nav-toggle {
+  display: none;
+  flex-shrink: 0;
+  width: 38px; height: 38px;
+  align-items: center; justify-content: center;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 9px; color: var(--text); cursor: pointer;
+}
+.nav-toggle svg { width: 20px; height: 20px; stroke: currentColor; }
+.nav-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, 0.55);
+}
+.app-shell.nav-open .nav-backdrop { display: block; }
+
 /* --- Sidebar ---------------------------------------------------------- */
 .sidebar {
   display: flex;
@@ -2000,4 +2173,73 @@ html, body { height: 100%; }
   text-align: center; padding: 10px 8px; border-radius: 6px;
   color: #fff; font-variant-numeric: tabular-nums; font-weight: 600;
   min-width: 64px;
+}
+
+/* ======================================================================
+   Responsive — full mobile pass
+   Tablet/phone breakpoint 820px (drawer + layout collapse), phone 560px.
+   ====================================================================== */
+@media (max-width: 820px) {
+  .nav-toggle { display: inline-flex; }
+
+  /* Sidebar becomes an off-canvas drawer, slid out by default. */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 50;
+    width: 264px;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 2px 0 24px rgba(0, 0, 0, 0.4);
+  }
+  .app-shell.nav-open .sidebar { transform: translateX(0); }
+
+  /* Header + content chrome tighten. */
+  .appmain { width: 100%; }
+  .appheader { padding: 0 14px; gap: 12px; height: 60px; }
+  .global-search { display: none; }   /* ⌘K palette still works via keyboard */
+  .header-status .hs-label { display: none; }
+  .appcontent { padding: 16px 14px; }
+  .page-title { font-size: 18px; }
+
+  /* KPI / stat rows wrap instead of squishing. */
+  .v2-stat-row { flex-wrap: wrap; }
+  .v2-stat-row > .v2-stat { flex: 1 1 140px; min-width: 140px; }
+
+  /* Collapse every two/multi-column content grid to one column. */
+  .exp-cards,
+  .imp-sim-cols,
+  .in-trial-grid,
+  .bn-stats { grid-template-columns: 1fr; }
+  .imp-summary-grid { grid-template-columns: 1fr; gap: 16px; }
+  .bn-models-row { grid-template-columns: 1fr 1fr; }
+  .lh-categories,
+  .coach-scores { grid-template-columns: repeat(2, 1fr); }
+
+  /* Wide tables scroll horizontally instead of overflowing the viewport. */
+  .in-table, .sessions-table, #bk-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Report / trial modals go near-fullscreen. */
+  .dr-report-content { width: 96vw; height: 92vh; }
+
+  /* Efficiency rows stack their three columns. */
+  .in-eff-row { grid-template-columns: 1fr; gap: 8px; }
+}
+
+@media (max-width: 560px) {
+  .appcontent { padding: 12px 10px; }
+  .page-subtitle { display: none; }        /* title alone; subtitle is chrome */
+  .v2-stat-row > .v2-stat { flex-basis: 100%; }
+  .bn-models-row,
+  .lh-categories,
+  .coach-scores { grid-template-columns: 1fr; }
+  .mh-cards, .intel-cards, .bn-grid { grid-template-columns: 1fr; }
+  .page-toolbar { gap: 10px; }
+  /* Let long code / token blocks wrap instead of forcing horizontal scroll. */
+  .code { word-break: break-all; }
 }

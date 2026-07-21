@@ -715,6 +715,10 @@ async def get_decision_detail(
                d.decision_provider             AS decision_provider,
                d.decision_model                AS decision_model,
                d.decision_reason               AS decision_reason,
+               d.fallback_chain                AS fallback_chain,
+               d.bloat_findings                AS bloat_findings,
+               d.bloat_score                   AS bloat_score,
+               d.estimated_waste_usd           AS estimated_waste_usd,
                d.prompt_excerpt                AS prompt_excerpt,
                d.prompt_body                   AS prompt_body,
                d.prompt_body_truncated_at_byte AS prompt_body_truncated_at_byte,
@@ -741,7 +745,9 @@ async def get_decision_detail(
                o.response_size_bytes           AS response_size_bytes,
                o.tool_calls_made               AS tool_calls_made,
                o.actual_model                  AS actual_model,
-               o.actual_provider               AS actual_provider
+               o.actual_provider               AS actual_provider,
+               o.used_fallback                 AS used_fallback,
+               o.fallback_count                AS fallback_count
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.id::text = $1 AND d.agent_id = $2
@@ -759,13 +765,18 @@ async def get_decision_detail(
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
     # JSONB fields come back as strings from asyncpg without a codec — try to parse.
-    for k in ("classified_signals", "brain_hints", "tool_calls_made"):
+    for k in ("classified_signals", "brain_hints", "tool_calls_made",
+              "fallback_chain", "bloat_findings"):
         v = d.get(k)
         if isinstance(v, str):
             try:
                 d[k] = json.loads(v)
             except (ValueError, TypeError):
                 pass
+    if d.get("bloat_score") is not None:
+        d["bloat_score"] = float(d["bloat_score"])
+    if d.get("estimated_waste_usd") is not None:
+        d["estimated_waste_usd"] = float(d["estimated_waste_usd"])
     # Token breakdown computed on read from prompt_body when body was captured.
     d["token_estimate"] = _token_breakdown_from_body(d.get("prompt_body"), _content_text, _estimate_tokens)
     # Full payload anatomy — bytes/tokens per section + the raw content of each.
@@ -1013,6 +1024,9 @@ async def get_recent_decisions(
                o.first_byte_ms      AS first_byte_ms,
                o.prompt_tokens      AS prompt_tokens,
                o.completion_tokens  AS completion_tokens,
+               o.reasoning_tokens   AS reasoning_tokens,
+               o.used_fallback      AS used_fallback,
+               o.fallback_count     AS fallback_count,
                o.cost_usd           AS cost_usd,
                o.was_empty          AS was_empty,
                o.was_truncated      AS was_truncated,

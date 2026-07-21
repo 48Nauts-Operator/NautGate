@@ -194,6 +194,25 @@ async def _process_chat_request(
 
     decision_id = uuid.uuid4()
     started = time.monotonic()
+
+    # In-flight prompt diet — only for agents where a shadow-PROVEN strategy
+    # was promoted (Insights → Shadow trials). Tool-free calls only, matching
+    # the evidence scope. The applied diet is recorded in brain_hints so the
+    # audit drawer shows exactly what was trimmed.
+    diet_note: dict | None = None
+    try:
+        from app.shadow import diet_apply_map
+        _diet_map = await diet_apply_map(pool)
+        _strategy = _diet_map.get(agent_id) or _diet_map.get("*")
+        if _strategy:
+            from app.diet import apply_diet_to_payload
+            diet_note = apply_diet_to_payload(payload, _strategy)
+            if diet_note:
+                log.info("prompt_diet_applied", agent_id=agent_id,
+                         decision_id=str(decision_id), **diet_note)
+    except Exception as exc:
+        log.warning("prompt_diet_failed", error=str(exc))
+
     messages = payload.get("messages")
     prompt_excerpt = queries.excerpt_last_user_message(messages)
 
@@ -250,6 +269,11 @@ async def _process_chat_request(
         plugin_override_model = agg["override_model"]
         if agg["preferred_tier"]:
             tier = agg["preferred_tier"]
+
+    # Record an applied prompt diet in brain_hints — the audit drawer's proof
+    # of what was trimmed in-flight and how much it saved.
+    if diet_note:
+        brain_hints = {**(brain_hints or {}), "diet": diet_note}
 
     # DECIDE — precedence ladder per Tech Paper §2.5:
     #   2: X-Naut-Model header (per-request hard override)
@@ -538,6 +562,15 @@ async def _process_chat_request(
                 judge_client=getattr(request.app.state, "quality_judge", None),
                 pricing=pricing,
             )
+            # Champion–challenger shadow trial — sampled, cost-capped,
+            # never touches the response path.
+            from app.shadow import process_shadow as _process_shadow
+            await _process_shadow(
+                pool,
+                decision_id=decision_id,
+                shadow_client=getattr(request.app.state, "quality_judge", None),
+                pricing=pricing,
+            )
         except Exception as exc:
             log.warning("brain_layer_failed", error=str(exc), decision_id=str(decision_id))
 
@@ -736,6 +769,13 @@ def _streaming_response(
                             pool,
                             decision_id=decision_id,
                             judge_client=getattr(request.app.state, "quality_judge", None),
+                            pricing=stream_pricing,
+                        )
+                        from app.shadow import process_shadow as _process_shadow
+                        await _process_shadow(
+                            pool,
+                            decision_id=decision_id,
+                            shadow_client=getattr(request.app.state, "quality_judge", None),
                             pricing=stream_pricing,
                         )
                     except Exception as exc:
@@ -1550,6 +1590,324 @@ async def decision_detail(decision_id: str, request: Request) -> Response:
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
     return JSONResponse(row)
+
+
+@router.get("/insights/headline")
+async def insights_headline(request: Request) -> Response:
+    """The Overview intelligence strip — four headline numbers in one call."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app import insights
+    return JSONResponse(await insights.q_headline(
+        pool, getattr(request.app.state, "pricing", None)))
+
+
+_INSIGHT_PANELS = ("simulator", "substitution", "spc", "efficiency", "dataflow", "overthinking", "tooling")
+
+
+@router.get("/insights/{panel_name}")
+async def insights_panel(panel_name: str, request: Request) -> Response:
+    """Next-level analytics panels (Insights page). Read-only aggregates —
+    see app/insights.py for the per-panel semantics."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    if panel_name not in _INSIGHT_PANELS:
+        raise HTTPException(status_code=404, detail="unknown panel")
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+        days = int(request.query_params.get("days", "7"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours/days must be integers") from None
+    hours = max(1, min(hours, 24 * 90))
+    days = max(1, min(days, 90))
+    metric = request.query_params.get("metric", "completion_tokens")
+    agent_id = request.query_params.get("agent_id", "").strip() or None
+    from app import insights
+    if metric not in insights.SPC_METRICS:
+        raise HTTPException(status_code=400, detail="unknown metric")
+    data = await insights.panel(
+        panel_name, pool,
+        pricing=getattr(request.app.state, "pricing", None),
+        hours=hours, days=days, metric=metric, agent_id=agent_id,
+    )
+    return JSONResponse(data)
+
+
+@router.get("/improvements")
+async def improvements_list(request: Request) -> Response:
+    """Coachable prompts + writing-style learnings for the Improvements page."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="days must be an integer") from None
+    agent_id = request.query_params.get("agent_id", "").strip() or None
+    from app import insights
+    return JSONResponse(await insights.q_improvements(
+        pool, max(1, min(days, 365)), agent_id=agent_id))
+
+
+@router.post("/improve/simulate/{decision_id}")
+async def improve_simulate(decision_id: str, request: Request) -> Response:
+    """Run the judge's suggested rewrite against the same model and blind-judge
+    it vs the original answer. Synchronous — the user clicked and is waiting."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+    from app.shadow import simulate_improvement
+    result = await simulate_improvement(
+        pool, decision_id=uuid.UUID(decision_id),
+        client=getattr(request.app.state, "quality_judge", None),
+        pricing=getattr(request.app.state, "pricing", None))
+    status = 200 if "error" not in result else 422
+    return JSONResponse(result, status_code=status)
+
+
+@router.get("/reports/audit")
+async def reports_audit(request: Request) -> Response:
+    """Aggregate payload for the Reports page — team LLM usage & governance
+    audit over a window. Read-only; heavier than a panel, on-demand only."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="days must be an integer") from None
+    from app import insights
+    return JSONResponse(await insights.q_audit_report(pool, max(1, min(days, 365))))
+
+
+# ── External model/provider status ──────────────────────────────────────────
+
+_STATUS_CACHE: dict[str, tuple[float, object]] = {}
+_STATUS_TTL = 300.0  # 5 min — status pages themselves update slower than this
+
+STATUSPAGES = (
+    ("anthropic", "https://status.claude.com/api/v2/summary.json", "https://status.claude.com"),
+    ("openai", "https://status.openai.com/api/v2/summary.json", "https://status.openai.com"),
+)
+
+
+async def _cached(key: str, fetch) -> object:
+    import time as _t
+    hit = _STATUS_CACHE.get(key)
+    now = _t.monotonic()
+    if hit and now - hit[0] < _STATUS_TTL:
+        return hit[1]
+    data = await fetch()
+    _STATUS_CACHE[key] = (now, data)
+    return data
+
+
+@router.get("/health/statuspages")
+async def health_statuspages(request: Request) -> Response:
+    """Official provider status pages (Statuspage JSON), 5-min cached."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    client = getattr(request.app.state, "quality_judge", None)
+
+    async def fetch():
+        out = []
+        for name, url, home in STATUSPAGES:
+            entry = {"provider": name, "url": home, "indicator": "unknown",
+                     "description": None, "degraded": []}
+            try:
+                r = await client.get(url, timeout=8.0)
+                d = r.json()
+                entry["indicator"] = (d.get("status") or {}).get("indicator", "unknown")
+                entry["description"] = (d.get("status") or {}).get("description")
+                entry["degraded"] = [
+                    {"name": c.get("name"), "status": c.get("status")}
+                    for c in d.get("components", [])
+                    if c.get("status") not in (None, "operational")][:8]
+            except Exception as exc:
+                entry["error"] = str(exc)[:120]
+            out.append(entry)
+        return out
+
+    return JSONResponse({"pages": await _cached("statuspages", fetch)})
+
+
+@router.get("/health/openrouter-models")
+async def health_openrouter_models(request: Request) -> Response:
+    """Per-model availability from OpenRouter's endpoints API for the models
+    this gateway actually used recently (+ optional ?watch=a/b,c/d extras).
+    uptime_last_30m per serving provider — 'listed but unusable' made visible."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    client = getattr(request.app.state, "quality_judge", None)
+    watch = [w.strip() for w in request.query_params.get("watch", "").split(",") if w.strip()]
+
+    async def fetch():
+        import asyncio as _aio
+        import os as _os
+        rows = await pool.fetch(
+            """
+            SELECT d.decision_model AS model, COUNT(*) AS n
+              FROM nautgate.route_decisions d
+             WHERE d.ts > NOW() - interval '7 days'
+               AND d.decision_model LIKE 'openrouter/%'
+               AND d.decision_model != 'openrouter/auto'
+             GROUP BY 1 ORDER BY 2 DESC LIMIT 8
+            """)
+        slugs = [r["model"].removeprefix("openrouter/") for r in rows]
+        for w in watch:
+            if w not in slugs:
+                slugs.append(w)
+        headers = {"Authorization": f"Bearer {_os.environ.get('OPENROUTER_API_KEY', '')}"}
+
+        async def one(slug: str) -> dict:
+            try:
+                r = await client.get(
+                    f"https://openrouter.ai/api/v1/models/{slug}/endpoints",
+                    headers=headers, timeout=8.0)
+                if r.status_code == 404:
+                    return {"model": slug, "listed": False}
+                eps = (r.json().get("data") or {}).get("endpoints") or []
+                ups = [e.get("uptime_last_30m") for e in eps if e.get("uptime_last_30m") is not None]
+                return {"model": slug, "listed": True, "providers": len(eps),
+                        "best_uptime_30m": round(max(ups), 1) if ups else None,
+                        "deranked": sum(1 for e in eps if (e.get("status") or 0) < 0)}
+            except Exception as exc:
+                return {"model": slug, "listed": None, "error": str(exc)[:120]}
+
+        return list(await _aio.gather(*(one(s) for s in slugs[:12])))
+
+    key = "or-models:" + ",".join(sorted(watch))
+    return JSONResponse({"models": await _cached(key, fetch)})
+
+
+# ── Model test bench ─────────────────────────────────────────────────────────
+
+
+@router.post("/bench/run")
+async def bench_run(request: Request) -> Response:
+    """Fan one task out to up to 4 models; tool calls captured, never executed.
+    Synchronous — the user clicked Run and is watching."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    body = await request.json()
+    prompt = (body.get("prompt") or "").strip()
+    models = body.get("models") or []
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    if not isinstance(models, list) or not any((m or "").strip() for m in models):
+        raise HTTPException(status_code=400, detail="at least one model required")
+    tools = body.get("tools")
+    if tools is not None and not isinstance(tools, list):
+        raise HTTPException(status_code=400, detail="tools must be a list")
+    from app import bench
+    if tools == "sample":
+        tools = bench.SAMPLE_TOOLS
+    run = await bench.run_bench(
+        pool, pricing=getattr(request.app.state, "pricing", None),
+        client=getattr(request.app.state, "quality_judge", None),
+        agent_id=agent_id, prompt=prompt, models=[str(m) for m in models],
+        tools=tools, max_tokens=int(body.get("max_tokens") or 1000))
+    return JSONResponse(run)
+
+
+@router.get("/bench")
+async def bench_list(request: Request) -> Response:
+    """Recent bench runs + the passive working comparison."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    agent_id = request.query_params.get("agent_id", "").strip() or None
+    try:
+        hours = int(request.query_params.get("hours", "24"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    from app import bench
+    return JSONResponse({
+        "runs": await bench.recent_runs(pool),
+        "working": await bench.working_compare(
+            pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id),
+        "sample_tools": bench.SAMPLE_TOOLS,
+    })
+
+
+# ── Champion–challenger shadow testing ──────────────────────────────────────
+
+
+@router.get("/shadow")
+async def shadow_summary(request: Request) -> Response:
+    """Experiments summary + config for the Insights shadow panel."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app import shadow
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="days must be an integer") from None
+    data = await shadow.summary(pool, days=max(1, min(days, 90)))
+    data["config"] = await shadow.shadow_config(pool)
+    return JSONResponse(data)
+
+
+@router.get("/shadow/trial/{trial_id}")
+async def shadow_trial(trial_id: str, request: Request) -> Response:
+    """One paired trial with both full answers — the drill-down proof view."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app import shadow
+    row = await shadow.trial_detail(pool, trial_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse(row)
+
+
+@router.put("/shadow/config")
+async def shadow_config_update(request: Request) -> Response:
+    """Patch shadow settings (enabled, sample_rate, challenger, daily cap)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    body = await request.json()
+    allowed = {"enabled", "sample_rate", "challenger_provider", "challenger_model",
+               "daily_cost_cap_usd", "max_prompt_bytes",
+               "diet_enabled", "diet_strategy", "diet_apply"}
+    patch = {k: v for k, v in (body or {}).items() if k in allowed}
+    if not patch:
+        raise HTTPException(status_code=400, detail="no valid keys")
+    if "sample_rate" in patch:
+        try:
+            patch["sample_rate"] = max(0.0, min(1.0, float(patch["sample_rate"])))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="sample_rate must be a number") from None
+    from app.app_config import get_settings, update_settings
+    current = dict((await get_settings(pool)).get("shadow") or {})
+    current.update(patch)
+    await update_settings(pool, {"shadow": current})
+    from app import shadow
+    shadow.diet_cache_clear()
+    return JSONResponse(await shadow.shadow_config(pool))
 
 
 @router.get("/scorecard")
@@ -3096,6 +3454,21 @@ async def notifications(request: Request) -> Response:
                      "today — subscription cap hit"),
             "href": "#cost",
         })
+
+    # Usage bursts — an agent running >4× its hourly baseline right now.
+    # Catches runaway loops within the hour they start.
+    try:
+        from app.insights import q_bursts
+        for b in await q_bursts(pool):
+            items.insert(0, {
+                "level": "warning",
+                "text": (f"Usage burst: {b['agent_id']} at {b['calls']} calls this hour "
+                         f"(baseline {b['med_calls']:.0f}/h)"
+                         + (f" · ${b['spend']:.2f}" if b["spend"] and b["spend"] > 0.5 else "")),
+                "href": "#audit",
+            })
+    except Exception as exc:
+        log.warning("burst_check_failed", error=str(exc))
 
     return JSONResponse({"items": items})
 

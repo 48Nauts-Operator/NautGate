@@ -46,14 +46,32 @@ async def ping_once(client: httpx.AsyncClient, provider: str, model: str, pricin
     if not transports:
         return {"status": "no-cred", "status_code": None, "latency_ms": None, "via": None}
     r = await _run_canary(client, _PING, provider, model, transports[0], pricing)
-    if r.error or r.status_code == 0:
-        status = "down"
-    elif r.status_code in (429, 529):
+    # Classify by status code FIRST — a 4xx also populates r.error with the
+    # body text, so checking r.error first would misfile everything as down.
+    if r.status_code in (429, 529):
         status = "degraded"
-    elif 200 <= r.status_code < 300:
+    elif r.status_code and 200 <= r.status_code < 300:
         status = "ok"
+    elif r.status_code in (400, 401, 403):
+        # A fixed 1-token ping that 4xxs is OUR credential/billing problem
+        # (expired key, no credits), not a provider outage. Surfacing it as
+        # "down" made the badge lie whenever traffic went quiet.
+        status = "no-cred"
     else:
         status = "down"
+    # No usable first-party credential for a Claude target → ping the same
+    # model through OpenRouter instead. Measures Claude availability via a
+    # reseller rather than api.anthropic.com, marked in `via` for honesty.
+    if status == "no-cred" and provider in ("anthropic", "passthrough") and "claude" in model.lower():
+        from app.shadow import openrouter_claude_id
+        alt = openrouter_claude_id(model)
+        alt_transports = _select_transports("openrouter", alt, prefer_oauth=False)
+        if alt_transports:
+            r2 = await _run_canary(client, _PING, "openrouter", alt, alt_transports[0], pricing)
+            if r2.status_code and 200 <= r2.status_code < 300:
+                return {"status": "ok", "status_code": r2.status_code,
+                        "latency_ms": r2.first_byte_ms or r2.duration_ms,
+                        "via": "openrouter-fallback"}
     return {"status": status, "status_code": r.status_code,
             "latency_ms": r.first_byte_ms or r.duration_ms, "via": r.via}
 

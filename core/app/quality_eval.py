@@ -47,6 +47,9 @@ You always respond with valid JSON matching this exact schema. Do not include an
   "reasoning_efficiency": 0-5,   // Was the reasoning proportional to the task? 5 = tight, 3 = some bloat, 0 = thought forever then produced little.
   "action_compliance":    0-5,   // Did the TOOL SEQUENCE match what the user asked for? 5 = did exactly what was requested in the right order, 3 = mostly aligned with one shortcut, 0 = ignored instructions entirely (e.g. user said "read foo.md then implement" and the model edited without reading). Score 0 if no tools were used AND the task required them. Score 5 if no tools were needed and the model correctly answered inline.
   "prompt_clarity":       0-5,   // Was the user's prompt clear enough? 5 = unambiguous, 3 = needed inference, 0 = vague/missing context.
+  "data_categories_shared": [...], // What KINDS of content the captured prompt shipped upstream. Zero or more of: "source_code", "config", "credentials_or_secrets", "personal_data", "internal_docs", "conversation_history", "tool_schemas", "logs_or_errors", "file_paths", "other". Base this ONLY on the captured prompt text.
+  "irrelevant_share":     0-100, // Your estimate of the PERCENTAGE of the prompt payload that was NOT needed to answer the final user question (stale history turns about other topics, files never referenced by the task, boilerplate). 0 = everything was relevant. Be conservative: only count content clearly unrelated to the task.
+  "irrelevant_items":     [...], // Up to 5 short strings naming the irrelevant content, each ≤80 chars, specific enough to find. Example: "3 history turns about dashboard CSS unrelated to this DB question". Empty array when irrelevant_share is 0.
   "failure_tags":         [...], // Zero or more of: "looped", "hallucination", "off_task", "over_thinking", "under_thinking", "refusal", "partial_answer", "wrong_answer", "tool_misuse", "truncated", "multi_task_drop", "vague_scope", "skipped_doc", "edit_without_read", "premature_action", "retry_loop". Empty array if the response was good.
   "anti_pattern":         "...", // What the user did WRONG in their prompt that caused this response, in ≤80 chars. Examples: "Asked for 3 things in one prompt without ordering", "Used 'check' without saying what to verify", "No success criteria provided". Empty string when the prompt was good and the model failed on its own.
   "suggested_prompt":     "...", // A concrete rewritten prompt the user SHOULD have sent. ≤300 chars. MANDATORY when task_completion < 4 OR prompt_clarity < 4 — produce a real rewrite, not "be clearer". Empty string ONLY when both scores are ≥ 4 (i.e. the prompt was fine).
@@ -72,6 +75,8 @@ Agentic / tool-sequence anti-patterns (score these from the tool_sequence in met
 suggested_prompt MUST be concrete and actionable. Bad: "Be more specific". Good: "Refactor only the auth() function in src/auth.py — keep the public signature, split internal logic into 3 helpers (parse, validate, persist). Return the diff only." If you can't think of a real rewrite, then `prompt_clarity` should be ≥ 4 and you can leave it empty.
 
 anti_pattern should describe the SHAPE of the user's mistake in one short phrase, suitable for aggregating across many evals to find recurring habits. Match an existing pattern phrasing when one fits.
+
+data_categories_shared, irrelevant_share and irrelevant_items describe the PROMPT payload ONLY — never the response. Even when the response is empty, still analyse the prompt content for these three fields.
 
 If the response is empty or the request errored, score everything 0 and add the appropriate failure_tag (e.g. "refusal" if the model declined, "truncated" if the response was cut off mid-sentence).
 
@@ -138,6 +143,40 @@ def _bump_spend(amount: float) -> None:
 
 # ── Trigger logic ───────────────────────────────────────────────────────────
 
+# Housekeeping prompts clients send machine-to-machine. Claude Code fires a
+# literal one-word "quota" request on every model switch to check availability;
+# judging those wastes judge spend and pollutes the Quality stats with 0-scores
+# ("please provide details about the quota you want to discuss").
+_PROBE_PROMPTS = frozenset({"quota", "ping"})
+
+
+def is_machine_probe(decision: dict) -> bool:
+    """True when the call is a known client health-probe, not a conversation.
+
+    Shape: exactly one user message whose entire content is a probe word.
+    Manual evals (the drawer's Run-eval button) bypass this on purpose.
+    """
+    body = decision.get("prompt_body")
+    text: str | None = None
+    if body:
+        try:
+            msgs = json.loads(body)
+            if isinstance(msgs, dict):
+                msgs = msgs.get("messages")
+            if isinstance(msgs, list) and len(msgs) == 1 and isinstance(msgs[0], dict):
+                c = msgs[0].get("content")
+                if isinstance(c, list):
+                    c = " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+                if isinstance(c, str):
+                    text = c.strip()
+        except (ValueError, TypeError):
+            pass
+    if text is None:
+        ex = (decision.get("prompt_excerpt") or "").strip()
+        # Excerpt fallback only for bodies short enough to BE the whole prompt.
+        text = ex if 0 < len(ex) < 20 else None
+    return text is not None and text.lower() in _PROBE_PROMPTS
+
 
 def should_evaluate(
     decision: dict, outcome: dict, config: dict,
@@ -151,6 +190,8 @@ def should_evaluate(
         return (False, "disabled")
     if (decision.get("classified_sensitivity") or "").lower() == "secret":
         return (False, "sensitive")
+    if is_machine_probe(decision):
+        return (False, "machine_probe")
 
     # Anomaly triggers — anything we'd want to investigate.
     if outcome.get("was_empty"):
@@ -228,10 +269,29 @@ def _summarize_tool_sequence(tool_calls: Any) -> list[dict]:
     return out
 
 
+def _readable_response(raw: str) -> str:
+    """Captured response_body is the raw SSE stream for streamed calls — the
+    judge reads `event: message_start` framing and scores everything 0. Extract
+    the assembled text via the streaming parser; fall back to the raw body for
+    non-streamed (plain JSON) responses."""
+    if not raw or "data:" not in raw[:2000]:
+        return raw
+    from app.streaming import parse_sse_for_outcome
+    try:
+        parsed = parse_sse_for_outcome(raw.encode("utf-8", errors="replace"))
+    except Exception:
+        return raw
+    text = parsed.get("assembled_content") or ""
+    calls = parsed.get("tool_calls") or []
+    if calls:
+        text += "\n\n[tool calls made: " + ", ".join(c.get("name", "?") for c in calls) + "]"
+    return text or raw
+
+
 def _make_user_message(decision: dict, outcome: dict) -> str:
     """Assemble the judge's user-turn from captured bodies + key metadata."""
     pb = (decision.get("prompt_body") or decision.get("prompt_excerpt") or "")[:8000]
-    rb = (outcome.get("response_body") or "")[:8000]
+    rb = _readable_response(outcome.get("response_body") or "")[:8000]
     tool_sequence = _summarize_tool_sequence(outcome.get("tool_calls_made"))
     meta = {
         "model": decision.get("decision_model"),
@@ -299,7 +359,7 @@ async def _call_judge(
         ],
         "temperature": 0.0,
         "response_format": {"type": "json_object"},
-        "max_tokens": 600,
+        "max_tokens": 800,
     }
 
     try:
@@ -360,7 +420,9 @@ async def _persist(
     rubric_payload = {
         k: rubric.get(k) for k in
         ("task_understanding", "task_completion", "reasoning_efficiency",
-         "action_compliance", "prompt_clarity")
+         "action_compliance", "prompt_clarity",
+         # Data-relevance section (audit analyser) — lives in the same jsonb.
+         "data_categories_shared", "irrelevant_share", "irrelevant_items")
         if isinstance(rubric, dict)
     }
     suggested = rubric.get("suggested_prompt") if isinstance(rubric, dict) else None
@@ -392,7 +454,7 @@ async def _load_pair(pool, decision_id) -> tuple[dict | None, dict | None]:
                    o.status_code, o.was_empty, o.was_truncated,
                    o.client_disconnected, o.prompt_tokens, o.completion_tokens,
                    o.reasoning_tokens, o.duration_ms, o.response_body,
-                   o.tool_calls_made
+                   o.tool_calls_made, o.cost_usd, o.notional_cost_usd
               FROM nautgate.route_decisions d
               LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
              WHERE d.id = $1
@@ -424,6 +486,8 @@ async def _load_pair(pool, decision_id) -> tuple[dict | None, dict | None]:
         "duration_ms": row["duration_ms"],
         "response_body": row["response_body"],
         "tool_calls_made": row["tool_calls_made"],
+        "cost_usd": row["cost_usd"],
+        "notional_cost_usd": row["notional_cost_usd"],
     }
     return decision, outcome
 

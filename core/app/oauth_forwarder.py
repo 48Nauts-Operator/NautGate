@@ -306,6 +306,20 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         )
                     except Exception as exc:
                         log.warning("oauth_quality_failed", error=str(exc))
+                    # Brain layer — same rationale as the Anthropic forwarder:
+                    # passthrough traffic must feed the scorecard. Waste stays
+                    # notional; real cost accounting untouched.
+                    try:
+                        from app.scorecard import process_brain as _process_brain
+                        await _process_brain(
+                            pool,
+                            getattr(request.app.state, "pricing", None),
+                            decision_id=decision_id,
+                            actual_provider="chatgpt-oauth",
+                            actual_model="codex-subscription",
+                        )
+                    except Exception as exc:
+                        log.warning("oauth_brain_failed", error=str(exc))
                     # Engram-OSS / SecondBrain memory ingest — byte-by-byte
                     # parity with flow-memory-proxy's storeDelta:
                     #   - agent_id constant "codex" (matches proxy.js:138)

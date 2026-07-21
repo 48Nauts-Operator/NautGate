@@ -487,8 +487,43 @@ function extractDimensionScores(prompt: string, systemPrompt: string | undefined
 // PROVIDER FORWARDING
 // ══════════════════════════════════════════════════════════════
 
+// Resolve a model key to a ModelDef. Known keys come from the MODELS table;
+// any unknown `openrouter/<vendor>/<slug>` is passed straight through to
+// OpenRouter (it has hundreds of models — we don't mirror the catalogue).
+// Prices unknown for passthrough models → 0; actual cost comes from the
+// upstream usage in the response. ponytail: passthrough only for openrouter/*,
+// add other providers' passthrough when a caller actually needs one.
+function resolveModel(modelKey: string): ModelDef | undefined {
+  const known = MODELS[modelKey];
+  if (known) return known;
+  if (modelKey.startsWith("openrouter/")) {
+    return {
+      id: modelKey.slice("openrouter/".length),
+      provider: "openrouter" as ModelDef["provider"],
+      inputPrice: 0,
+      outputPrice: 0,
+      contextWindow: 0,
+    };
+  }
+  // Anthropic passthrough: clients send dashed snapshot ids (claude-opus-4-8,
+  // claude-haiku-4-5-20251001, claude-fable-5) that the curated MODELS map
+  // doesn't list. Silently routing those to the DEFAULT provider served
+  // "Claude" requests with Gemini — forward unknown claude-* ids verbatim
+  // to Anthropic instead. Pricing 0 = unknown; NautGate prices by its own table.
+  if (modelKey.startsWith("claude-") || modelKey.startsWith("anthropic/claude-")) {
+    return {
+      id: modelKey.replace(/^anthropic\//, ""),
+      provider: "anthropic" as ModelDef["provider"],
+      inputPrice: 0,
+      outputPrice: 0,
+      contextWindow: 200_000,
+    };
+  }
+  return undefined;
+}
+
 async function forwardToProvider(modelKey: string, body: any, stream: boolean): Promise<Response> {
-  const modelDef = MODELS[modelKey];
+  const modelDef = resolveModel(modelKey);
   if (!modelDef) throw new Error(`Unknown model: ${modelKey}`);
 
   if (modelDef.provider === "anthropic") {
@@ -1003,7 +1038,9 @@ app.post("/v1/chat/completions", async (req, res) => {
     if (requestedModel.startsWith("naut/") || requestedModel === "auto" || requestedModel === "eco" || requestedModel === "premium") {
       const p = requestedModel.replace("naut/", "");
       if (p === "eco" || p === "auto" || p === "premium") profile = p;
-    } else if (MODELS[requestedModel]) {
+    } else if (resolveModel(requestedModel)) {
+      // Anything resolvable (curated map, openrouter/*, claude-* passthrough)
+      // is a DIRECT request — never silently re-route an explicit model.
       directModel = requestedModel;
     } else {
       profile = currentProfile;
@@ -1024,7 +1061,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     let decision: RoutingDecision;
     if (directModel) {
-      const m = MODELS[directModel]!;
+      const m = resolveModel(directModel)!;
       decision = { model: directModel, provider: m.provider, tier: "MEDIUM" as Tier, confidence: 1.0, reasoning: "direct model request", costPer1MInput: m.inputPrice, costPer1MOutput: m.outputPrice };
     } else {
       decision = routeRequest(prompt, systemPrompt, profile);
@@ -1111,7 +1148,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
       const latencyMs = Date.now() - requestStart;
       const inputTokens = Math.ceil(JSON.stringify(messages).length / 4);
-      const m = MODELS[usedModel] ?? MODELS[decision.model]!;
+      const m = resolveModel(usedModel) ?? resolveModel(decision.model)!;
       const costUsd = (inputTokens / 1_000_000) * m.inputPrice + (totalOutput / 1_000_000) * m.outputPrice;
 
       broadcastEvent({
@@ -1134,7 +1171,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       const latencyMs = Date.now() - requestStart;
       const inputTokens = data.usage?.prompt_tokens ?? Math.ceil(JSON.stringify(messages).length / 4);
       const outputTokens = data.usage?.completion_tokens ?? 0;
-      const m = MODELS[usedModel] ?? MODELS[decision.model]!;
+      const m = resolveModel(usedModel) ?? resolveModel(decision.model)!;
       const costUsd = (inputTokens / 1_000_000) * m.inputPrice + (outputTokens / 1_000_000) * m.outputPrice;
 
       broadcastEvent({

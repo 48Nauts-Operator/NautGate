@@ -142,6 +142,44 @@
 
   let sessionPage = 0;
   let sessionPageSize = 10;
+  // Click-to-sort state for the sessions table. key=null → localStorage order.
+  let sessionSort = { key: null, dir: 1 };
+
+  // Dashboard-local: hide auto-discovered sessions idle longer than this many
+  // days so the list doesn't grow to hundreds of pages. Saved token sessions
+  // and the active session are never hidden.
+  function archiveDays() {
+    const v = parseInt(localStorage.getItem("ng_session_archive_days") || "30", 10);
+    return Number.isFinite(v) && v > 0 ? v : 30;
+  }
+  function withinArchiveWindow(sessions, activeId) {
+    const cutoff = Date.now() - archiveDays() * 86400000;
+    return sessions.filter(s =>
+      s.id === activeId ||          // never hide the active session
+      !s.last_seen_at ||            // never-used session (e.g. just-added token)
+      new Date(s.last_seen_at).getTime() >= cutoff
+    );
+  }
+
+  function sessionSortVal(s, key) {
+    if (key === "label") return (s.label || s.agent_id || "").toLowerCase();
+    if (key === "agent") return (s.agent_id || "").toLowerCase();
+    if (key === "last_seen_at") return s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
+    return "";
+  }
+  function sortSessions(arr) {
+    if (!sessionSort.key) return arr;
+    const { key, dir } = sessionSort;
+    return [...arr].sort((a, b) => {
+      const va = sessionSortVal(a, key), vb = sessionSortVal(b, key);
+      return va < vb ? -dir : va > vb ? dir : 0;
+    });
+  }
+  function sortHead(key, label) {
+    const active = sessionSort.key === key;
+    const caret = active ? (sessionSort.dir === 1 ? " ▲" : " ▼") : "";
+    return `<th class="sess-sort" data-sort="${key}" style="cursor:pointer;user-select:none">${label}${caret}</th>`;
+  }
 
   function renderSessionsPager(total) {
     const pager = document.getElementById("sessions-pager");
@@ -161,8 +199,9 @@
   function renderSessions() {
     const list = document.getElementById("sessions-list");
     if (!list) return;
-    const allSessions = loadSessions();
-    const activeId = getActiveSessionId() || (allSessions[0]?.id ?? "");
+    const rawSessions = loadSessions();
+    const activeId = getActiveSessionId() || (rawSessions[0]?.id ?? "");
+    const allSessions = withinArchiveWindow(rawSessions, activeId);
 
     if (!allSessions.length) {
       list.innerHTML = '<p class="hint">No saved sessions. Add one below — paste a bearer token (ng_…) and optionally label it.</p>';
@@ -172,10 +211,11 @@
 
     const maxPage = Math.max(0, Math.ceil(allSessions.length / sessionPageSize) - 1);
     if (sessionPage > maxPage) sessionPage = maxPage;
-    const sessions = allSessions.slice(sessionPage * sessionPageSize, sessionPage * sessionPageSize + sessionPageSize);
+    const sorted = sortSessions(allSessions);
+    const sessions = sorted.slice(sessionPage * sessionPageSize, sessionPage * sessionPageSize + sessionPageSize);
     renderSessionsPager(allSessions.length);
 
-    list.innerHTML = '<table class="sessions-table"><thead><tr><th></th><th>label</th><th>agent</th><th>token</th><th>last used</th><th></th></tr></thead><tbody>'
+    list.innerHTML = `<table class="sessions-table"><thead><tr><th></th>${sortHead("label", "label")}${sortHead("agent", "agent")}<th>token</th>${sortHead("last_seen_at", "last used")}<th></th></tr></thead><tbody>`
       + sessions.map(s => {
         const isActive = s.id === activeId;
         const labelText = s.label || (s.agent_id || "(unlabeled)");
@@ -203,6 +243,15 @@
           </tr>`;
       }).join("")
       + '</tbody></table>';
+
+    // Click a sortable header → set/toggle sort, reset to first page.
+    list.querySelectorAll("[data-sort]").forEach(th => th.addEventListener("click", () => {
+      const k = th.getAttribute("data-sort");
+      if (sessionSort.key === k) sessionSort.dir *= -1;
+      else sessionSort = { key: k, dir: 1 };
+      sessionPage = 0;
+      renderSessions();
+    }));
 
     // Wire up actions.
     list.querySelectorAll("[data-sess-activate]").forEach(b => b.addEventListener("click", () => {
@@ -234,7 +283,7 @@
     // ?agent_id=<x> using a fallback owned token for auth.
     if (!getToken()) return;
     try {
-      const res = await fetch("/v1/agents/discovered?hours=168",
+      const res = await fetch("/v1/agents/discovered?hours=" + (archiveDays() * 24),
         { headers: { Authorization: "Bearer " + getToken() } });
       if (!res.ok) return;
       const r = await res.json();
@@ -405,8 +454,19 @@
     a.addEventListener("click", (ev) => {
       ev.preventDefault();
       activateTab(a.dataset.tab);
+      closeNavDrawer();  // collapse the mobile drawer after picking a page
     });
   });
+
+  // --- Mobile nav drawer (collapsible sidebar) --------------------------
+  const _shell = document.querySelector(".app-shell");
+  function closeNavDrawer() { _shell && _shell.classList.remove("nav-open"); }
+  document.getElementById("nav-toggle")?.addEventListener("click", () => {
+    _shell && _shell.classList.toggle("nav-open");
+  });
+  document.getElementById("nav-backdrop")?.addEventListener("click", closeNavDrawer);
+  // Esc closes the drawer too.
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeNavDrawer(); });
 
   // Header page title + one-line subtitle per tab (sidebar chrome).
   const PAGE_META = {
@@ -419,6 +479,13 @@
     drift:     ["Behavior Drift", "Silent provider-side change detection"],
     quality:   ["Quality", "LLM-as-judge evaluations over the audit log"],
     probe:     ["LLM Probing", "Provenance & degradation monitoring"],
+    insights:  ["Insights", "Counterfactuals, SPC & efficiency — the research view"],
+    experiments: ["Experiments", "Champion–challenger evidence · blind-judged on real traffic"],
+    modelhealth: ["Model Health", "One model, one verdict — trust, drift, behavior & probes"],
+    improve:   ["Improvements", "Prompt coaching — learn from your own calls"],
+    tooling:   ["Tooling", "What connected MCPs cost to carry & save in discovery"],
+    bench:     ["Bench", "Same task, N models — behavior, tools, tokens & cost side by side"],
+    reports:   ["Reports", "Print-ready usage & governance audits"],
     cost:      ["Cost", "Spend & subscription savings"],
     cache:     ["Prompt Cache", "Prompt-cache accounting & leak detector"],
     privacy:   ["Privacy", "Lighthouse-style audit of recent prompts"],
@@ -514,6 +581,13 @@
     else if (activeTab === "drift") loadDrift();
     else if (activeTab === "probe") loadProbe();
     else if (activeTab === "quality") loadQuality();
+    else if (activeTab === "insights") loadInsights();
+    else if (activeTab === "experiments") loadExperiments();
+    else if (activeTab === "modelhealth") loadModelHealth();
+    else if (activeTab === "improve") loadImprove();
+    else if (activeTab === "tooling") loadTooling();
+    else if (activeTab === "bench") loadBench();
+    else if (activeTab === "reports") { /* on-demand page — nothing to auto-load */ }
     else if (activeTab === "behavior") loadBehavior();
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
@@ -559,6 +633,7 @@
     // last-used timestamps stay fresh as the active session makes calls.
     renderSessions();
     loadProviderStatus();
+    loadIntelStrip();  // fire-and-forget — strip fills in when the aggregate lands
     // Render the layout with placeholders first so the page is never blank
     // (e.g. before a session is added, or while the first fetch is in flight).
     const kpisEl = document.getElementById("overview-kpis");
@@ -1114,7 +1189,63 @@
     }
   }
 
+  // ── Session pulse — one bar per call, chronological. Height = output+thinking
+  // tokens (sqrt scale), color = actual model, lighter cap = thinking share,
+  // red = error, amber ring = fallback. Click = open the call in the drawer.
+  const PULSE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
+  function renderAuditPulse(rows) {
+    const host = document.getElementById("audit-pulse");
+    if (!host) return;
+    if (rows.length < 2) { host.innerHTML = ""; return; }
+    const chrono = rows.slice().reverse();
+    const modelColor = new Map();
+    const colorFor = (m) => {
+      if (!modelColor.has(m)) modelColor.set(m, PULSE_COLORS[modelColor.size % PULSE_COLORS.length]);
+      return modelColor.get(m);
+    };
+    const maxTok = Math.max(1, ...chrono.map((r) => (r.completion_tokens || 0) + (r.reasoning_tokens || 0)));
+    const bars = chrono.map((r) => {
+      const out = r.completion_tokens || 0;
+      const think = r.reasoning_tokens || 0;
+      const h = Math.max(4, Math.round(Math.sqrt((out + think) / maxTok) * 56));
+      const model = r.actual_model || r.model || "?";
+      const isErr = r.status_code && r.status_code >= 400;
+      const color = isErr ? "var(--bad)" : colorFor(model);
+      const thinkPct = out + think > 0 ? Math.round((think / (out + think)) * 100) : 0;
+      const fb = r.used_fallback || (r.fallback_count && r.fallback_count > 0);
+      const substituted = r.actual_model && r.model && r.actual_model !== r.model;
+      const tip = [
+        shortModelName(model) + (substituted ? " (⇄ asked: " + shortModelName(r.model) + ")" : ""),
+        `${out} out` + (think ? ` + ${think} thinking (${thinkPct}%)` : ""),
+        r.first_byte_ms != null ? `first byte ${r.first_byte_ms}ms` : null,
+        r.duration_ms != null ? `${r.duration_ms}ms total` : null,
+        r.cost_usd != null ? usd(r.cost_usd) : null,
+        fb ? `⚠ fell back ×${r.fallback_count || 1}` : null,
+        isErr ? `HTTP ${r.status_code}` : null,
+        tsShort(r.ts),
+      ].filter(Boolean).join(" · ");
+      const thinkCap = think > 0
+        ? `<div class="pulse-think" style="height:${Math.max(1, Math.round(h * think / (out + think)))}px"></div>`
+        : "";
+      const marks = (fb ? '<span class="pulse-mark">▲</span>' : "") + (substituted ? '<span class="pulse-mark">⇄</span>' : "");
+      return `<div class="pulse-slot${auditExpandedId === r.decision_id ? " selected" : ""}" data-decision="${esc(r.decision_id)}" title="${esc(tip)}">
+          ${marks}<div class="pulse-bar" style="height:${h}px;background:${color}">${thinkCap}</div>
+        </div>`;
+    }).join("");
+    const legend = [...modelColor.entries()].map(([m, c]) =>
+      `<span><span class="swatch" style="background:${c}"></span>${esc(shortModelName(m))}</span>`).join("");
+    host.innerHTML = `
+      <div class="pulse-strip">${bars}</div>
+      <div class="audit-legend pulse-legend">${legend}
+        <span class="hint">bar = output tokens · light cap = thinking · ▲ fallback · ⇄ substituted model</span>
+      </div>`;
+    host.querySelectorAll(".pulse-slot").forEach((el) => {
+      el.addEventListener("click", () => toggleAuditDetail(el.dataset.decision));
+    });
+  }
+
   function renderAudit(rows, agentId) {
+    renderAuditPulse(rows);
     const list = document.getElementById("audit-list");
     if (!rows.length) {
       const who = agentId ? `agent_id <code>${esc(agentId)}</code>` : "the active session";
@@ -1229,12 +1360,13 @@
     if (!panel) return;
     if (auditExpandedId === decisionId) {
       auditExpandedId = null;
-      document.querySelectorAll(".audit-row.selected").forEach((r) => r.classList.remove("selected"));
+      document.querySelectorAll(".audit-row.selected, .pulse-slot.selected").forEach((r) => r.classList.remove("selected"));
       panel.innerHTML = '<p class="hint" style="padding:18px">Select a call to inspect its token anatomy, prompt &amp; response.</p>';
       return;
     }
     auditExpandedId = decisionId;
     document.querySelectorAll(".audit-row").forEach((r) => r.classList.toggle("selected", r.dataset.decision === decisionId));
+    document.querySelectorAll(".pulse-slot").forEach((r) => r.classList.toggle("selected", r.dataset.decision === decisionId));
     panel.innerHTML = '<p class="hint" style="padding:18px">loading…</p>';
     try {
       const scope = getActiveAgentScope();
@@ -1272,6 +1404,16 @@
     const respKB = d.response_size_bytes != null ? (d.response_size_bytes / 1024).toFixed(1) + " KB" : "—";
 
     let html = "";
+    // Coach on top — the judge's verdict is the first thing you want on a call.
+    html += `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div class="section-title" style="margin:0">Analysis</div>
+        <button class="ghost audit-call-report" data-decision="${esc(d.decision_id || "")}" title="Standalone HTML report for this call — overlay, open in tab, or download">📄 report</button>
+      </div>
+      <details class="coach-accordion" data-decision="${esc(d.decision_id || "")}">
+        <summary>▸ Coach <span class="hint">(judge eval, click to load)</span></summary>
+        <div class="coach-body"><p class="hint">loading…</p></div>
+      </details>`;
     html += '<div class="section-title">What got sent</div>';
     html += bar;
     html += '<div class="audit-grid">';
@@ -1293,7 +1435,19 @@
     html += grid("Cost", d.cost_usd != null ? usd(d.cost_usd) : "—");
     html += grid("Tier · Score", `${esc(d.classified_tier || "—")} · ${(d.classified_score ?? 0).toFixed(2)}`);
     html += grid("Sensitivity", sensTag(d.classified_sensitivity) || "none");
+    if (d.used_fallback || (d.fallback_count && d.fallback_count > 0)) {
+      html += grid("Degraded", `<span style="color:var(--warn)">yes · ${d.fallback_count || 1} fallback${(d.fallback_count || 1) > 1 ? "s" : ""}</span>`);
+    }
     html += "</div>";
+
+    // Fallback chain — the route the request would degrade through, with the
+    // actually-used leg implied by decision → actual above.
+    if (Array.isArray(d.fallback_chain) && d.fallback_chain.length > 1) {
+      html += '<div class="section-title">Fallback chain</div>';
+      html += '<div class="hint" style="padding:2px 0 6px">'
+        + d.fallback_chain.map((f) => esc(typeof f === "string" ? f : (f.model || f.provider || JSON.stringify(f)))).join(" → ")
+        + "</div>";
+    }
 
     // Findings inline
     if (d.classified_signals && d.classified_signals.length) {
@@ -1345,12 +1499,6 @@
     html += '<div class="section-title">Response — what came back</div>';
     html += renderResponseBlocks(d);
 
-    // Coach — judge's verdict, lazy-loaded on first expand.
-    html += `
-      <details class="coach-accordion" data-decision="${esc(d.decision_id || "")}">
-        <summary>▸ Coach <span class="hint">(judge eval, click to load)</span></summary>
-        <div class="coach-body"><p class="hint">loading…</p></div>
-      </details>`;
     return html;
   }
 
@@ -1402,6 +1550,163 @@
     }
   }, true);  // useCapture so it fires for nested <details>
 
+  // ── Per-call HTML report — drift-style overlay, built client-side from the
+  // detail row + judge eval already available to the dashboard. No bodies in
+  // the report: it stays screenshot/share-safe like the drift share view.
+  document.addEventListener("click", async (ev) => {
+    const btn = ev.target && ev.target.closest ? ev.target.closest(".audit-call-report") : null;
+    if (!btn) return;
+    const did = btn.dataset.decision;
+    if (!did) return;
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = "building…";
+    try {
+      let d = auditDetailCache.get(did);
+      if (!d) {
+        const scope = getActiveAgentScope();
+        d = await api("/v1/decisions/" + encodeURIComponent(did) + (scope ? "?agent_id=" + encodeURIComponent(scope) : ""));
+        auditDetailCache.set(did, d);
+      }
+      let evalRow = null;
+      try {
+        const r = await fetch("/v1/quality/evaluation/" + encodeURIComponent(did), {
+          headers: { Authorization: "Bearer " + getToken() },
+        });
+        if (r.ok) evalRow = await r.json();
+      } catch (_e) { /* report renders without eval */ }
+      _showCallReportModal(d, evalRow);
+    } catch (e) {
+      btn.textContent = "✗ failed";
+      setTimeout(() => { btn.textContent = prev; }, 2000);
+      btn.disabled = false;
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = prev;
+  });
+
+  function _buildCallReportHtml(d, ev) {
+    const rubric = (ev && ev.rubric) || {};
+    const kv = (k, v) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+    const score = (label, v) => `
+      <div class="score"><div class="sl">${esc(label)}</div><div class="sv">${v == null ? "—" : v + "<small>/5</small>"}</div></div>`;
+    const t = d.token_estimate || { system: 0, tools: 0, history: 0, user: 0 };
+    const actual = d.actual_model && d.actual_model !== d.decision_model
+      ? ` → <b>${esc(d.actual_model)}</b>${d.actual_provider ? " (" + esc(d.actual_provider) + ")" : ""}` : "";
+    const degraded = d.used_fallback || (d.fallback_count && d.fallback_count > 0)
+      ? `<span class="warn">yes · ×${d.fallback_count || 1}</span>` : "no";
+    const share = typeof rubric.irrelevant_share === "number" ? rubric.irrelevant_share : null;
+    const cats = Array.isArray(rubric.data_categories_shared) ? rubric.data_categories_shared : [];
+    const items = Array.isArray(rubric.irrelevant_items) ? rubric.irrelevant_items : [];
+    const tags = (ev && ev.failure_tags) || [];
+    const signals = (d.classified_signals || [])
+      .map((s) => `<li>${esc(s.rule_id)} · ${esc(s.severity || s.sensitivity || "")} · ×${s.count || 1}</li>`).join("");
+    const bloat = (d.bloat_findings || [])
+      .map((f) => `<li><b>${esc(f.type)}</b> [${esc(f.severity || "info")}] — ${esc(f.detail || "")}</li>`).join("");
+    const judgeBlock = ev ? `
+      <div class="scores">
+        ${score("Task understanding", rubric.task_understanding)}
+        ${score("Task completion", rubric.task_completion)}
+        ${score("Reasoning efficiency", rubric.reasoning_efficiency)}
+        ${score("Action compliance", rubric.action_compliance)}
+        ${score("Prompt clarity", rubric.prompt_clarity)}
+      </div>
+      ${tags.length ? `<p>${tags.map((x) => `<span class="tag">${esc(String(x).replace(/_/g, " "))}</span>`).join(" ")}</p>` : ""}
+      ${cats.length || share != null ? `
+        <h3>Data shared &amp; relevance</h3>
+        ${cats.length ? `<p>${cats.map((c) => `<span class="tag">${esc(String(c).replace(/_/g, " "))}</span>`).join(" ")}</p>` : ""}
+        ${share != null ? `<p><b class="${share >= 50 ? "bad" : share >= 20 ? "warn" : "good"}">${share}%</b> of the payload judged irrelevant to the task</p>` : ""}
+        ${items.length ? `<ul>${items.map((i) => `<li>${esc(String(i))}</li>`).join("")}</ul>` : ""}` : ""}
+      ${ev.suggested_prompt ? `<h3>Suggested better prompt</h3><pre>${esc(ev.suggested_prompt)}</pre>` : ""}
+      ${ev.coach_notes ? `<p class="dim"><b>Notes:</b> ${esc(ev.coach_notes)}</p>` : ""}
+      <p class="dim small">judge: ${esc(ev.judge_provider || "")}/${esc(ev.judge_model || "")} · trigger: ${esc(ev.trigger || "?")}${ev.judge_cost_usd != null ? " · $" + Number(ev.judge_cost_usd).toFixed(4) : ""}</p>`
+      : '<p class="dim">No judge evaluation for this call — run one from the Coach panel in the audit drawer.</p>';
+    return `<!doctype html><html><head><meta charset="utf-8"><title>NautGate call report</title><style>
+      body { background:#0A0D12; color:#E6EBF2; font: 13px/1.55 ui-monospace,"SF Mono",Menlo,monospace; margin:0; padding:32px; }
+      .wrap { max-width: 760px; margin: 0 auto; }
+      h1 { font-size:16px; color:#E8833A; margin:0 0 2px; } h3 { font-size:12px; color:#8893A4; text-transform:uppercase; letter-spacing:.08em; margin:22px 0 8px; border-bottom:1px solid #232B36; padding-bottom:4px; }
+      .sub { color:#8893A4; font-size:11px; margin-bottom:20px; }
+      .grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 24px; }
+      .kv { display:flex; justify-content:space-between; gap:12px; border-bottom:1px dotted #232B36; padding:3px 0; }
+      .kv .k { color:#5C6675; } .kv .v { text-align:right; }
+      .scores { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
+      .score { background:#12161F; border:1px solid #232B36; border-radius:6px; padding:8px 12px; min-width:104px; }
+      .sl { color:#5C6675; font-size:10px; } .sv { font-size:20px; } .sv small { color:#5C6675; font-size:11px; }
+      .tag { background:#1A2029; border:1px solid #232B36; border-radius:10px; padding:2px 8px; font-size:11px; }
+      pre { background:#12161F; border:1px solid #232B36; border-radius:6px; padding:10px; white-space:pre-wrap; }
+      ul { margin:6px 0; padding-left:18px; } li { margin:2px 0; }
+      .good { color:#3FB950; } .warn { color:#D6A100; } .bad { color:#E5484D; } .dim { color:#8893A4; } .small { font-size:11px; }
+      .foot { margin-top:28px; color:#5C6675; font-size:10px; border-top:1px solid #232B36; padding-top:8px; }
+    </style></head><body><div class="wrap">
+      <h1>NautGate · Call report</h1>
+      <div class="sub">${esc(d.ts || "")} · decision ${esc(d.decision_id || "")}</div>
+      <h3>Call</h3>
+      <div class="grid">
+        ${kv("Endpoint", esc(inboundEndpoint(d.inbound_format)))}
+        ${kv("Upstream", esc((d.decision_provider || "—") + " / " + (d.decision_model || "—")) + actual)}
+        ${kv("Status", String(d.status_code ?? "—"))}
+        ${kv("Degraded", degraded)}
+        ${kv("First byte", (d.first_byte_ms ?? "—") + " ms")}
+        ${kv("Duration", (d.duration_ms ?? "—") + " ms")}
+        ${kv("Input tokens", String(d.prompt_tokens ?? "—"))}
+        ${kv("Output tokens", String(d.completion_tokens ?? "—"))}
+        ${kv("Reasoning tokens", String(d.reasoning_tokens ?? "—"))}
+        ${kv("Cost", d.cost_usd != null ? "$" + Number(d.cost_usd).toFixed(4) : "—")}
+        ${kv("Tier · Score", esc((d.classified_tier || "—") + " · " + (d.classified_score ?? 0).toFixed(2)))}
+        ${kv("Sensitivity", esc(d.classified_sensitivity || "none"))}
+        ${kv("Messages · Tools", (d.messages_count ?? "—") + " · " + (d.tools_count ?? "—"))}
+        ${kv("Request size", d.request_size_bytes != null ? (d.request_size_bytes / 1024).toFixed(1) + " KB" : "—")}
+      </div>
+      <h3>Payload split (est. tokens)</h3>
+      <div class="grid">
+        ${kv("System", String(t.system))} ${kv("Tools", String(t.tools))}
+        ${kv("History", String(t.history))} ${kv("User", String(t.user))}
+      </div>
+      <h3>Judge verdict</h3>
+      ${judgeBlock}
+      ${signals ? `<h3>Sensitivity findings</h3><ul>${signals}</ul>` : ""}
+      ${bloat ? `<h3>Bloat findings — score −${(d.bloat_score || 0).toFixed(3)}${d.estimated_waste_usd ? " · est. waste $" + d.estimated_waste_usd.toFixed(4) : ""}</h3><ul>${bloat}</ul>` : ""}
+      <div class="foot">Generated by NautGate · bodies excluded — this report is safe to share/screenshot</div>
+    </div></body></html>`;
+  }
+
+  function _showCallReportModal(d, evalRow) {
+    document.getElementById("audit-report-modal")?.remove();
+    const html = _buildCallReportHtml(d, evalRow);
+    const wrap = document.createElement("div");
+    wrap.id = "audit-report-modal";
+    wrap.className = "dr-report-modal";
+    wrap.innerHTML = `
+      <div class="dr-report-content">
+        <div class="dr-report-head">
+          <span>Call report · ${esc(shortModelName(d.actual_model || d.decision_model || "?"))} · ${esc(tsShort(d.ts))}</span>
+          <div class="dr-report-actions">
+            <button class="ghost" id="audit-report-tab" title="Open in a new tab">🖼 open tab</button>
+            <button class="ghost" id="audit-report-download">💾 download</button>
+            <button class="ghost" id="audit-report-close">✕ close</button>
+          </div>
+        </div>
+        <iframe class="audit-report-frame" sandbox=""></iframe>
+      </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelector(".audit-report-frame").srcdoc = html;
+    const blobUrl = () => URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    document.getElementById("audit-report-close").addEventListener("click", () => wrap.remove());
+    document.getElementById("audit-report-tab").addEventListener("click", () => {
+      window.open(blobUrl(), "_blank", "noopener");
+    });
+    document.getElementById("audit-report-download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = blobUrl();
+      a.download = `nautgate-call-${(d.decision_id || "report").slice(0, 8)}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) wrap.remove(); });
+  }
+
   function renderCoachBody(row) {
     const rubric = row.rubric || {};
     const scoreCell = (label, v) => `
@@ -1422,6 +1727,30 @@
     const notes = row.coach_notes
       ? `<div class="coach-notes"><b>Notes:</b> ${esc(row.coach_notes)}</div>`
       : "";
+    // Data & relevance — what the prompt shipped and how much of it the task
+    // didn't need. Older evals won't have these keys; render nothing then.
+    let relevance = "";
+    const cats = Array.isArray(rubric.data_categories_shared) ? rubric.data_categories_shared : [];
+    const share = typeof rubric.irrelevant_share === "number" ? rubric.irrelevant_share : null;
+    if (cats.length || share != null) {
+      const catChips = cats.map((c) => `<span class="audit-tool-chip">${esc(String(c).replace(/_/g, " "))}</span>`).join(" ");
+      const shareColor = share == null ? "" : share >= 50 ? "var(--bad)" : share >= 20 ? "var(--warn, #e8a33d)" : "var(--ok, #4caf7d)";
+      const shareBit = share != null
+        ? `<div style="margin-top:6px"><b style="color:${shareColor}">${share}%</b> <span class="hint">of the payload judged irrelevant to the task</span></div>`
+        : "";
+      const items = Array.isArray(rubric.irrelevant_items) && rubric.irrelevant_items.length
+        ? '<ul class="hint" style="margin:4px 0 0 16px;padding:0">'
+          + rubric.irrelevant_items.map((i) => `<li>${esc(String(i))}</li>`).join("")
+          + "</ul>"
+        : "";
+      relevance = `
+        <div class="coach-notes">
+          <div class="coach-section-label">Data shared &amp; relevance</div>
+          ${catChips ? `<div style="margin-top:4px">${catChips}</div>` : ""}
+          ${shareBit}
+          ${items}
+        </div>`;
+    }
     const meta = `
       <div class="hint coach-meta">
         judge: ${esc(row.judge_provider || "")}/${esc(row.judge_model || "")}
@@ -1437,6 +1766,7 @@
         ${scoreCell("Prompt clarity", rubric.prompt_clarity)}
       </div>
       ${tags ? `<div class="coach-tags">${tags}</div>` : ""}
+      ${relevance}
       ${suggested}
       ${notes}
       ${meta}`;
@@ -1918,6 +2248,1256 @@
       window.open(url, "_blank", "noopener");
     });
     wrap.addEventListener("click", (e) => { if (e.target === wrap) wrap.remove(); });
+  }
+
+  // === Improvements — prompt coaching + outcome simulation ===================
+
+  let impDays = 30;
+  document.querySelectorAll("#imp-window button").forEach((b) => {
+    b.addEventListener("click", () => {
+      impDays = parseInt(b.dataset.days, 10);
+      document.querySelectorAll("#imp-window button").forEach((x) => x.classList.toggle("active", x === b));
+      loadImprove();
+    });
+  });
+  document.getElementById("imp-reload")?.addEventListener("click", loadImprove);
+
+  async function loadImprove() {
+    if (!getToken()) return;
+    const summary = document.getElementById("imp-summary");
+    const list = document.getElementById("imp-list");
+    if (!summary || !list) return;
+    if (!list.dataset.loaded) list.appendChild(NG.spinner("loading…"));
+    try {
+      const scope = getActiveAgentScope();
+      const d = await api("/v1/improvements?days=" + impDays
+        + (scope ? "&agent_id=" + encodeURIComponent(scope) : ""));
+      summary.innerHTML = "";
+      list.innerHTML = "";
+      list.dataset.loaded = "1";
+      renderImpSummary(summary, d);
+      renderImpList(list, d);
+    } catch (e) {
+      list.innerHTML = `<p class="hint" style="color:var(--bad)">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  function renderImpSummary(mount, d) {
+    const trend = d.clarity_trend || [];
+    const habits = d.habits || [];
+    // Clarity trend — simple inline SVG line (weeks are few; uPlot is overkill).
+    let trendSvg = "";
+    if (trend.length >= 2) {
+      const W = 420, H = 90, padX = 30, padY = 12;
+      const X = (i) => padX + (i / (trend.length - 1)) * (W - padX * 2);
+      const Y = (v) => padY + (1 - v / 5) * (H - padY * 2 - 14);
+      const pts = trend.map((t, i) => `${X(i).toFixed(1)},${Y(t.clarity).toFixed(1)}`).join(" ");
+      const dots = trend.map((t, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(t.clarity).toFixed(1)}" r="3.5" fill="var(--accent)"><title>${esc(t.week)} · clarity ${t.clarity.toFixed(2)}/5 · ${t.n} evals</title></circle>`).join("");
+      const labels = trend.map((t, i) => `<text x="${X(i).toFixed(1)}" y="${H - 2}" text-anchor="middle" class="in-axis">${esc(t.week.slice(5))}</text>`).join("");
+      trendSvg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:460px">
+        <text x="${padX - 6}" y="${Y(5) + 4}" text-anchor="end" class="in-axis">5</text>
+        <text x="${padX - 6}" y="${Y(0) + 4}" text-anchor="end" class="in-axis">0</text>
+        <line x1="${padX}" y1="${Y(0)}" x2="${W - padX}" y2="${Y(0)}" stroke="var(--border)"/>
+        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2"/>${dots}${labels}</svg>`;
+    }
+    const habitRows = habits.map((h) => `
+      <div class="imp-habit" title="${esc(h.example_fix || "")}">
+        <span class="imp-habit-n">×${h.n}</span>
+        <span>${esc(h.anti_pattern)}</span>
+      </div>`).join("");
+    mount.appendChild(NG.card({
+      title: "Your writing habits",
+      meta: `last ${d.days}d · patterns from calls where the judge rated the PROMPT (not the model) as the problem · clarity trend by week`,
+      body: NG.el("div", {
+        html: `<div class="imp-summary-grid">
+          <div><div class="in-trial-col-head">Prompt clarity over time</div>${trendSvg || '<p class="hint">Not enough weeks yet.</p>'}</div>
+          <div><div class="in-trial-col-head">Recurring patterns to unlearn</div>${habitRows || '<p class="hint">No recurring prompt problems found. Nice.</p>'}</div>
+        </div>`,
+      }),
+    }));
+  }
+
+  function renderImpList(mount, d) {
+    const prompts = d.prompts || [];
+    if (!prompts.length) {
+      mount.appendChild(NG.card({
+        title: "Coachable prompts",
+        body: NG.el("p", { class: "hint", style: { padding: "12px" } },
+          "No judged prompts with a suggested rewrite in this window. Evals accumulate as you use the gateway (or 👎 a call in the Audit Log)."),
+      }));
+      return;
+    }
+    const clarityBadge = (v) => v == null ? "" :
+      `<span class="imp-clarity imp-clarity-${v <= 2 ? "bad" : v <= 3 ? "warn" : "good"}" title="prompt clarity">${v}/5</span>`;
+    const rows = prompts.map((p) => {
+      const sim = p.sim_verdict
+        ? `<span class="in-verdict in-verdict-${esc(p.sim_verdict === "challenger" ? "challenger" : p.sim_verdict)}" title="${esc(p.sim_reason || "")}">${p.sim_verdict === "challenger" ? "improved won" : p.sim_verdict === "champion" ? "original won" : esc(p.sim_verdict)}</span>`
+        : `<button class="ghost imp-simulate" data-decision="${esc(p.decision_id)}">▶ simulate</button>`;
+      return `
+      <div class="imp-card" data-decision="${esc(p.decision_id)}">
+        <div class="imp-card-head">
+          ${clarityBadge(p.prompt_clarity)}
+          <span class="imp-orig">${esc((p.prompt_excerpt || "(no excerpt captured)").slice(0, 160))}</span>
+          <span class="hint" style="white-space:nowrap">${esc(shortModelName(p.decision_model || ""))} · ${tsShort(p.ts)}${p.cost_usd != null ? " · " + usd(p.cost_usd) : ""}</span>
+        </div>
+        ${p.anti_pattern ? `<div class="imp-anti">⚠ ${esc(p.anti_pattern)}</div>` : ""}
+        ${p.coach_notes ? `<div class="hint imp-notes">${esc(p.coach_notes)}</div>` : ""}
+        <div class="imp-suggest">
+          <div class="in-trial-col-head">Suggested rewrite</div>
+          <pre class="body-block imp-suggest-text">${esc(p.suggested_prompt || "")}</pre>
+          <div class="imp-actions">
+            <button class="ghost imp-copy" data-text="${esc(p.suggested_prompt || "")}">📋 copy</button>
+            ${sim}
+          </div>
+          <div class="imp-sim-result" hidden></div>
+        </div>
+      </div>`;
+    }).join("");
+    mount.appendChild(NG.card({
+      title: "Coachable prompts",
+      meta: `${prompts.length} judged calls with a concrete rewrite · ▶ simulate runs the rewrite on the same model and blind-judges both answers`,
+      body: NG.el("div", { html: rows }),
+    }));
+    mount.querySelectorAll(".imp-copy").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(b.dataset.text); } catch (_e) {}
+        const t = b.textContent; b.textContent = "✓ copied";
+        setTimeout(() => { b.textContent = t; }, 1500);
+      });
+    });
+    mount.querySelectorAll(".imp-simulate").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const did = b.dataset.decision;
+        b.disabled = true;
+        b.textContent = "⏳ running (~10s)…";
+        const box = b.closest(".imp-suggest").querySelector(".imp-sim-result");
+        try {
+          const res = await fetch("/v1/improve/simulate/" + encodeURIComponent(did), {
+            method: "POST",
+            headers: { Authorization: "Bearer " + getToken() },
+          });
+          const r = await res.json();
+          if (!res.ok || r.error) throw new Error(r.error || ("http_" + res.status));
+          box.hidden = false;
+          const won = r.verdict === "challenger";
+          const priceBit = r.original_cost_usd != null && r.improved_cost_usd != null
+            ? `<span class="hint">cost ${usd(r.original_cost_usd)} → <b style="color:${r.improved_cost_usd <= r.original_cost_usd ? "var(--good)" : "var(--warn)"}">${usd(r.improved_cost_usd)}</b></span>` : "";
+          box.innerHTML = `
+            <div class="imp-sim-head">
+              <span class="in-verdict in-verdict-${won ? "challenger" : r.verdict === "tie" ? "tie" : "champion"}">${won ? "✓ improved prompt won" : r.verdict === "tie" ? "tie — equally good" : "original won"}</span>
+              <span class="hint">${esc(r.judge_reason || "")}</span> ${priceBit}
+            </div>
+            <div class="imp-sim-cols">
+              <div><div class="in-trial-col-head">Original answer</div><pre class="body-block in-trial-body">${esc((r.original_response || "").slice(0, 1500))}</pre></div>
+              <div class="${won ? "in-trial-won" : ""}"><div class="in-trial-col-head">With improved prompt${won ? " 🏆" : ""}</div><pre class="body-block in-trial-body">${esc((r.improved_response || "").slice(0, 1500))}</pre></div>
+            </div>`;
+          b.remove();
+        } catch (e) {
+          b.disabled = false;
+          b.textContent = "▶ simulate";
+          box.hidden = false;
+          box.innerHTML = `<p class="hint" style="color:var(--bad)">simulation failed: ${esc(e.message || e)}</p>`;
+        }
+      });
+    });
+  }
+
+  // === Experiments page — the shadow panel, promoted to a destination ========
+
+  async function loadExperiments() {
+    if (!getToken()) return;
+    const mount = document.getElementById("exp-panel");
+    if (!mount) return;
+    if (!mount.dataset.loaded) mount.appendChild(NG.spinner("loading…"));
+    try {
+      const data = await api("/v1/shadow?days=30");
+      mount.innerHTML = "";
+      mount.dataset.loaded = "1";
+      renderInShadow(mount, data);
+      const live = (data.experiments || []).filter((e) => e.n > 0).length;
+      const badge = document.getElementById("nav-exp-badge");
+      if (badge) { badge.textContent = String(live); badge.hidden = !live; }
+    } catch (e) {
+      mount.innerHTML = `<p class="hint" style="color:var(--bad)">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  // === Model Health — trust · drift · behavior · probes, one hub =============
+
+  async function loadModelHealth() {
+    if (!getToken()) return;
+    const cards = document.getElementById("mh-cards");
+    const spc = document.getElementById("mh-spc");
+    const signals = document.getElementById("mh-signals");
+    if (!cards) return;
+    if (!cards.dataset.loaded) cards.appendChild(NG.spinner("loading…"));
+    const [sc, spcData, drift, subst] = await Promise.all([
+      api("/v1/scorecard").catch(() => null),
+      api("/v1/insights/spc?hours=168&metric=" + insightsSpcMetric).catch(() => null),
+      api("/v1/drift").catch(() => null),
+      api("/v1/insights/substitution").catch(() => null),
+    ]);
+    cards.dataset.loaded = "1";
+    // --- model cards: driven by REAL traffic (SPC top models), enriched with
+    // the brain-layer trust score when one exists. Scorecard-first was wrong:
+    // it only scores routed tiers, so OAuth passthrough (most Claude traffic)
+    // barely registers there.
+    cards.innerHTML = "";
+    const scByModel = {};
+    ((sc || {}).items || []).forEach((r) => {
+      const key = shortModelName(r.model);
+      const prev = scByModel[key];
+      if (!prev || (r.sample_size || 0) > (prev.sample_size || 0)) scByModel[key] = r;
+    });
+    const models = ((spcData || {}).models || []).slice(0, 4);
+    if (models.length) {
+      cards.innerHTML = '<div class="mh-cards">' + models.map((m) => {
+        const name = shortModelName(m.model);
+        const r = scByModel[name];
+        const viol = m.violations.length;
+        const status = r && r.is_demoted && (r.sample_size || 0) >= 20
+          ? '<span class="mh-status" style="color:var(--bad)">● DEMOTED</span>'
+          : viol
+          ? `<span class="mh-status" style="color:var(--warn)">● ${viol} SHIFT${viol > 1 ? "S" : ""}</span>`
+          : '<span class="mh-status" style="color:var(--good)">● IN CONTROL</span>';
+        const score = r
+          ? `<span class="mh-score-num" style="color:${scScoreColor(r.score)}">${(r.score ?? 0).toFixed(2)}</span><span class="hint">trust score · n=${r.sample_size}</span>`
+          : `<span class="mh-score-num" style="color:var(--text)">${m.calls.toLocaleString()}</span><span class="hint">calls 7d · unscored (passthrough)</span>`;
+        const meta = [
+          r ? `${m.calls.toLocaleString()} calls 7d` : null,
+          m.mean != null ? `μ ${fmtNum(m.mean)}` : null,
+          m.sd != null ? `σ ${fmtNum(m.sd)}` : null,
+          viol ? "behavior shifted" : "drift clear 7d",
+        ].filter(Boolean).join(" · ");
+        return `
+          <div class="mh-card">
+            <div class="mh-card-head"><span class="mh-name">${esc(name)}</span>${status}</div>
+            <div class="mh-score">${score}</div>
+            <div class="hint">${esc(meta)}</div>
+          </div>`;
+      }).join("") + "</div>";
+    } else {
+      cards.innerHTML = '<p class="hint">Not enough hourly traffic yet to profile models.</p>';
+    }
+    // --- control chart (shared renderer with Insights) ----------------------
+    if (spc) {
+      spc.innerHTML = "";
+      if (spcData) renderInSpc(spc, spcData);
+    }
+    // --- open signals: drift alerts + significant substitutions -------------
+    if (signals) {
+      const rows = [];
+      ((drift || {}).alerts || []).slice(0, 4).forEach((a) => {
+        rows.push({
+          chip: "DRIFT", color: "var(--bad)",
+          text: `${shortModelName(a.model || "?")} · ${a.metric_name || "metric"} ${a.direction || ""} · peak z=${a.peak_z_score != null ? Number(a.peak_z_score).toFixed(1) : "—"}`,
+          action: "investigate →", tab: "drift",
+        });
+      });
+      ((subst || {}).pairs || []).filter((p) => p.p_value != null && p.p_value < 0.05 && p.delta < 0)
+        .slice(0, 3).forEach((p) => {
+          rows.push({
+            chip: "SUBST", color: "var(--warn)",
+            text: `${shortModelName(p.asked)} → ${shortModelName(p.served)} scores ${p.delta} on task completion · n=${p.n_substituted} · p=${p.p_value < 0.001 ? "<0.001" : p.p_value}`,
+            action: "see pairs →", tab: "insights",
+          });
+        });
+      signals.innerHTML = "";
+      signals.appendChild(NG.card({
+        title: "Open signals",
+        meta: "drift alerts & substitution evidence that want a look · detailed views: Drift · Scorecard · Behavior · Probing live on under the hood",
+        body: NG.el("div", {
+          html: rows.length
+            ? rows.map((r) => `
+              <div class="mh-signal" data-tab-link="${esc(r.tab)}">
+                <span class="mh-chip" style="color:${r.color};border-color:${r.color}">${r.chip}</span>
+                <span class="mh-signal-text">${esc(r.text)}</span>
+                <span class="mh-signal-action">${esc(r.action)}</span>
+              </div>`).join("")
+            : '<p class="hint" style="padding:10px 14px">All clear — no drift alerts and no significant substitution deltas in the window.</p>',
+        }),
+      }));
+      signals.querySelectorAll(".mh-signal").forEach((el) => {
+        el.addEventListener("click", () => activateTab(el.dataset.tabLink));
+      });
+    }
+  }
+
+  // === Overview intelligence strip ===========================================
+
+  async function loadIntelStrip() {
+    const mount = document.getElementById("overview-intel");
+    if (!mount || !getToken()) return;
+    try {
+      const d = await api("/v1/insights/headline");
+      const tile = (label, valueHtml, sub, tab) => `
+        <div class="intel-tile" data-tab-link="${tab}">
+          <div class="intel-label">${label}</div>
+          <div class="intel-value">${valueHtml}</div>
+          <div class="hint">${sub}</div>
+        </div>`;
+      const eff = d.efficiency || {};
+      const sav = d.savings;
+      const exp = d.experiments || {};
+      const gov = d.governance || {};
+      const effColor = eff.score == null ? "var(--text-dim)" : eff.score >= 70 ? "var(--good)" : eff.score >= 40 ? "var(--warn)" : "var(--bad)";
+      mount.innerHTML = `
+        <div class="intel-head"><span>Intelligence</span><span class="hint">what the gateway learned from your traffic · last 7d</span></div>
+        <div class="intel-cards">
+          ${tile("Efficiency index",
+            `<span style="color:${effColor}">${eff.score ?? "—"}</span><span class="intel-unit">/100</span>`,
+            `across ${eff.agents || 0} agents`, "insights")}
+          ${tile("Savings identified",
+            sav ? `<span style="color:var(--good)">$${Number(sav.weekly_usd).toLocaleString()}</span><span class="intel-unit">/wk</span>` : '<span style="color:var(--text-dim)">—</span>',
+            sav ? `counterfactual: all-${esc(sav.policy)}` : "no counterfactual yet", "insights")}
+          ${tile("Experiments",
+            `${exp.count || 0} ${exp.running ? '<span class="intel-live">LIVE</span>' : ""}`,
+            exp.proven ? `${exp.proven} proven non-inferior` : "gathering evidence", "experiments")}
+          ${tile("Data shipped",
+            gov.secrets ? `<span style="color:var(--bad)">${gov.secrets} secrets</span>` : '0 <span class="intel-unit" style="color:var(--good)">secrets</span>',
+            `${gov.pii || 0} PII calls · bodies policy-gated`, "privacy")}
+        </div>`;
+      mount.querySelectorAll(".intel-tile").forEach((el) => {
+        el.addEventListener("click", () => activateTab(el.dataset.tabLink));
+      });
+      const badge = document.getElementById("nav-exp-badge");
+      if (badge) { badge.textContent = String(exp.count || 0); badge.hidden = !exp.count; }
+    } catch (_e) { /* strip is progressive enhancement — overview works without it */ }
+  }
+
+  // === Bench — same task, N models, side by side ==============================
+
+  const BENCH_PRESETS = [
+    "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-8",
+    "openrouter/openai/gpt-4o-mini", "openrouter/openai/gpt-4o",
+    "openrouter/deepseek/deepseek-v4-flash", "openrouter/google/gemini-flash",
+    "openrouter/moonshotai/kimi-k2.6",
+  ];
+
+  async function loadBench() {
+    if (!getToken()) return;
+    renderBenchForm();
+    const workingEl = document.getElementById("bn-working");
+    const histEl = document.getElementById("bn-history");
+    try {
+      const scope = getActiveAgentScope();
+      const d = await api("/v1/bench?hours=24" + (scope ? "&agent_id=" + encodeURIComponent(scope) : ""));
+      renderBenchWorking(workingEl, d.working);
+      renderBenchHistory(histEl, d.runs || []);
+    } catch (e) {
+      if (workingEl) workingEl.innerHTML = `<p class="hint" style="color:var(--bad)">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  function renderBenchForm() {
+    const mount = document.getElementById("bn-form");
+    if (!mount || mount.dataset.built) return;
+    mount.dataset.built = "1";
+    const modelInputs = [0, 1, 2, 3].map((i) =>
+      `<input class="bn-model" list="bn-model-presets" placeholder="model ${i + 1}${i > 1 ? " (optional)" : ""}"
+        value="${esc(BENCH_PRESETS[i] || "")}" />`).join("");
+    mount.innerHTML = `
+      <div class="v2-card" style="padding:16px">
+        <textarea id="bn-prompt" class="bn-prompt" rows="3" placeholder="The task — every model gets exactly this prompt…">A user's payment webhook fails intermittently with 502 errors. What is your first debugging step? If tools are available, use one.</textarea>
+        <datalist id="bn-model-presets">${BENCH_PRESETS.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
+        <div class="bn-models-row">${modelInputs}</div>
+        <div class="bn-actions">
+          <label class="bn-tools-toggle"><input type="checkbox" id="bn-tools" checked /> give models a sample tool set (read_file, search_code, run_command) — calls are captured, never executed</label>
+          <span style="flex:1"></span>
+          <button id="bn-run" class="exp-promote">▶ Run bench</button>
+        </div>
+      </div>`;
+    document.getElementById("bn-run").addEventListener("click", runBench);
+  }
+
+  async function runBench() {
+    const btn = document.getElementById("bn-run");
+    const results = document.getElementById("bn-results");
+    const prompt = document.getElementById("bn-prompt").value.trim();
+    const models = [...document.querySelectorAll(".bn-model")].map((i) => i.value.trim()).filter(Boolean);
+    if (!prompt || !models.length) return;
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = "⏳ running " + models.length + " models…";
+    results.innerHTML = "";
+    results.appendChild(NG.spinner("all models running in parallel…"));
+    try {
+      const res = await fetch("/v1/bench/run", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt, models,
+          tools: document.getElementById("bn-tools").checked ? "sample" : null,
+        }),
+      });
+      if (!res.ok) throw new Error("http_" + res.status + ": " + (await res.text()).slice(0, 160));
+      const run = await res.json();
+      results.innerHTML = "";
+      renderBenchRun(results, run);
+      loadBench();  // refresh history
+    } catch (e) {
+      results.innerHTML = `<p class="hint" style="color:var(--bad)">bench failed: ${esc(e.message || e)}</p>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  }
+
+  function renderBenchRun(mount, run) {
+    const rs = run.results || [];
+    const minCost = Math.min(...rs.filter((r) => r.cost_usd != null).map((r) => r.cost_usd), Infinity);
+    const minLat = Math.min(...rs.filter((r) => r.latency_ms != null).map((r) => r.latency_ms), Infinity);
+    const cards = rs.map((r) => {
+      const ok = r.status && r.status >= 200 && r.status < 300;
+      const tools = (r.tool_calls || []).map((t) =>
+        `<span class="audit-tool-chip" title="${esc(t.arguments || "")}">${esc(t.name)}</span>`).join(" ");
+      const stat = (label, v, best) =>
+        `<div class="bn-stat"><span class="bn-stat-label">${label}</span><span class="bn-stat-val"${best ? ' style="color:var(--good)"' : ""}>${v}</span></div>`;
+      return `
+        <div class="bn-card${ok ? "" : " bn-card-err"}">
+          <div class="bn-card-head"><b>${esc(shortModelName(r.model))}</b>
+            ${r.via_fallback ? '<span class="hint">via openrouter</span>' : ""}
+            <span class="mh-status" style="color:${ok ? "var(--good)" : "var(--bad)"}">${ok ? "● " + r.status : "✗ " + (r.status || "ERR")}</span></div>
+          <div class="bn-stats">
+            ${stat("latency", r.latency_ms != null ? r.latency_ms + "ms" : "—", r.latency_ms === minLat)}
+            ${stat("in / out", (r.prompt_tokens ?? "—") + " / " + (r.completion_tokens ?? "—"))}
+            ${stat("cost", r.cost_usd != null ? "$" + r.cost_usd.toFixed(5) : "—", r.cost_usd === minCost)}
+            ${stat("tool calls", String((r.tool_calls || []).length))}
+          </div>
+          ${tools ? `<div class="bn-tools">${tools}</div>` : ""}
+          ${r.error ? `<div class="hint" style="color:var(--bad)">${esc(r.error)}</div>` : ""}
+          <details class="bn-response"><summary>response ${r.text ? "· " + r.text.length + " chars" : ""}</summary>
+            <pre class="body-block in-trial-body">${esc(r.text || "(no text — tool call only)")}</pre></details>
+        </div>`;
+    }).join("");
+    mount.innerHTML = `<div class="section-title">Results — ${esc(tsShort(run.ts || new Date().toISOString()))}</div>
+      <div class="bn-grid">${cards}</div>`;
+  }
+
+  function renderBenchWorking(mount, w) {
+    if (!mount) return;
+    mount.innerHTML = "";
+    const models = (w || {}).models || [];
+    const rows = models.map((m) => `<tr>
+        <td><b>${esc(shortModelName(m.model))}</b></td>
+        <td class="num">${m.calls}</td>
+        <td class="num">${m.tool_calls_per_turn != null ? m.tool_calls_per_turn.toFixed(2) : "—"}</td>
+        <td class="num">${m.fresh_in_per_call != null ? Math.round(m.fresh_in_per_call).toLocaleString() : "—"}</td>
+        <td class="num">${m.out_per_call != null ? Math.round(m.out_per_call).toLocaleString() : "—"}</td>
+        <td class="num">${m.thinking_share != null ? Math.round(m.thinking_share * 100) + "%" : "—"}</td>
+        <td class="num">${m.cost_per_call != null ? "$" + m.cost_per_call.toFixed(4) : "—"}</td>
+        <td class="num">${m.p50_ms != null ? Math.round(m.p50_ms) + "ms" : "—"}</td>
+      </tr>`).join("");
+    mount.appendChild(NG.card({
+      title: "While you work — real traffic compared",
+      meta: `last ${(w || {}).hours || 24}h · ${(w || {}).agent_id ? "session " + esc(w.agent_id) : "all sessions"} · switch models mid-work and the difference shows up here, no synthetic calls`,
+      body: NG.el("div", {
+        html: rows
+          ? `<table class="in-table"><thead><tr><th>model</th><th class="num">calls</th><th class="num">tools/turn</th><th class="num">fresh in/call</th><th class="num">out/call</th><th class="num">thinking</th><th class="num">cost/call</th><th class="num">p50</th></tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="hint" style="padding:10px 14px">No real traffic in the window yet.</p>',
+      }),
+    }));
+  }
+
+  function renderBenchHistory(mount, runs) {
+    if (!mount) return;
+    mount.innerHTML = "";
+    if (!runs.length) return;
+    const rows = runs.map((r, i) => `
+      <div class="in-trial-row" data-run="${i}">
+        <span style="width:96px;flex-shrink:0;font-family:var(--mono);font-size:11px;color:var(--text-dim)">${esc(tsShort(r.ts))}</span>
+        <span class="in-trial-prompt">${esc((r.prompt || "").slice(0, 110))}</span>
+        <span class="hint" style="white-space:nowrap">${(r.results || []).map((x) => esc(shortModelName(x.model))).join(" · ")}</span>
+      </div>`).join("");
+    mount.appendChild(NG.card({
+      title: "Previous runs",
+      body: NG.el("div", { html: rows }),
+    }));
+    mount.querySelectorAll(".in-trial-row").forEach((el) => {
+      el.addEventListener("click", () => {
+        const run = runs[parseInt(el.dataset.run, 10)];
+        const results = document.getElementById("bn-results");
+        results.innerHTML = "";
+        renderBenchRun(results, run);
+        results.scrollIntoView({ behavior: "smooth" });
+      });
+    });
+  }
+
+  // === Tooling — MCP carrying cost & discovery savings ========================
+
+  async function loadTooling() {
+    if (!getToken()) return;
+    const serversEl = document.getElementById("tl-servers");
+    const trendEl = document.getElementById("tl-trend");
+    if (!serversEl) return;
+    if (!serversEl.dataset.loaded) serversEl.appendChild(NG.spinner("loading…"));
+    try {
+      const scope = getActiveAgentScope();
+      // Two lenses: everything through the gateway, and just the active session.
+      const [all, scoped] = await Promise.all([
+        api("/v1/insights/tooling?days=30"),
+        scope ? api("/v1/insights/tooling?days=30&agent_id=" + encodeURIComponent(scope)) : Promise.resolve(null),
+      ]);
+      serversEl.dataset.loaded = "1";
+      renderToolingServers(serversEl, all);
+      trendEl.innerHTML = "";
+      if (scoped) {
+        const h1 = NG.el("div", { class: "section-title" }, "Active session · " + scope);
+        trendEl.appendChild(h1);
+        renderToolingTrend(trendEl, scoped, { append: true, noHint: true });
+      }
+      trendEl.appendChild(NG.el("div", { class: "section-title", style: { marginTop: scoped ? "18px" : "0" } }, "All sessions"));
+      renderToolingTrend(trendEl, all, { append: true });
+    } catch (e) {
+      serversEl.innerHTML = `<p class="hint" style="color:var(--bad)">load failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
+  function renderToolingServers(mount, d) {
+    const rows = (d.servers || []).map((s) => {
+      const chips = (s.tools_used || []).slice(0, 5).map((t) =>
+        `<span class="audit-tool-chip" title="${t.n} calls">${esc(t.tool.replace(/^mcp__[^_]*(?:_[^_]+)*__/, "").replace(/^mcp__.*?__/, ""))} ×${t.n}</span>`).join(" ");
+      const schema = s.schema_tokens != null
+        ? `${s.schema_tokens.toLocaleString()} tok <span class="hint">· ${s.tool_count} tools · carried by ${s.agents_carrying} agent${s.agents_carrying > 1 ? "s" : ""}</span>`
+        : '<span class="hint">schema not yet captured</span>';
+      return `<tr>
+        <td><b>${esc(s.server)}</b></td>
+        <td class="num">${s.invocations.toLocaleString()}</td>
+        <td>${schema}</td>
+        <td>${chips || '<span class="hint">—</span>'}</td>
+      </tr>`;
+    }).join("");
+    mount.innerHTML = "";
+    mount.appendChild(NG.card({
+      title: "Connected tool servers",
+      meta: `last ${d.days}d · ${d.agent_id ? "scoped to session " + esc(d.agent_id) : "all sessions"} · schema tokens = payload every carrying request ships (mostly cache-read priced while stable; re-written at the 25% premium whenever a schema changes)`,
+      body: NG.el("div", {
+        html: `<table class="in-table">
+          <thead><tr><th>server</th><th class="num">invocations</th><th>carrying cost / request</th><th>top tools</th></tr></thead>
+          <tbody>${rows}</tbody></table>`,
+      }),
+    }));
+  }
+
+  function renderToolingTrend(mount, d, opts) {
+    if (!mount) return;
+    if (!(opts && opts.append)) mount.innerHTML = "";
+    const daily = (d.daily || []).filter((x) => x.calls > 0);
+    if (daily.length < 2) {
+      mount.appendChild(NG.card({ title: "Discovery mix", body: NG.el("p", { class: "hint", style: { padding: "12px" } }, "Not enough daily traffic yet.") }));
+      return;
+    }
+    const x = daily.map((r) => Math.floor(new Date(r.day + "T12:00:00Z").getTime() / 1000));
+    const wrap = NG.el("div", { class: "v2-grid-2" });
+    const mixCard = NG.el("div", { class: "v2-card" });
+    mixCard.appendChild(NG.el("div", { class: "v2-card-head" }, [
+      NG.el("span", { class: "v2-card-title" }, "Discovery mix — filesystem crawling vs MCP answers"),
+    ]));
+    const mixMount = NG.el("div", { style: { padding: "0 8px 8px" } });
+    mixCard.appendChild(mixMount);
+    const tokCard = NG.el("div", { class: "v2-card" });
+    tokCard.appendChild(NG.el("div", { class: "v2-card-head" }, [
+      NG.el("span", { class: "v2-card-title" }, "Fresh input tokens per call (cache-excluded)"),
+    ]));
+    const tokMount = NG.el("div", { style: { padding: "0 8px 8px" } });
+    tokCard.appendChild(tokMount);
+    wrap.appendChild(mixCard);
+    wrap.appendChild(tokCard);
+    mount.appendChild(wrap);
+    NG.chart(mixMount, {
+      type: "line", x, height: 200,
+      series: [
+        { label: "Read/Grep/Glob calls", values: daily.map((r) => r.fs_calls), color: "#8893A4" },
+        { label: "MCP calls", values: daily.map((r) => r.mcp_calls), color: "#E8833A" },
+      ],
+      fmtY: (v) => fmtNum(v),
+      fmtX: (e) => new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" }),
+    });
+    NG.chart(tokMount, {
+      type: "area", x, height: 200,
+      series: [{ label: "avg fresh input tok/call", values: daily.map((r) => Math.round(r.avg_prompt_tokens || 0)), color: "#4C8DFF" }],
+      fmtY: (v) => fmtNum(v),
+      fmtX: (e) => new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" }),
+    });
+    if (!(opts && opts.noHint)) {
+      mount.appendChild(NG.el("p", { class: "hint", style: { marginTop: "8px" } },
+        "The claim to watch: as MCP calls (amber) replace filesystem crawling (grey), fresh input tokens per call should trend down — one graph answer instead of five file dumps in context."));
+    }
+  }
+
+  // === Reports — print-ready usage & governance audits =======================
+
+  let reportDays = 30;
+  document.querySelectorAll("#report-window button").forEach((b) => {
+    b.addEventListener("click", () => {
+      reportDays = parseInt(b.dataset.days, 10);
+      document.querySelectorAll("#report-window button").forEach((x) => x.classList.toggle("active", x === b));
+    });
+  });
+  document.getElementById("report-generate")?.addEventListener("click", async () => {
+    const btn = document.getElementById("report-generate");
+    const status = document.getElementById("report-status");
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = "aggregating…";
+    try {
+      const data = await api("/v1/reports/audit?days=" + reportDays);
+      _showAuditReportModal(data);
+      status.innerHTML = "";
+    } catch (e) {
+      status.innerHTML = `<p class="hint" style="color:var(--bad)">report failed: ${esc(e.message || e)}</p>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  });
+
+  function _buildAuditReportHtml(d) {
+    const t = d.totals || {};
+    const fUsd = (v) => "$" + Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fNum = (v) => Number(v || 0).toLocaleString("en-US");
+    const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+    const genAt = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const period = `last ${d.days} days`;
+    const okPct = pct(t.ok, t.calls);
+    const sens = d.sensitivity || {};
+    const sensTotal = Object.values(sens).reduce((a, b) => a + b, 0) || 1;
+    const subsCovered = Math.max(0, (t.notional_usd || 0) - (t.metered_usd || 0));
+
+    // --- inline SVG charts (no libs — the report is a standalone document) --
+    const PAL = ["#E8833A", "#3B6FD4", "#1a7f37", "#8E63CE", "#b35b1e", "#4C8DBB", "#946200", "#767E8B"];
+    // Daily grouped bars: calls (orange, left axis) + spend line (blue, right axis).
+    const dailyChart = (daily) => {
+      if (!daily || daily.length < 2) return "";
+      const W = 720, H = 170, padL = 46, padR = 52, padT = 12, padB = 26;
+      const iw = W - padL - padR;
+      const maxCalls = Math.max(...daily.map((x) => x.calls), 1);
+      const maxSpend = Math.max(...daily.map((x) => x.spend_usd), 0.01);
+      const bw = Math.min(26, (iw / daily.length) * 0.66);
+      const X = (i) => padL + (i + 0.5) * (iw / daily.length);
+      const Yc = (v) => padT + (1 - v / maxCalls) * (H - padT - padB);
+      const Ys = (v) => padT + (1 - v / maxSpend) * (H - padT - padB);
+      const bars = daily.map((x, i) =>
+        `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${Yc(x.calls).toFixed(1)}" width="${bw.toFixed(1)}" height="${(H - padB - Yc(x.calls)).toFixed(1)}" fill="#F0B285"/>
+         ${x.errors ? `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${(H - padB - Math.max(2, (x.errors / maxCalls) * (H - padT - padB))).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2, (x.errors / maxCalls) * (H - padT - padB)).toFixed(1)}" fill="#c62828"/>` : ""}`).join("");
+      const spendLine = daily.map((x, i) => `${X(i).toFixed(1)},${Ys(x.spend_usd).toFixed(1)}`).join(" ");
+      const labStep = Math.ceil(daily.length / 8);
+      const xLabels = daily.map((x, i) => i % labStep ? "" :
+        `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="ax">${x.day.slice(5)}</text>`).join("");
+      return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">
+        <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="#d7dbe0"/>
+        <text x="${padL - 6}" y="${padT + 10}" text-anchor="end" class="ax">${fNum(maxCalls)}</text>
+        <text x="${padL - 6}" y="${H - padB}" text-anchor="end" class="ax">0</text>
+        <text x="${W - padR + 6}" y="${padT + 10}" class="ax" fill="#3B6FD4">${fUsd(maxSpend)}</text>
+        ${bars}
+        <polyline points="${spendLine}" fill="none" stroke="#3B6FD4" stroke-width="2"/>
+        ${xLabels}
+        <text x="${padL}" y="${padT}" class="ax">calls/day (bars, red = errors) · spend/day (line)</text>
+      </svg>`;
+    };
+    // Horizontal bars with labels; values pre-sorted desc.
+    const hbars = (items, fmtV) => {
+      if (!items.length) return "";
+      const W = 720, rowH = 22, labW = 210, valW = 84;
+      const H = items.length * rowH + 4;
+      const maxV = Math.max(...items.map((x) => x.value), 1e-9);
+      const rows = items.map((x, i) => {
+        const y = i * rowH + 3;
+        const w = Math.max(2, (x.value / maxV) * (W - labW - valW - 12));
+        return `<text x="${labW - 8}" y="${y + 13}" text-anchor="end" class="ax">${esc(String(x.label).slice(0, 34))}</text>
+          <rect x="${labW}" y="${y}" width="${w.toFixed(1)}" height="${rowH - 7}" rx="2" fill="${x.color || PAL[i % PAL.length]}"/>
+          <text x="${labW + w + 6}" y="${y + 13}" class="ax">${fmtV(x.value)}</text>`;
+      }).join("");
+      return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${rows}</svg>`;
+    };
+    // Donut with legend to the right.
+    const donut = (slices) => {
+      const total = slices.reduce((a, s) => a + s.value, 0);
+      if (!total) return "";
+      const R = 54, r = 32, cx = 70, cy = 70;
+      let a0 = -Math.PI / 2;
+      const paths = slices.filter((s) => s.value > 0).map((s) => {
+        const frac = s.value / total;
+        const a1 = a0 + frac * 2 * Math.PI;
+        const large = frac > 0.5 ? 1 : 0;
+        const p = `M ${cx + R * Math.cos(a0)} ${cy + R * Math.sin(a0)}
+          A ${R} ${R} 0 ${large} 1 ${cx + R * Math.cos(a1 - 0.001)} ${cy + R * Math.sin(a1 - 0.001)}
+          L ${cx + r * Math.cos(a1 - 0.001)} ${cy + r * Math.sin(a1 - 0.001)}
+          A ${r} ${r} 0 ${large} 0 ${cx + r * Math.cos(a0)} ${cy + r * Math.sin(a0)} Z`;
+        a0 = a1;
+        return `<path d="${p}" fill="${s.color}"/>`;
+      }).join("");
+      const legend = slices.map((s, i) =>
+        `<rect x="160" y="${28 + i * 22}" width="10" height="10" rx="2" fill="${s.color}"/>
+         <text x="176" y="${37 + i * 22}" class="ax">${esc(s.label)} — ${fNum(s.value)} (${pct(s.value, total)}%)</text>`).join("");
+      return `<svg viewBox="0 0 420 140" style="width:min(420px,100%)">${paths}${legend}</svg>`;
+    };
+
+    const agentSpendChart = hbars(
+      (d.agents || []).slice(0, 10).map((a) => ({ label: a.agent_id, value: a.spend_usd, color: "#E8833A" })),
+      (v) => fUsd(v));
+    const modelMixChart = hbars(
+      (d.models || []).slice(0, 8).map((m, i) => ({ label: shortModelName(m.model || "?"), value: m.calls, color: PAL[i % PAL.length] })),
+      (v) => fNum(v));
+    const sensDonut = donut([
+      { label: "clean", value: sens.none || 0, color: "#9fb3a8" },
+      { label: "PII", value: sens.pii || 0, color: "#b35b1e" },
+      { label: "secrets", value: sens.secret || 0, color: "#c62828" },
+    ]);
+
+    const agentRows = (d.agents || []).slice(0, 15).map((a) => {
+      const eff = (d.efficiency || {})[a.agent_id];
+      return `<tr>
+        <td>${esc(a.agent_id)}</td>
+        <td class="num">${fNum(a.calls)}</td>
+        <td class="num">${fUsd(a.spend_usd)}</td>
+        <td class="num">${fNum(a.prompt_tokens)} / ${fNum(a.completion_tokens)}</td>
+        <td>${(a.models || []).map((m) => esc(shortModelName(m || ""))).join(", ")}</td>
+        <td class="num">${a.sensitive_calls > 0 ? `<b class="warn">${a.sensitive_calls}</b>` : "0"} / ${a.findings}</td>
+        <td class="num">${a.quality != null ? a.quality.toFixed(1) + "/5" : "—"}</td>
+        <td class="num">${eff && eff.score != null ? eff.score : "—"}</td>
+      </tr>`;
+    }).join("");
+    const moreAgents = (d.agents || []).length > 15
+      ? `<p class="dim small">+ ${(d.agents || []).length - 15} more agents below the traffic threshold — full list available in the dashboard.</p>` : "";
+
+    const modelRows = (d.models || []).map((m) => `<tr>
+        <td>${esc(shortModelName(m.model || "?"))}</td>
+        <td class="num">${fNum(m.calls)}</td>
+        <td class="num">${pct(m.calls, t.calls)}%</td>
+        <td class="num">${fUsd(m.spend_usd)}</td>
+      </tr>`).join("");
+
+    const flowRows = ((d.dataflow || {}).category_to_provider || []).map((l) =>
+      `<tr><td>${esc(l.source)}</td><td>${esc(l.target)}</td><td class="num">${fNum(l.value)}</td></tr>`).join("");
+
+    const tagRows = (d.failure_tags || []).map((x) =>
+      `<span class="chip">${esc(String(x.tag).replace(/_/g, " "))} × ${x.n}</span>`).join(" ");
+
+    const shadowRows = ((d.shadow || {}).experiments || []).filter((e) => e.n > 0).map((e) => {
+      const kind = e.trial_type === "prompt_diet"
+        ? `prompt diet <b>${esc(e.diet_strategy || "")}</b> on ${esc(shortModelName(e.champion))}`
+        : `${esc(shortModelName(e.champion))} vs ${esc(shortModelName(e.challenger))}`;
+      const verdict = e.non_inferior === true ? `<b class="good">non-inferior (p=${e.p_value})</b>`
+        : e.non_inferior === false ? `<span class="warn">not proven (p=${e.p_value ?? "—"})</span>`
+        : `gathering evidence (${e.n}/10)`;
+      const extra = [
+        e.avg_reduction != null ? `payload −${Math.round(e.avg_reduction * 100)}%` : null,
+        e.projected_monthly_saving_usd != null ? `projected ${fUsd(e.projected_monthly_saving_usd)}/mo` : null,
+      ].filter(Boolean).join(" · ");
+      return `<tr><td>${kind}</td><td class="num">${e.wins}W/${e.ties}T/${e.losses}L</td><td>${verdict}</td><td>${extra}</td></tr>`;
+    }).join("");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>NautGate — LLM Usage & Governance Audit</title><style>
+      @page { size: A4; margin: 18mm; }
+      body { background: #fff; color: #1a1f28; font: 13px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; padding: 40px; }
+      .wrap { max-width: 780px; margin: 0 auto; }
+      h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #B35B1E; border-bottom: 2px solid #E8833A; padding-bottom: 4px; margin: 30px 0 10px; page-break-after: avoid; }
+      .sub { color: #6b7482; margin: 4px 0 24px; font-size: 13px; }
+      .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 18px 0; }
+      .kpi { border: 1px solid #e3e6ea; border-radius: 8px; padding: 12px 14px; }
+      .kpi .v { font-size: 20px; font-weight: 700; } .kpi .k { color: #6b7482; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; page-break-inside: avoid; }
+      th { text-align: left; color: #6b7482; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1.5px solid #d7dbe0; padding: 6px 8px; }
+      td { padding: 6px 8px; border-bottom: 1px solid #edeff2; vertical-align: top; }
+      .num { text-align: right; font-variant-numeric: tabular-nums; }
+      .good { color: #1a7f37; } .warn { color: #b35b1e; } .bad { color: #c62828; } .dim { color: #6b7482; } .small { font-size: 11px; }
+      .chip { display: inline-block; border: 1px solid #e3e6ea; border-radius: 10px; padding: 2px 9px; font-size: 11px; margin: 2px; }
+      ul { margin: 6px 0; padding-left: 20px; } li { margin: 3px 0; }
+      .foot { margin-top: 34px; color: #8a92a0; font-size: 10px; border-top: 1px solid #e3e6ea; padding-top: 10px; }
+      svg { page-break-inside: avoid; display: block; margin: 6px 0 10px; }
+      .ax { fill: #6b7482; font-size: 10px; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .chartrow { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+    </style></head><body><div class="wrap">
+      <h1>LLM Usage &amp; Governance Audit</h1>
+      <div class="sub">NautGate gateway · period: ${esc(period)} · generated ${esc(genAt)} UTC · all traffic observed at the gateway, prompt/response bodies excluded from this document</div>
+
+      <div class="kpis">
+        <div class="kpi"><div class="v">${fNum(t.calls)}</div><div class="k">LLM calls</div></div>
+        <div class="kpi"><div class="v">${fNum(t.agents)}</div><div class="k">Agents / users</div></div>
+        <div class="kpi"><div class="v">${fUsd((t.metered_usd || 0) + subsCovered)}</div><div class="k">Usage value</div></div>
+        <div class="kpi"><div class="v">${okPct}%</div><div class="k">Success rate</div></div>
+      </div>
+
+      ${dailyChart(d.daily) ? `<h2>Traffic over the period</h2>${dailyChart(d.daily)}` : ""}
+
+      <h2>Executive summary</h2>
+      <ul>
+        <li><b>${fNum(t.calls)}</b> LLM calls by <b>${fNum(t.agents)}</b> agents across <b>${fNum(t.models)}</b> models; ${fNum(t.prompt_tokens)} input / ${fNum(t.completion_tokens)} output tokens.</li>
+        <li>Usage value <b>${fUsd((t.metered_usd || 0) + subsCovered)}</b> — of which <b>${fUsd(t.metered_usd)}</b> billed (metered APIs) and <b>${fUsd(subsCovered)}</b> covered by flat-rate subscriptions.</li>
+        <li><b>${fNum(sens.pii || 0)}</b> calls carried PII and <b>${fNum(sens.secret || 0)}</b> carried secrets (${(100 - pct((sens.none || 0), sensTotal))}% of traffic flagged); secret-classified prompt bodies are never stored or forwarded to evaluation models.</li>
+        <li>Detected waste (payload shipped beyond task needs): <b>${fUsd(t.waste_usd)}</b>. ${fNum(t.retries_absorbed)} provider overloads were absorbed by gateway retries; ${fNum(t.errors)} calls errored; ${fNum(d.drift_alerts)} provider-drift alerts fired.</li>
+      </ul>
+
+      <h2>Traffic &amp; spend by agent</h2>
+      ${agentSpendChart}
+      <table><thead><tr><th>Agent</th><th class="num">Calls</th><th class="num">Spend*</th><th class="num">Tokens in/out</th><th>Models</th><th class="num">Sensitive / findings</th><th class="num">Quality</th><th class="num">Efficiency</th></tr></thead>
+      <tbody>${agentRows}</tbody></table>${moreAgents}
+      <p class="dim small">*Spend = metered cost where billed, otherwise metered-equivalent (notional) value of subscription usage. Quality = mean LLM-judge task-completion score on evaluated calls. Efficiency = composite 0–100 index (quality, relevance, waste, cache reuse, payload discipline).</p>
+
+      <h2>Model mix</h2>
+      ${modelMixChart}
+      <table><thead><tr><th>Model</th><th class="num">Calls</th><th class="num">Share</th><th class="num">Spend*</th></tr></thead><tbody>${modelRows}</tbody></table>
+
+      <h2>Data governance</h2>
+      ${sensDonut}
+      <p>Sensitivity classification of all prompts in the period: <b>${fNum(sens.none || 0)}</b> clean · <b class="warn">${fNum(sens.pii || 0)}</b> PII · <b class="bad">${fNum(sens.secret || 0)}</b> secrets. Sensitive-content classification gates body capture: secret prompts are recorded as metadata only.</p>
+      ${flowRows ? `<table><thead><tr><th>Data category</th><th>Sent to provider</th><th class="num">Findings</th></tr></thead><tbody>${flowRows}</tbody></table>` : '<p class="good">No sensitive-data findings shipped to any provider in this period.</p>'}
+
+      <h2>Response quality</h2>
+      <p>${tagRows ? "Most frequent failure modes flagged by the LLM judge:" : "No failure tags recorded in this period."}</p>
+      ${tagRows ? `<p>${tagRows}</p>` : ""}
+
+      ${shadowRows ? `<h2>Optimization experiments</h2>
+      <table><thead><tr><th>Experiment</th><th class="num">Trials</th><th>Verdict</th><th>Impact</th></tr></thead><tbody>${shadowRows}</tbody></table>
+      <p class="dim small">Champion–challenger trials mirror a sample of real traffic to an alternative (cheaper model, or the same model with a pruned prompt); a blind judge compares answers without knowing which is which. "Non-inferior" = one-sided binomial test against a 90% as-good-or-better bar, α = 0.05.</p>` : ""}
+
+      <div class="foot">
+        Methodology: every LLM call routed through the NautGate gateway is recorded with routing decision, outcome, token usage and cost. Costs for flat-rate subscription traffic are stated at metered-equivalent list prices. Quality scores come from an independent LLM judge on a sampled subset. This report contains aggregate metadata only — no prompt or response content. Generated by NautGate.
+      </div>
+    </div></body></html>`;
+  }
+
+  function _showAuditReportModal(data) {
+    document.getElementById("audit-report-page-modal")?.remove();
+    const html = _buildAuditReportHtml(data);
+    const wrap = document.createElement("div");
+    wrap.id = "audit-report-page-modal";
+    wrap.className = "dr-report-modal";
+    wrap.innerHTML = `
+      <div class="dr-report-content" style="width:min(980px,94vw);height:min(88vh,1000px)">
+        <div class="dr-report-head">
+          <span>LLM Usage &amp; Governance Audit · last ${data.days}d · ${(data.totals || {}).calls || 0} calls</span>
+          <div class="dr-report-actions">
+            <button class="ghost" id="audit-rp-tab" title="Open in a new tab — print from there for the paper version">🖼 open tab</button>
+            <button class="ghost" id="audit-rp-download">💾 download</button>
+            <button class="ghost" id="audit-rp-close">✕ close</button>
+          </div>
+        </div>
+        <iframe class="audit-report-frame" style="background:#fff" sandbox=""></iframe>
+      </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelector(".audit-report-frame").srcdoc = html;
+    const blobUrl = () => URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    document.getElementById("audit-rp-close").addEventListener("click", () => wrap.remove());
+    document.getElementById("audit-rp-tab").addEventListener("click", () => window.open(blobUrl(), "_blank", "noopener"));
+    document.getElementById("audit-rp-download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = blobUrl();
+      a.download = `nautgate-audit-${data.days}d-${new Date().toISOString().slice(0, 10)}.html`;
+      document.body.appendChild(a); a.click(); a.remove();
+    });
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) wrap.remove(); });
+  }
+
+  // === Insights — counterfactuals, SPC, efficiency ==========================
+
+  let insightsSpcMetric = "completion_tokens";
+
+  async function loadInsights() {
+    if (!getToken()) return;
+    const panels = [
+      ["in-efficiency", "efficiency?days=7", renderInEfficiency],
+      ["in-simulator", "simulator?hours=168", renderInSimulator],
+      ["in-substitution", "substitution", renderInSubstitution],
+      ["in-spc", "spc?hours=168&metric=" + insightsSpcMetric, renderInSpc],
+      ["in-overthinking", "overthinking", renderInOverthinking],
+      ["in-dataflow", "dataflow?days=7", renderInDataflow],
+    ];
+    await Promise.all(panels.map(async ([mountId, path, render]) => {
+      const mount = document.getElementById(mountId);
+      if (!mount) return;
+      if (!mount.dataset.loaded) mount.appendChild(NG.spinner("loading…"));
+      try {
+        const data = await api(path.startsWith("/") ? path : "/v1/insights/" + path);
+        mount.innerHTML = "";
+        mount.dataset.loaded = "1";
+        render(mount, data);
+      } catch (e) {
+        mount.innerHTML = `<p class="hint" style="color:var(--bad)">load failed: ${esc(e.message || e)}</p>`;
+      }
+    }));
+  }
+
+  function renderInShadow(mount, data) {
+    const cfg = data.config || {};
+    // --- config controls -------------------------------------------------
+    const toggle = NG.el("button", { class: "ghost" },
+      cfg.enabled ? "⏸ pause shadowing" : "▶ start shadowing");
+    const rateSel = NG.el("select", { class: "in-metric-sel", title: "share of eligible traffic mirrored" });
+    [0.05, 0.1, 0.25, 0.5, 1.0].forEach((r) => {
+      const o = NG.el("option", { value: String(r) }, Math.round(r * 100) + "%");
+      if (Math.abs(r - (cfg.sample_rate || 0.1)) < 1e-9) o.selected = true;
+      rateSel.appendChild(o);
+    });
+    const chalSel = NG.el("select", { class: "in-metric-sel", title: "challenger model" });
+    [["openrouter", "openrouter/openai/gpt-4o-mini", "gpt-4o-mini"],
+     ["openrouter", "openrouter/google/gemini-flash", "gemini-flash"],
+     ["openrouter", "openrouter/deepseek/deepseek-v4-flash", "deepseek-flash"],
+     ["anthropic", "claude-haiku-4-5", "haiku-4-5"]].forEach(([prov, model, label]) => {
+      const o = NG.el("option", { value: prov + "|" + model }, label);
+      if (model === cfg.challenger_model) o.selected = true;
+      chalSel.appendChild(o);
+    });
+    async function patchCfg(patch) {
+      const res = await fetch("/v1/shadow/config", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      const m = document.getElementById("in-shadow");
+      m.innerHTML = "";
+      renderInShadow(m, { ...data, config: await res.json() });
+    }
+    toggle.addEventListener("click", () => patchCfg({ enabled: !cfg.enabled }).catch((e) => alert(e.message)));
+    const dietToggle = NG.el("button", { class: "ghost", title: "Prompt-diet trials: same model, pruned prompt (keep system + last 6 messages), blind-judged" },
+      cfg.diet_enabled ? "⏸ diet trials" : "🥗 diet trials");
+    dietToggle.addEventListener("click", () => patchCfg({ diet_enabled: !cfg.diet_enabled }).catch((e) => alert(e.message)));
+    rateSel.addEventListener("change", () => patchCfg({ sample_rate: parseFloat(rateSel.value) }).catch((e) => alert(e.message)));
+    chalSel.addEventListener("change", () => {
+      const [prov, model] = chalSel.value.split("|");
+      patchCfg({ challenger_provider: prov, challenger_model: model }).catch((e) => alert(e.message));
+    });
+
+    // --- experiments (hero verdict cards — Paper design) --------------------
+    const exps = data.experiments || [];
+    const dietApplied = (cfg.diet_apply || {})["*"];
+    const TARGET_N = 10;  // evidence bar denominator until the verdict math engages
+    const expHtml = exps.map((e) => {
+      const isDiet = e.trial_type === "prompt_diet";
+      const badge = e.non_inferior === true
+        ? '<span class="in-shadow-badge good">✓ non-inferior · p=' + e.p_value + "</span>"
+        : e.non_inferior === false
+        ? '<span class="in-shadow-badge bad">not proven · p=' + (e.p_value ?? "—") + "</span>"
+        : '<span class="in-shadow-badge dim">gathering</span>';
+      const cost = e.champ_avg_cost != null && e.chall_avg_cost != null && e.champ_avg_cost > 0
+        ? `cost <b style="color:var(--good)">${Math.round((e.chall_avg_cost / e.champ_avg_cost) * 100)}%</b> of champion`
+        : "cost ratio pending";
+      const saving = e.projected_monthly_saving_usd != null
+        ? `projected <b style="color:var(--good)">$${e.projected_monthly_saving_usd.toFixed(2)}/mo</b>`
+        : "";
+      const tag = isDiet
+        ? `PROMPT DIET · ${esc((e.diet_strategy || "").toUpperCase())}`
+        : "MODEL ARBITRAGE";
+      const head = isDiet
+        ? `<b>${esc(shortModelName(e.champion))}</b> <span class="hint">with pruned prompt</span>`
+        : `<b>${esc(shortModelName(e.champion))}</b> <span class="hint">vs</span> <b>${esc(shortModelName(e.challenger))}</b>`;
+      const hero = isDiet && e.avg_reduction != null
+        ? `−${Math.round(e.avg_reduction * 100)}%`
+        : (e.ok_pct != null ? Math.round(e.ok_pct * 100) + "%" : "—");
+      const heroSub = isDiet
+        ? `payload · answers as good in ${e.ok_pct != null ? Math.round(e.ok_pct * 100) + "%" : "—"} of trials`
+        : `as good or better · ${e.wins}W / ${e.ties}T / ${e.losses}L${e.errors ? " · " + e.errors + " err" : ""}`;
+      const evidencePct = Math.min(100, Math.round((e.n / TARGET_N) * 100));
+      const barColor = e.non_inferior === true ? "var(--good)" : e.non_inferior === false ? "var(--bad)" : "var(--warn)";
+      let promote = "";
+      if (isDiet && e.non_inferior === true && dietApplied !== e.diet_strategy) {
+        promote = `<button class="exp-promote in-diet-promote" data-strategy="${esc(e.diet_strategy || "")}">⬆ Promote — trim live traffic</button>`;
+      } else if (isDiet && dietApplied === e.diet_strategy) {
+        promote = `<span class="in-shadow-badge good">LIVE on real traffic</span><button class="ghost in-diet-demote">stop trimming</button>`;
+      }
+      return `
+        <div class="exp-card">
+          <div class="in-shadow-head">${head}<span class="exp-tag">${tag}</span>${badge}</div>
+          <div class="exp-hero"><span class="exp-hero-num" style="color:${isDiet ? "var(--text)" : "var(--good)"}">${hero}</span><span class="hint">${heroSub}</span></div>
+          <div class="exp-evidence">
+            <div class="exp-evidence-row"><span class="hint">evidence · ${e.n} of ${Math.max(TARGET_N, e.n)} paired trials</span><span style="font-family:var(--mono);font-size:11px;color:${barColor}">${e.non_inferior === true ? "✓ non-inferior" : e.non_inferior === false ? "✗ not proven" : "gathering"}</span></div>
+            <div class="exp-bar"><div class="exp-bar-fill" style="width:${evidencePct}%;background:${barColor}"></div></div>
+          </div>
+          <div class="exp-foot"><span class="hint">${cost}</span>${saving ? `<span class="hint">${saving}</span>` : ""}<span style="flex:1"></span>${promote}</div>
+        </div>`;
+    }).join("");
+
+    // --- recent trials -----------------------------------------------------
+    const vChip = (v) => `<span class="in-verdict in-verdict-${esc(v || "error")}">${esc(v || "?")}</span>`;
+    const trialsHtml = (data.recent_trials || []).map((t) => `
+      <div class="in-trial-row" data-trial="${esc(t.id)}">
+        ${vChip(t.verdict)}
+        <span class="in-trial-prompt">${t.trial_type === "prompt_diet" ? "🥗 " : ""}${esc((t.prompt_excerpt || "").slice(0, 90))}</span>
+        <span class="hint">${esc(t.judge_reason || "")}</span>
+        <span class="hint" style="white-space:nowrap">${tsShort(t.ts)}</span>
+      </div>`).join("");
+
+    mount.appendChild(NG.card({
+      title: "Shadow trials — champion vs challenger",
+      meta: cfg.enabled
+        ? `LIVE · mirroring ${Math.round((cfg.sample_rate || 0) * 100)}% of eligible traffic (tool-free, non-sensitive) to the challenger · blind-judged pairs · cap $${cfg.daily_cost_cap_usd}/day`
+        : "paused — hit start to begin mirroring a sample of real traffic to a cheaper model and blind-judging the pairs",
+      actions: [chalSel, rateSel, toggle, dietToggle],
+      body: NG.el("div", {
+        html: (expHtml ? `<div class="exp-cards">${expHtml}</div>` : '<p class="hint" style="padding:8px 12px">No trials yet. Enable shadowing and use the gateway normally — eligible calls (no tools, body captured, non-secret) get mirrored automatically.</p>')
+          + (trialsHtml ? `<div class="section-title" style="padding:12px 12px 0">Recent paired trials — click one for the proof view</div>${trialsHtml}` : ""),
+      }),
+    }));
+    mount.querySelectorAll(".in-trial-row").forEach((row) => {
+      row.addEventListener("click", () => _showTrialModal(row.dataset.trial));
+    });
+    mount.querySelectorAll(".in-diet-promote").forEach((b) => {
+      b.addEventListener("click", () =>
+        patchCfg({ diet_apply: { "*": b.dataset.strategy } }).catch((e) => alert(e.message)));
+    });
+    mount.querySelectorAll(".in-diet-demote").forEach((b) => {
+      b.addEventListener("click", () => patchCfg({ diet_apply: {} }).catch((e) => alert(e.message)));
+    });
+  }
+
+  async function _showTrialModal(trialId) {
+    let t;
+    try {
+      t = await api("/v1/shadow/trial/" + encodeURIComponent(trialId));
+    } catch (e) {
+      alert("trial load failed: " + (e.message || e));
+      return;
+    }
+    document.getElementById("shadow-trial-modal")?.remove();
+    const wrap = document.createElement("div");
+    wrap.id = "shadow-trial-modal";
+    wrap.className = "dr-report-modal";
+    const isDiet = t.trial_type === "prompt_diet";
+    const dietBits = isDiet && t.original_bytes
+      ? ` · 🥗 ${esc(t.diet_strategy || "")} pruned payload ${t.original_bytes}B → ${t.pruned_bytes}B (−${Math.round((1 - t.pruned_bytes / t.original_bytes) * 100)}%)`
+      : "";
+    const side = (label, model, text, won) => `
+      <div class="in-trial-col${won ? " in-trial-won" : ""}">
+        <div class="in-trial-col-head">${esc(label)} · ${esc(shortModelName(model))}${won ? " 🏆" : ""}</div>
+        <pre class="body-block in-trial-body">${esc(text || "(no answer)")}</pre>
+      </div>`;
+    wrap.innerHTML = `
+      <div class="dr-report-content" style="width:min(1200px,95vw)">
+        <div class="dr-report-head">
+          <span>Paired trial · ${esc(tsShort(t.ts))} · verdict: <b>${esc(t.verdict || "?")}</b> <span class="hint">${esc(t.judge_reason || "")}${dietBits}</span></span>
+          <div class="dr-report-actions"><button class="ghost" id="shadow-trial-close">✕ close</button></div>
+        </div>
+        <div class="in-trial-grid">
+          <div class="in-trial-promptbox">
+            <div class="in-trial-col-head">Prompt (real traffic)</div>
+            <pre class="body-block in-trial-body">${esc((t.prompt_text || "").slice(0, 4000))}</pre>
+          </div>
+          ${side(isDiet ? "Original prompt" : "Champion", t.champion_model, t.champion_response, t.verdict === "champion")}
+          ${side(isDiet ? "Pruned prompt" : "Challenger", t.challenger_model, t.challenger_response, t.verdict === "challenger")}
+        </div>
+        <p class="hint" style="padding:0 16px 12px">The judge saw both answers in random order without model names — the verdict above is blind. ${t.champion_cost_usd != null && t.challenger_cost_usd != null ? `Cost: ${usd(t.champion_cost_usd)} vs ${usd(t.challenger_cost_usd)}.` : ""}</p>
+      </div>`;
+    document.body.appendChild(wrap);
+    document.getElementById("shadow-trial-close").addEventListener("click", () => wrap.remove());
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) wrap.remove(); });
+  }
+
+  function _inScoreColor(v) {
+    return v == null ? "var(--text-dim)" : v >= 70 ? "var(--good)" : v >= 40 ? "var(--warn)" : "var(--bad)";
+  }
+
+  function renderInEfficiency(mount, data) {
+    const agents = data.agents || [];
+    const compBar = (label, v) => v == null ? "" : `
+      <div class="in-comp" title="${esc(label)}: ${v}/100">
+        <span class="in-comp-label">${esc(label)}</span>
+        <span class="in-comp-track"><span class="in-comp-fill" style="width:${v}%;background:${_inScoreColor(v)}"></span></span>
+        <span class="in-comp-val">${v}</span>
+      </div>`;
+    const rows = agents.map((a) => `
+      <div class="in-eff-row">
+        <div class="in-eff-score" style="color:${_inScoreColor(a.score)}">${a.score ?? "—"}</div>
+        <div class="in-eff-agent">
+          <div>${esc(a.agent_id)}</div>
+          <div class="hint">${a.calls} calls · ${usd(a.cost_usd)} notional</div>
+        </div>
+        <div class="in-eff-comps">
+          ${compBar("quality", a.components.quality)}
+          ${compBar("relevance", a.components.relevance)}
+          ${compBar("waste", a.components.waste)}
+          ${compBar("cache", a.components.cache)}
+          ${compBar("bloat", a.components.bloat)}
+        </div>
+      </div>`).join("");
+    mount.appendChild(NG.card({
+      title: "Gateway Efficiency Index",
+      meta: `last ${data.days}d · composite of judged quality, relevance, waste, cache reuse & bloat — weights renormalize over available signals`,
+      body: NG.el("div", { html: rows || '<p class="hint">No agents with ≥5 calls in the window.</p>' }),
+    }));
+  }
+
+  function renderInSimulator(mount, data) {
+    const pols = data.policies || [];
+    const cur = data.current_quality;
+    const rows = pols.map((p) => {
+      const q = p.target_quality;
+      const qBit = q
+        ? `${q.quality.toFixed(2)}/5 <span class="hint">(n=${q.n})</span>`
+        : '<span class="hint">never judged</span>';
+      const savings = p.savings_usd;
+      return `<tr>
+        <td>${esc(p.policy)}</td>
+        <td class="num">${usd(p.simulated_usd)}</td>
+        <td class="num" style="color:${savings > 0 ? "var(--good)" : "var(--bad)"}">${savings > 0 ? "−" : "+"}${usd(Math.abs(savings))}</td>
+        <td class="num">${qBit}</td>
+        <td class="num hint">${p.priced_calls}/${p.calls}</td>
+      </tr>`;
+    }).join("");
+    mount.appendChild(NG.card({
+      title: "Counterfactual routing simulator",
+      meta: `last ${Math.round(data.hours / 24)}d · every successful call repriced at the target model's rates · actual (notional) spend: `
+        + usd(pols[0] ? pols[0].actual_usd : 0)
+        + (cur != null ? ` · current judged quality ${cur}/5 over ${data.evaluated_calls} evals` : ""),
+      body: NG.el("div", {
+        html: `<table class="in-table">
+          <thead><tr><th>route everything to…</th><th class="num">would cost</th><th class="num">Δ spend</th><th class="num">judged quality there</th><th class="num">priced</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+        <p class="hint">Estimate: same token counts at the target's price sheet — real completions would differ in length. Quality column is the judge's average on calls that model actually served.</p>`,
+      }),
+    }));
+  }
+
+  function renderInSubstitution(mount, data) {
+    const pairs = data.pairs || [];
+    const rows = pairs.map((p) => `<tr>
+        <td>${esc(shortModelName(p.asked))} → <b>${esc(shortModelName(p.served))}</b></td>
+        <td class="num" style="color:${p.delta < 0 ? "var(--bad)" : "var(--good)"}">${p.delta > 0 ? "+" : ""}${p.delta.toFixed(2)}</td>
+        <td class="num">${p.mean_substituted.toFixed(2)} vs ${p.mean_as_asked.toFixed(2)}</td>
+        <td class="num">${p.n_substituted} / ${p.n_as_asked}</td>
+        <td class="num">${p.p_value == null ? "—" : p.p_value < 0.001 ? "<0.001" : p.p_value.toFixed(3)}${p.p_value != null && p.p_value < 0.05 ? " ✓" : ""}</td>
+      </tr>`).join("");
+    mount.appendChild(NG.card({
+      title: "Silent substitution impact",
+      meta: `judged task-completion when a different model served than was asked · ${data.judged_calls} judged calls · date-snapshot aliases excluded`,
+      body: NG.el("div", {
+        html: rows
+          ? `<table class="in-table"><thead><tr><th>asked → served</th><th class="num">Δ score</th><th class="num">sub vs as-asked</th><th class="num">n</th><th class="num">p (Welch)</th></tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="hint">No substitution pairs with ≥5 judged calls on both sides yet.</p>',
+      }),
+    }));
+  }
+
+  function renderInSpc(mount, data) {
+    const metricSel = NG.el("select", { class: "in-metric-sel" });
+    [["completion_tokens", "output tokens"], ["reasoning_share", "thinking share"],
+     ["tool_calls", "tool calls / turn"],
+     ["first_byte_ms", "first byte ms"], ["empty_rate", "empty-response rate"]].forEach(([v, label]) => {
+      const o = NG.el("option", { value: v }, label);
+      if (v === insightsSpcMetric) o.selected = true;
+      metricSel.appendChild(o);
+    });
+    metricSel.addEventListener("change", async () => {
+      insightsSpcMetric = metricSel.value;
+      const m = mount;  // re-render in place — works on Insights AND Model Health
+      m.innerHTML = "";
+      m.appendChild(NG.spinner("recomputing…"));
+      try {
+        const d = await api("/v1/insights/spc?hours=168&metric=" + insightsSpcMetric);
+        m.innerHTML = "";
+        renderInSpc(m, d);
+      } catch (e) { m.innerHTML = `<p class="hint" style="color:var(--bad)">${esc(e.message || e)}</p>`; }
+    });
+    const body = NG.el("div");
+    (data.models || []).forEach((m) => {
+      const points = m.buckets.map((ts, i) => ({
+        ts: ts * 1000,
+        observed: m.ewma[i],
+        mean: m.mean,
+        stddev: m.sd > 0 ? (m.ucl[i] - m.mean) / 3 : 0,
+        z: m.sd > 0 && (m.ucl[i] - m.mean) > 0 ? (3 * (m.ewma[i] - m.mean)) / (m.ucl[i] - m.mean) : 0,
+      }));
+      const viol = m.violations.length;
+      body.appendChild(NG.el("div", { class: "in-spc-model" }, [
+        NG.el("div", { class: "in-spc-head" }, [
+          NG.el("b", {}, shortModelName(m.model)),
+          NG.el("span", { class: "hint" }, ` ${m.calls} calls · μ=${fmtNum(m.mean)} σ=${fmtNum(m.sd)}`),
+          viol ? NG.el("span", { style: { color: "var(--bad)", marginLeft: "8px" } }, `⚠ ${viol} out-of-control point${viol > 1 ? "s" : ""}`) : NG.el("span", { style: { color: "var(--good)", marginLeft: "8px" } }, "in control"),
+        ]),
+        NG.anomalyBand({ points, height: 120, fmtV: (v) => fmtNum(v) }),
+      ]));
+    });
+    if (!(data.models || []).length) body.appendChild(NG.el("p", { class: "hint" }, "Not enough hourly buckets yet."));
+    const card = NG.card({
+      title: "Behavior control charts (EWMA)",
+      meta: "hourly means per model, EWMA λ=0.2 with ±3σ limits — a dot outside the band is a statistically real behavior shift, not noise",
+      actions: [metricSel],
+      body,
+    });
+    mount.appendChild(card);
+  }
+
+  function renderInOverthinking(mount, data) {
+    const pts = data.points || [];
+    const withReasoning = pts.filter((p) => p.reasoning_share > 0);
+    const models = [...new Set(pts.map((p) => p.model))].slice(0, 4);
+    const colorOf = (m) => PULSE_COLORS[models.indexOf(m) % PULSE_COLORS.length] || "var(--text-dim)";
+    const W = 1000, H = 240, padX = 46, padY = 20;
+    const X = (share) => padX + share * (W - padX * 2);
+    const Y = (score) => padY + (1 - score / 5) * (H - padY * 2);
+    const dots = pts.filter((p) => models.includes(p.model)).map((p) =>
+      `<circle cx="${X(p.reasoning_share).toFixed(1)}" cy="${Y(p.score).toFixed(1)}" r="3.5"
+         fill="${colorOf(p.model)}" fill-opacity="0.55"><title>${esc(shortModelName(p.model))} · thinking ${(p.reasoning_share * 100).toFixed(0)}% · score ${p.score}/5</title></circle>`).join("");
+    const axis = `
+      <line x1="${padX}" y1="${Y(0)}" x2="${W - padX}" y2="${Y(0)}" stroke="var(--border)"/>
+      <line x1="${padX}" y1="${padY}" x2="${padX}" y2="${Y(0)}" stroke="var(--border)"/>
+      ${[0, 1, 2, 3, 4, 5].map((s) => `<text x="${padX - 8}" y="${Y(s) + 4}" text-anchor="end" class="in-axis">${s}</text>`).join("")}
+      ${[0, 0.25, 0.5, 0.75, 1].map((x) => `<text x="${X(x)}" y="${H - 2}" text-anchor="middle" class="in-axis">${x * 100}%</text>`).join("")}`;
+    const legend = models.map((m) => `<span><span class="swatch" style="background:${colorOf(m)}"></span>${esc(shortModelName(m))}</span>`).join("");
+    mount.appendChild(NG.card({
+      title: "The overthinking curve",
+      meta: `judged task-completion vs share of tokens spent thinking · ${pts.length} judged calls (${withReasoning.length} with reasoning)`,
+      body: NG.el("div", {
+        html: `<svg viewBox="0 0 ${W} ${H}" class="in-scatter" preserveAspectRatio="none">${axis}${dots}</svg>
+          <div class="audit-legend" style="margin-top:6px">${legend}<span class="hint">x = thinking share of output · y = judge score</span></div>`,
+      }),
+    }));
+  }
+
+  function renderInDataflow(mount, data) {
+    const left = data.agent_to_category || [];
+    const right = data.category_to_provider || [];
+    if (!left.length && !right.length) {
+      mount.appendChild(NG.card({
+        title: "Sensitive data flow",
+        meta: `last ${data.days}d`,
+        body: NG.el("p", { class: "hint" }, "No classified signals in the window — nothing sensitive shipped. That's the good outcome."),
+      }));
+      return;
+    }
+    // Three columns: agents, categories, providers. Node heights ∝ flow volume.
+    const CAT_COLOR = { credentials: "var(--bad)", secrets: "var(--warn)", pii: "var(--info)", infrastructure: "var(--series-4)", other: "var(--text-dim)" };
+    const sum = (m) => Object.values(m).reduce((a, b) => a + b, 0);
+    const tally = (links, key) => links.reduce((m, l) => (m[l[key]] = (m[l[key]] || 0) + l.value, m), {});
+    const agents = tally(left, "source"), cats = tally(left, "target"), provs = tally(right, "target");
+    const W = 1000, H = Math.max(200, 40 * Math.max(Object.keys(agents).length, Object.keys(cats).length, Object.keys(provs).length)), GAP = 8, COLW = 12;
+    const colX = [40, W / 2 - COLW / 2, W - 40 - COLW];
+    const layout = (m, total) => {
+      let y = 10; const out = {};
+      for (const [name, v] of Object.entries(m).sort((a, b) => b[1] - a[1])) {
+        const h = Math.max(14, (v / total) * (H - 20 - GAP * Object.keys(m).length));
+        out[name] = { y, h, v };
+        y += h + GAP;
+      }
+      return out;
+    };
+    const totL = sum(agents) || 1, totC = sum(cats) || 1, totP = sum(provs) || 1;
+    const A = layout(agents, totL), C = layout(cats, totC), P = layout(provs, totP);
+    const link = (x1, n1, x2, n2, value, total, color) => {
+      const w = Math.max(2, (value / total) * 24);
+      const y1 = n1.y + n1.h / 2, y2 = n2.y + n2.h / 2;
+      const mx = (x1 + x2) / 2;
+      return `<path d="M ${x1 + COLW} ${y1} C ${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" fill="none" stroke="${color}" stroke-width="${w}" stroke-opacity="0.35"><title>${value} finding${value > 1 ? "s" : ""}</title></path>`;
+    };
+    const links =
+      left.map((l) => A[l.source] && C[l.target] ? link(colX[0], A[l.source], colX[1], C[l.target], l.value, totC, CAT_COLOR[l.target] || "var(--text-dim)") : "").join("")
+      + right.map((l) => C[l.source] && P[l.target] ? link(colX[1], C[l.source], colX[2], P[l.target], l.value, totC, CAT_COLOR[l.source] || "var(--text-dim)") : "").join("");
+    const nodes = (m, x, colorFn, anchor) => Object.entries(m).map(([name, n]) => `
+      <rect x="${x}" y="${n.y}" width="${COLW}" height="${n.h}" rx="2" fill="${colorFn(name)}"/>
+      <text x="${anchor === "end" ? x - 6 : x + COLW + 6}" y="${n.y + n.h / 2 + 4}" text-anchor="${anchor}" class="in-axis">${esc(name)} (${n.v})</text>`).join("");
+    mount.appendChild(NG.card({
+      title: "Sensitive data flow",
+      meta: `last ${data.days}d · agent → data category → provider, from the classifier's per-call findings`,
+      body: NG.el("div", {
+        html: `<svg viewBox="0 0 ${W} ${H}" class="in-sankey" style="height:${Math.min(H, 340)}px">${links}
+          ${nodes(agents, colX[0], () => "var(--accent)", "end")}
+          ${nodes(cats, colX[1], (n) => CAT_COLOR[n] || "var(--text-dim)", "start")}
+          ${nodes(provs, colX[2], () => "var(--series-2)", "end")}</svg>`,
+      }),
+    }));
   }
 
   function fmtNum(v) {
@@ -2918,8 +4498,57 @@
 
   // --- Models / Provider health ------------------------------------------
 
+  async function loadExternalStatus() {
+    // Official provider status pages + OpenRouter per-model availability.
+    const spEl = document.getElementById("health-statuspages");
+    const orEl = document.getElementById("health-ormodels");
+    if (!spEl || !getToken()) return;
+    try {
+      const [sp, or_] = await Promise.all([
+        api("/v1/health/statuspages"),
+        api("/v1/health/openrouter-models"),
+      ]);
+      const indClr = (i) => i === "none" ? "var(--good)" : i === "minor" ? "var(--warn)" : i === "unknown" ? "var(--text-dim)" : "var(--bad)";
+      spEl.innerHTML = "";
+      spEl.appendChild(NG.card({
+        title: "Official provider status",
+        meta: "status.claude.com & status.openai.com · refreshed every 5 min",
+        body: NG.el("div", {
+          html: (sp.pages || []).map((p) => `
+            <div class="mh-signal" style="cursor:default">
+              <span class="mh-chip" style="color:${indClr(p.indicator)};border-color:${indClr(p.indicator)}">${esc(p.provider.toUpperCase())}</span>
+              <span class="mh-signal-text">${esc(p.description || p.error || "unreachable")}</span>
+              <span class="hint">${(p.degraded || []).map((c) => esc(c.name + " (" + c.status + ")")).join(" · ") || "all components operational"}</span>
+              <a class="mh-signal-action" href="${esc(p.url)}" target="_blank" rel="noopener">open →</a>
+            </div>`).join(""),
+        }),
+      }));
+      if (orEl) {
+        const upClr = (u) => u == null ? "var(--text-dim)" : u >= 99 ? "var(--good)" : u >= 95 ? "var(--warn)" : "var(--bad)";
+        const rows = (or_.models || []).map((m) => `<tr>
+            <td><b>${esc(m.model)}</b></td>
+            <td class="num">${m.listed === false ? '<span style="color:var(--bad)">delisted</span>'
+              : m.best_uptime_30m != null ? `<span style="color:${upClr(m.best_uptime_30m)}">${m.best_uptime_30m}%</span>` : "—"}</td>
+            <td class="num">${m.providers ?? "—"}</td>
+            <td class="num">${m.deranked ? `<span style="color:var(--warn)">${m.deranked}</span>` : "0"}</td>
+          </tr>`).join("");
+        orEl.innerHTML = "";
+        orEl.appendChild(NG.card({
+          title: "OpenRouter model availability",
+          meta: "models this gateway used in the last 7d · uptime over the last 30 min per serving provider — 'listed but unusable' shows up here",
+          body: NG.el("div", {
+            html: `<table class="in-table"><thead><tr><th>model</th><th class="num">best uptime 30m</th><th class="num">providers</th><th class="num">deranked</th></tr></thead><tbody>${rows}</tbody></table>`,
+          }),
+        }));
+      }
+    } catch (e) {
+      spEl.innerHTML = `<p class="hint" style="color:var(--bad)">status fetch failed: ${esc(e.message || e)}</p>`;
+    }
+  }
+
   async function loadModels() {
     if (!getToken()) return;
+    loadExternalStatus();  // fire-and-forget — cards fill in as feeds answer
     try {
       const r = await api("/v1/models");
       // Models tab shows the JSON.
@@ -3966,6 +5595,22 @@
       state.classList.remove("ok");
     }
   });
+
+  // Session archive window (dashboard-local). Populate + persist on change.
+  const archiveInput = document.getElementById("session-archive-days");
+  if (archiveInput) {
+    archiveInput.value = String(archiveDays());
+    archiveInput.addEventListener("change", () => {
+      const v = parseInt(archiveInput.value, 10);
+      if (Number.isFinite(v) && v > 0) {
+        localStorage.setItem("ng_session_archive_days", String(v));
+        sessionPage = 0;
+        renderSessions();
+      } else {
+        archiveInput.value = String(archiveDays());
+      }
+    });
+  }
 
   async function loadSettings() {
     try {

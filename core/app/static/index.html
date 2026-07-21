@@ -40,27 +40,38 @@
         <span class="nav-dot" id="nav-health-dot" hidden></span>
       </a>
 
-      <div class="nav-group-label">Quality</div>
-      <a class="nav-item" href="#scorecard" data-tab="scorecard">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="M9 13l2 2 4-4"/></svg>
-        <span class="nav-label">Scorecard</span>
-      </a>
-      <a class="nav-item" href="#behavior" data-tab="behavior">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="nav-label">Behavior</span>
-      </a>
-      <a class="nav-item" href="#drift" data-tab="drift">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12c3-6 6 6 9 0s6-6 9 0"/></svg>
-        <span class="nav-label">Drift</span>
+      <div class="nav-group-label">Model Trust</div>
+      <a class="nav-item" href="#modelhealth" data-tab="modelhealth">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M8.5 12h2l1.5 3 2-6 1.5 3h2"/></svg>
+        <span class="nav-label">Model Health</span>
         <span class="nav-badge" id="nav-drift-badge" hidden></span>
       </a>
       <a class="nav-item" href="#quality" data-tab="quality">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l2.4 5 5.6.8-4 4 1 5.6-5-2.8-5 2.8 1-5.6-4-4 5.6-.8z"/></svg>
         <span class="nav-label">Quality</span>
       </a>
-      <a class="nav-item" href="#probe" data-tab="probe">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
-        <span class="nav-label">LLM Probing</span>
+
+      <div class="nav-group-label">Optimize</div>
+      <a class="nav-item" href="#experiments" data-tab="experiments">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v6L4.5 19a1.5 1.5 0 001.3 2.2h12.4a1.5 1.5 0 001.3-2.2L14 9V3"/><path d="M8 3h8"/><path d="M7.5 15h9"/></svg>
+        <span class="nav-label">Experiments</span>
+        <span class="nav-badge nav-badge-live" id="nav-exp-badge" hidden></span>
+      </a>
+      <a class="nav-item" href="#insights" data-tab="insights">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 1 4 12.7V17a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-2.3A7 7 0 0 1 12 2z"/><path d="M9.5 21h5"/></svg>
+        <span class="nav-label">Insights</span>
+      </a>
+      <a class="nav-item" href="#improve" data-tab="improve">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11a2.1 2.1 0 0 0-3-3L5 16z"/><path d="M14 7l3 3"/></svg>
+        <span class="nav-label">Improvements</span>
+      </a>
+      <a class="nav-item" href="#tooling" data-tab="tooling">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4 4 0 0 0-5 5L4 17v3h3l5.5-5.5a4 4 0 0 0 5-5L14 13l-3-3z"/></svg>
+        <span class="nav-label">Tooling</span>
+      </a>
+      <a class="nav-item" href="#bench" data-tab="bench">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="7" cy="18" r="1.6" fill="currentColor" stroke="none"/></svg>
+        <span class="nav-label">Bench</span>
       </a>
 
       <div class="nav-group-label">Spend</div>
@@ -78,6 +89,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
         <span class="nav-label">Privacy</span>
       </a>
+      <a class="nav-item" href="#reports" data-tab="reports">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>
+        <span class="nav-label">Reports</span>
+      </a>
     </nav>
 
     <div class="sidebar-footer">
@@ -93,9 +108,15 @@
     </div>
   </aside>
 
+  <!-- Backdrop for the mobile drawer -->
+  <div class="nav-backdrop" id="nav-backdrop"></div>
+
   <!-- ===== Main column ================================================ -->
   <div class="appmain">
     <header class="appheader">
+      <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
       <div class="page-heading">
         <div class="page-title" id="page-title">Overview</div>
         <div class="page-subtitle" id="page-subtitle"></div>
@@ -146,6 +167,8 @@
         </span>
       </div>
       <div id="provider-strip" class="prov-strip v2-section"></div>
+
+      <div id="overview-intel" class="v2-section"></div>
 
       <div id="overview-kpis" class="v2-section"></div>
 
@@ -301,6 +324,7 @@
     <!-- Audit Log (per-call live feed) -------------------------------------->
     <section id="tab-audit" class="tab">
       <button class="reload" id="audit-reload" hidden>↻</button>
+      <div id="audit-pulse"></div>
       <div class="audit-split">
         <div class="audit-feed-col">
           <div id="audit-list"></div>
@@ -309,6 +333,77 @@
           <div id="audit-detail-panel"><p class="hint" style="padding:18px">Select a call to inspect its token anatomy, prompt &amp; response.</p></div>
         </aside>
       </div>
+    </section>
+
+    <!-- Insights (next-level analytics) -------------------------------------->
+    <section id="tab-insights" class="tab">
+      <button class="reload" id="in-reload" hidden>↻</button>
+      <div id="in-efficiency" class="v2-section"></div>
+      <div id="in-simulator" class="v2-section"></div>
+      <div id="in-substitution" class="v2-section"></div>
+      <div id="in-spc" class="v2-section"></div>
+      <div id="in-overthinking" class="v2-section"></div>
+      <div id="in-dataflow" class="v2-section"></div>
+    </section>
+
+    <!-- Experiments (champion–challenger evidence) --------------------------->
+    <section id="tab-experiments" class="tab">
+      <button class="reload" id="exp-reload" hidden>↻</button>
+      <div id="exp-panel"></div>
+    </section>
+
+    <!-- Model Health (trust · drift · behavior · probes) ---------------------->
+    <section id="tab-modelhealth" class="tab">
+      <button class="reload" id="mh-reload" hidden>↻</button>
+      <div id="mh-cards" class="v2-section"></div>
+      <div id="mh-spc" class="v2-section"></div>
+      <div id="mh-signals" class="v2-section"></div>
+    </section>
+
+    <!-- Tooling (MCP impact) --------------------------------------------------->
+    <section id="tab-tooling" class="tab">
+      <button class="reload" id="tl-reload" hidden>↻</button>
+      <p class="hint" style="max-width:920px">What your connected tools actually cost and save. Every request carries the schemas of every connected MCP (the carrying cost); every answer a graph or MCP call gives in one shot replaces a chain of Read/Grep crawling (the saving). Both are measured from captured traffic.</p>
+      <div id="tl-servers" class="v2-section"></div>
+      <div id="tl-trend" class="v2-section"></div>
+    </section>
+
+    <!-- Bench (same task → N models) ------------------------------------------->
+    <section id="tab-bench" class="tab">
+      <button class="reload" id="bn-reload" hidden>↻</button>
+      <div id="bn-form" class="v2-section"></div>
+      <div id="bn-results" class="v2-section"></div>
+      <div id="bn-working" class="v2-section"></div>
+      <div id="bn-history" class="v2-section"></div>
+    </section>
+
+    <!-- Improvements (prompt coaching) ---------------------------------------->
+    <section id="tab-improve" class="tab">
+      <div class="page-toolbar">
+        <p class="hint" style="flex:1;margin:0">Learn from your own prompts. The judge flags what a prompt was missing, writes the rewrite it would have sent, and <b>▶ simulate</b> actually runs that rewrite against the same model — blind-judged, with the price difference. The habits panel shows your recurring patterns so the lesson sticks.</p>
+        <span class="win-group" id="imp-window">
+          <button data-days="7">7d</button>
+          <button data-days="30" class="active">30d</button>
+          <button data-days="90">90d</button>
+        </span>
+        <button class="reload" id="imp-reload" title="reload">↻</button>
+      </div>
+      <div id="imp-summary" class="v2-section"></div>
+      <div id="imp-list" class="v2-section"></div>
+    </section>
+
+    <!-- Reports (audit / meeting deliverables) ------------------------------->
+    <section id="tab-reports" class="tab">
+      <div class="page-toolbar">
+        <p class="hint" style="flex:1;margin:0">Print-ready reports built from the audit log — what every agent sent through the LLMs, what it cost, what data categories shipped where, and what the judge thought of the answers. Bodies are never included; safe to hand to a client or auditor.</p>
+        <span class="win-group" id="report-window">
+          <button data-days="7">7d</button>
+          <button data-days="30" class="active">30d</button>
+          <button data-days="90">90d</button>
+        </span>
+        <button id="report-generate">📄 Generate audit report</button>
+      </div>
+      <div id="report-status" class="v2-section"></div>
     </section>
 
     <!-- Scorecard (brain layer) --------------------------------------------->
@@ -506,6 +601,8 @@
     <!-- Provider health ----------------------------------------------------->
     <section id="tab-health" class="tab">
       <p class="hint">Computed from <code>/v1/models</code> + the in-process health tracker. Models flagged unhealthy here are auto-skipped on the next routing decision.</p>
+      <div id="health-statuspages" class="v2-section"></div>
+      <div id="health-ormodels" class="v2-section"></div>
       <div id="health-card" class="v2-section"></div>
     </section>
 
@@ -541,6 +638,12 @@
         </label>
         <button id="prefs-save">Save profile</button>
         <span id="prefs-state" class="prefs-state"></span>
+
+        <hr style="margin:1.25rem 0;border:none;border-top:1px solid var(--border)" />
+        <label>Archive sessions inactive for more than (days)
+          <input id="session-archive-days" type="number" min="1" max="3650" step="1" style="width:7em" />
+        </label>
+        <p class="hint">Dashboard-only, saved in this browser. Hides any session idle longer than this from the Overview list so it doesn't grow to hundreds of pages. The active session and never-used tokens stay. Nothing is deleted — raise the number to bring hidden sessions back. Default 30.</p>
       </div>
 
       <!-- Engram-OSS (formerly SecondBrain) sub-pane -->
