@@ -107,8 +107,9 @@ def _cache_get(token: str, *, now: float) -> tuple[str, str | None, str | None] 
     return (agent_id, project_id, override_model)
 
 
-def _cache_put(token: str, agent_id: str, project_id: str | None,
-               override_model: str | None, *, now: float) -> None:
+def _cache_put(
+    token: str, agent_id: str, project_id: str | None, override_model: str | None, *, now: float
+) -> None:
     _CACHE[token] = (agent_id, project_id, override_model, now + _CACHE_TTL_SEC)
 
 

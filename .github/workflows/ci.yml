@@ -17,10 +17,7 @@ jobs:
       # provisions a matching interpreter; --locked verifies uv.lock is in sync.
       - name: Install deps
         run: cd core && uv sync --locked
-      # CONTRIBUTING documents the lint gate as `ruff check` clean. The justfile's
-      # `lint` recipe additionally runs `ruff format --check`, which the repo does
-      # not yet satisfy — gate CI on ruff check until the formatter is adopted.
       - name: Lint
-        run: cd core && uv run ruff check .
+        run: just lint
       - name: Test
         run: just test

@@ -31,22 +31,44 @@ MAX_BENCH_MODELS = 4
 # Canned tool set for "does this model reach for tools?" tests. OpenAI format
 # (converted for Anthropic transports automatically).
 SAMPLE_TOOLS: list[dict] = [
-    {"type": "function", "function": {
-        "name": "read_file",
-        "description": "Read a file from the project by path.",
-        "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Repo-relative file path"}},
-            "required": ["path"]}}},
-    {"type": "function", "function": {
-        "name": "search_code",
-        "description": "Search the codebase for a pattern.",
-        "parameters": {"type": "object", "properties": {
-            "pattern": {"type": "string"}}, "required": ["pattern"]}}},
-    {"type": "function", "function": {
-        "name": "run_command",
-        "description": "Run a shell command and return its output.",
-        "parameters": {"type": "object", "properties": {
-            "command": {"type": "string"}}, "required": ["command"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file from the project by path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Repo-relative file path"}
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": "Search the codebase for a pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {"pattern": {"type": "string"}},
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Run a shell command and return its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+        },
+    },
 ]
 
 
@@ -69,9 +91,17 @@ def _split_target(target: str) -> tuple[str, str]:
     return ("openrouter", f"openrouter/{t}")
 
 
-async def run_bench(pool: asyncpg.Pool, *, pricing, client: httpx.AsyncClient,
-                    agent_id: str, prompt: str, models: list[str],
-                    tools: list[dict] | None = None, max_tokens: int = 1000) -> dict:
+async def run_bench(
+    pool: asyncpg.Pool,
+    *,
+    pricing,
+    client: httpx.AsyncClient,
+    agent_id: str,
+    prompt: str,
+    models: list[str],
+    tools: list[dict] | None = None,
+    max_tokens: int = 1000,
+) -> dict:
     """Fan the task out, persist, return the run."""
     models = [m for m in models if (m or "").strip()][:MAX_BENCH_MODELS]
     messages = [{"role": "user", "content": prompt}]
@@ -82,11 +112,15 @@ async def run_bench(pool: asyncpg.Pool, *, pricing, client: httpx.AsyncClient,
         cost = None
         if pricing is not None and res.get("prompt_tokens") is not None:
             cost = pricing.compute_cost(
-                _pricing_provider(provider, model), model,
+                _pricing_provider(provider, model),
+                model,
                 prompt_tokens=res.get("prompt_tokens"),
-                completion_tokens=res.get("completion_tokens"))
+                completion_tokens=res.get("completion_tokens"),
+            )
         return {
-            "target": target, "provider": provider, "model": model,
+            "target": target,
+            "provider": provider,
+            "model": model,
             "status": res.get("status"),
             "via_fallback": res.get("via_fallback"),
             "latency_ms": res.get("latency_ms"),
@@ -105,11 +139,19 @@ async def run_bench(pool: asyncpg.Pool, *, pricing, client: httpx.AsyncClient,
         VALUES ($1, $2, $3::jsonb, $4, $5::jsonb)
         RETURNING id::text, ts
         """,
-        agent_id, prompt, json.dumps(tools) if tools else None,
-        max_tokens, json.dumps(list(results)),
+        agent_id,
+        prompt,
+        json.dumps(tools) if tools else None,
+        max_tokens,
+        json.dumps(list(results)),
     )
-    return {"id": row["id"], "ts": row["ts"].isoformat(), "prompt": prompt,
-            "tools": tools, "results": list(results)}
+    return {
+        "id": row["id"],
+        "ts": row["ts"].isoformat(),
+        "prompt": prompt,
+        "tools": tools,
+        "results": list(results),
+    }
 
 
 async def recent_runs(pool: asyncpg.Pool, limit: int = 10) -> list[dict]:
@@ -117,7 +159,9 @@ async def recent_runs(pool: asyncpg.Pool, limit: int = 10) -> list[dict]:
         """
         SELECT id::text, ts, prompt, tools, results
           FROM nautgate.bench_runs ORDER BY ts DESC LIMIT $1
-        """, min(limit, 50))
+        """,
+        min(limit, 50),
+    )
     out = []
     for r in rows:
         d = dict(r)
@@ -132,8 +176,9 @@ async def recent_runs(pool: asyncpg.Pool, limit: int = 10) -> list[dict]:
     return out
 
 
-async def working_compare(pool: asyncpg.Pool, *, hours: int = 24,
-                          agent_id: str | None = None) -> dict:
+async def working_compare(
+    pool: asyncpg.Pool, *, hours: int = 24, agent_id: str | None = None
+) -> dict:
     """Per-model behavioral profile from REAL traffic in the window — the
     'just while working' comparison. No synthetic calls."""
     rows = await pool.fetch(
@@ -157,14 +202,16 @@ async def working_compare(pool: asyncpg.Pool, *, hours: int = 24,
          GROUP BY 1
         HAVING COUNT(*) >= 3
          ORDER BY 2 DESC LIMIT 6
-        """, hours, agent_id)
-    return {"hours": hours, "agent_id": agent_id,
-            "models": [dict(r) for r in rows]}
+        """,
+        hours,
+        agent_id,
+    )
+    return {"hours": hours, "agent_id": agent_id, "models": [dict(r) for r in rows]}
 
 
-async def head_to_head(pool: asyncpg.Pool, *, hours: int = 24,
-                       agent_id: str | None = None,
-                       min_models: int = 2) -> dict:
+async def head_to_head(
+    pool: asyncpg.Pool, *, hours: int = 24, agent_id: str | None = None, min_models: int = 2
+) -> dict:
     """Pair REAL calls that answered the SAME task, one row per model.
 
     `working_compare` averages a model over all its traffic, which is
@@ -219,38 +266,46 @@ async def head_to_head(pool: asyncpg.Pool, *, hours: int = 24,
          WHERE task_hash IN (SELECT task_hash FROM per_model
                              GROUP BY task_hash HAVING COUNT(DISTINCT model) >= $3)
          ORDER BY first_ts DESC, model
-        """, hours, agent_id, min_models)
+        """,
+        hours,
+        agent_id,
+        min_models,
+    )
 
     tasks: dict[str, dict] = {}
     for r in rows:
         d = dict(r)
-        t = tasks.setdefault(d["task_hash"], {
-            "task_hash": d["task_hash"],
-            "excerpt": d["excerpt"],
-            "first_ts": d["first_ts"].isoformat() if d.get("first_ts") else None,
-            "models": [],
-        })
+        t = tasks.setdefault(
+            d["task_hash"],
+            {
+                "task_hash": d["task_hash"],
+                "excerpt": d["excerpt"],
+                "first_ts": d["first_ts"].isoformat() if d.get("first_ts") else None,
+                "models": [],
+            },
+        )
         tin, tout = d.get("tokens_in") or 0, d.get("tokens_out") or 0
-        t["models"].append({
-            "model": d["model"],
-            "calls": d["calls"],
-            "tools_offered": d["tools_offered"],
-            "tokens_in": tin,
-            "tokens_out": tout,
-            "tokens_reasoning": d.get("tokens_reasoning") or 0,
-            # context efficiency: input tokens burned per output token produced.
-            "in_per_out": round(tin / tout, 2) if tout else None,
-            "cost_usd": d.get("cost_usd"),
-            # unpriced models must read as UNKNOWN, never as $0 — a missing
-            # pricing.yaml entry otherwise looks like a free model.
-            "unpriced": (d.get("priced_calls") or 0) < d["calls"],
-            "ttfb_ms": d.get("ttfb_ms"),
-            "duration_ms": d.get("duration_ms"),
-            "tool_calls": d.get("tool_calls") or 0,
-            "tool_names": json.loads(d["tool_names"]) if d.get("tool_names") else [],
-        })
-    return {"hours": hours, "agent_id": agent_id,
-            "tasks": list(tasks.values())}
+        t["models"].append(
+            {
+                "model": d["model"],
+                "calls": d["calls"],
+                "tools_offered": d["tools_offered"],
+                "tokens_in": tin,
+                "tokens_out": tout,
+                "tokens_reasoning": d.get("tokens_reasoning") or 0,
+                # context efficiency: input tokens burned per output token produced.
+                "in_per_out": round(tin / tout, 2) if tout else None,
+                "cost_usd": d.get("cost_usd"),
+                # unpriced models must read as UNKNOWN, never as $0 — a missing
+                # pricing.yaml entry otherwise looks like a free model.
+                "unpriced": (d.get("priced_calls") or 0) < d["calls"],
+                "ttfb_ms": d.get("ttfb_ms"),
+                "duration_ms": d.get("duration_ms"),
+                "tool_calls": d.get("tool_calls") or 0,
+                "tool_names": json.loads(d["tool_names"]) if d.get("tool_names") else [],
+            }
+        )
+    return {"hours": hours, "agent_id": agent_id, "tasks": list(tasks.values())}
 
 
 def _qualify(model: str) -> str | None:
@@ -283,9 +338,11 @@ async def available_models(pool: asyncpg.Pool, pricing=None) -> list[str]:
     ROUTABLE = ("anthropic/", "openai/", "openrouter/")
 
     def usable(t: str) -> bool:
-        return (t.startswith(ROUTABLE)
-                and not t.endswith("]")        # pricing aliases like "…[1m]"
-                and not t.endswith("/local"))  # lmstudio / local stubs
+        return (
+            t.startswith(ROUTABLE)
+            and not t.endswith("]")  # pricing aliases like "…[1m]"
+            and not t.endswith("/local")
+        )  # lmstudio / local stubs
 
     targets: set[str] = set()
     for key in getattr(pricing, "_prices", {}):
@@ -298,7 +355,8 @@ async def available_models(pool: asyncpg.Pool, pricing=None) -> list[str]:
               FROM nautgate.route_decisions d
               LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
              WHERE d.ts > NOW() - INTERVAL '30 days'
-            """)
+            """
+        )
         for r in rows:
             q = _qualify(r["m"])
             if q and usable(q):

@@ -119,7 +119,7 @@ def update_ewma(
     z: float | None = None
     is_anomaly = False
     if new_count >= MIN_SAMPLES_FOR_ANOMALY and prev_variance > 0:
-        stddev = prev_variance ** 0.5
+        stddev = prev_variance**0.5
         z = delta / stddev
         is_anomaly = abs(z) >= z_threshold
 

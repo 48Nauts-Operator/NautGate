@@ -179,7 +179,9 @@ def is_machine_probe(decision: dict) -> bool:
 
 
 def should_evaluate(
-    decision: dict, outcome: dict, config: dict,
+    decision: dict,
+    outcome: dict,
+    config: dict,
 ) -> tuple[bool, str]:
     """Decide whether to send this (decision, outcome) pair to the judge.
 
@@ -261,9 +263,13 @@ def _summarize_tool_sequence(tool_calls: Any) -> list[dict]:
         elif isinstance(args_raw, dict):
             args = args_raw
         target = (
-            args.get("file_path") or args.get("path")
+            args.get("file_path")
+            or args.get("path")
             or (args.get("command") or "")[:80]
-            or args.get("pattern") or args.get("query") or args.get("url") or ""
+            or args.get("pattern")
+            or args.get("query")
+            or args.get("url")
+            or ""
         )
         out.append({"name": name, "target": target[:160]})
     return out
@@ -277,6 +283,7 @@ def _readable_response(raw: str) -> str:
     if not raw or "data:" not in raw[:2000]:
         return raw
     from app.streaming import parse_sse_for_outcome
+
     try:
         parsed = parse_sse_for_outcome(raw.encode("utf-8", errors="replace"))
     except Exception:
@@ -298,7 +305,8 @@ def _make_user_message(decision: dict, outcome: dict) -> str:
         "provider": decision.get("decision_provider"),
         "tier": decision.get("classified_tier"),
         "classified_score": float(decision["classified_score"])
-            if decision.get("classified_score") is not None else None,
+        if decision.get("classified_score") is not None
+        else None,
         "prompt_tokens": outcome.get("prompt_tokens"),
         "completion_tokens": outcome.get("completion_tokens"),
         "reasoning_tokens": outcome.get("reasoning_tokens"),
@@ -366,8 +374,9 @@ async def _call_judge(
         resp = await client.post(chat_url, json=body, headers=headers, timeout=10.0)
         telemetry["judge_latency_ms"] = int((time.monotonic() - started) * 1000)
         if resp.status_code >= 400:
-            log.warning("quality_eval_judge_http_error",
-                        status=resp.status_code, body=resp.text[:400])
+            log.warning(
+                "quality_eval_judge_http_error", status=resp.status_code, body=resp.text[:400]
+            )
             return None, telemetry
         payload = resp.json()
     except Exception as exc:
@@ -395,7 +404,12 @@ async def _call_judge(
 
 
 async def _persist(
-    pool, *, decision_id, rubric: dict, trigger: str, telemetry: dict,
+    pool,
+    *,
+    decision_id,
+    rubric: dict,
+    trigger: str,
+    telemetry: dict,
     pricing,
 ) -> None:
     cost = telemetry.get("judge_cost_usd")
@@ -418,11 +432,18 @@ async def _persist(
     # action_compliance added in the behavioral-analytics work — measures
     # whether the model's tool sequence matched what the user asked for.
     rubric_payload = {
-        k: rubric.get(k) for k in
-        ("task_understanding", "task_completion", "reasoning_efficiency",
-         "action_compliance", "prompt_clarity",
-         # Data-relevance section (audit analyser) — lives in the same jsonb.
-         "data_categories_shared", "irrelevant_share", "irrelevant_items")
+        k: rubric.get(k)
+        for k in (
+            "task_understanding",
+            "task_completion",
+            "reasoning_efficiency",
+            "action_compliance",
+            "prompt_clarity",
+            # Data-relevance section (audit analyser) — lives in the same jsonb.
+            "data_categories_shared",
+            "irrelevant_share",
+            "irrelevant_items",
+        )
         if isinstance(rubric, dict)
     }
     suggested = rubric.get("suggested_prompt") if isinstance(rubric, dict) else None
@@ -493,7 +514,10 @@ async def _load_pair(pool, decision_id) -> tuple[dict | None, dict | None]:
 
 
 async def process_quality(
-    pool, *, decision_id, judge_client: httpx.AsyncClient | None = None,
+    pool,
+    *,
+    decision_id,
+    judge_client: httpx.AsyncClient | None = None,
     pricing=None,
 ) -> None:
     """Post-outcome hook entry point. Mirrors process_drift / process_brain.
@@ -530,20 +554,30 @@ async def process_quality(
         if rubric is None:
             return
         await _persist(
-            pool, decision_id=decision["decision_id"],
-            rubric=rubric, trigger=trigger, telemetry=telemetry, pricing=pricing,
+            pool,
+            decision_id=decision["decision_id"],
+            rubric=rubric,
+            trigger=trigger,
+            telemetry=telemetry,
+            pricing=pricing,
         )
-        log.info("quality_eval_written",
-                 decision_id=str(decision["decision_id"]), trigger=trigger,
-                 cost_usd=telemetry.get("judge_cost_usd"))
+        log.info(
+            "quality_eval_written",
+            decision_id=str(decision["decision_id"]),
+            trigger=trigger,
+            cost_usd=telemetry.get("judge_cost_usd"),
+        )
     except Exception as exc:
-        log.warning("quality_eval_failed", error=str(exc),
-                    decision_id=str(decision_id))
+        log.warning("quality_eval_failed", error=str(exc), decision_id=str(decision_id))
 
 
 async def manual_evaluate(
-    pool, *, decision_id, judge_client: httpx.AsyncClient | None,
-    pricing=None, trigger: str = "manual",
+    pool,
+    *,
+    decision_id,
+    judge_client: httpx.AsyncClient | None,
+    pricing=None,
+    trigger: str = "manual",
 ) -> dict | None:
     """Bypass sampling — used by the Audit drawer's [Run eval] button and
     the 👎 thumbs-down icon. Still honours the sensitivity gate + daily cap.
@@ -571,7 +605,11 @@ async def manual_evaluate(
     if rubric is None:
         return None
     await _persist(
-        pool, decision_id=decision["decision_id"],
-        rubric=rubric, trigger=trigger, telemetry=telemetry, pricing=pricing,
+        pool,
+        decision_id=decision["decision_id"],
+        rubric=rubric,
+        trigger=trigger,
+        telemetry=telemetry,
+        pricing=pricing,
     )
     return await queries.get_quality_eval(pool, decision_id)

@@ -53,6 +53,7 @@ async def _get_config(pool) -> dict:
     if _config_cache is not None and (now - _config_cached_at) < _CONFIG_CACHE_TTL_SEC:
         return _config_cache
     from app.app_config import is_offline, sb_ingest_config
+
     cfg = await sb_ingest_config(pool)
     # Offline / air-gapped: SB ingest usually points at a Postgres on ANOTHER
     # host, so it is real data leaving the box even though it isn't a model
@@ -89,7 +90,7 @@ def _dsn_from(cfg: dict) -> str:
 # ── Circuit breaker ─────────────────────────────────────────────────────────
 # If stargate is unreachable, stop hammering it for a cooldown window.
 
-_CIRCUIT_THRESHOLD = 5      # consecutive failures
+_CIRCUIT_THRESHOLD = 5  # consecutive failures
 _CIRCUIT_COOLDOWN_SEC = 60  # window to wait before retrying
 _consecutive_failures = 0
 _circuit_open_until_ts: float = 0.0
@@ -131,7 +132,8 @@ async def _get_pool(cfg: dict) -> asyncpg.Pool | None:
     try:
         _pool = await asyncpg.create_pool(
             _dsn_from(cfg),
-            min_size=1, max_size=4,
+            min_size=1,
+            max_size=4,
             command_timeout=5.0,
         )
         log.info("sb_memory_pool_ready", dsn_host=cfg.get("host"))
@@ -154,6 +156,7 @@ async def close_pool() -> None:
 
 # ── Delta extraction ────────────────────────────────────────────────────────
 
+
 def _extract_text(content: Any) -> str:
     """Get plain text out of a content field that may be a string or a list
     of Anthropic-style content blocks."""
@@ -169,7 +172,9 @@ def _extract_text(content: Any) -> str:
 
 
 def _assistant_text_and_meta(
-    response_body: dict | None, model: str | None, session_id: str | None,
+    response_body: dict | None,
+    model: str | None,
+    session_id: str | None,
 ) -> tuple[str, dict]:
     """Pull the assistant's text out of a captured response body, regardless
     of which API shape it came from (OpenAI Chat, OpenAI Responses, Anthropic).
@@ -216,9 +221,7 @@ def _assistant_text_and_meta(
     content = response_body.get("content")
     if isinstance(content, list):
         text = "\n".join(
-            b.get("text", "")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
         )
         usage = response_body.get("usage") or {}
         return text, {
@@ -257,8 +260,10 @@ def _build_entries(
     if prompt_body:
         try:
             parsed = json.loads(prompt_body)
-            messages = parsed if isinstance(parsed, list) else (
-                parsed.get("messages") if isinstance(parsed, dict) else None
+            messages = (
+                parsed
+                if isinstance(parsed, list)
+                else (parsed.get("messages") if isinstance(parsed, dict) else None)
             )
         except (ValueError, TypeError):
             messages = None
@@ -268,20 +273,21 @@ def _build_entries(
         if isinstance(last, dict) and last.get("role") == "user":
             text = _extract_text(last.get("content"))
             is_tool_result_only = isinstance(last.get("content"), list) and all(
-                isinstance(b, dict) and b.get("type") == "tool_result"
-                for b in last["content"]
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in last["content"]
             )
             if text and len(text) > 5 and not is_tool_result_only:
-                entries.append({
-                    "category": "user_message",
-                    "content": text[:2000],
-                    "metadata": {
-                        "session_id": session_id,
-                        "model": model,
-                        "turn": len(messages),
-                        "source": "nautgate",
-                    },
-                })
+                entries.append(
+                    {
+                        "category": "user_message",
+                        "content": text[:2000],
+                        "metadata": {
+                            "session_id": session_id,
+                            "model": model,
+                            "turn": len(messages),
+                            "source": "nautgate",
+                        },
+                    }
+                )
 
     # ── Assistant: parse the response body across formats ──────────────────
     if response_body:
@@ -291,14 +297,18 @@ def _build_entries(
             parsed_resp = None
         if parsed_resp:
             assistant_text, assistant_meta = _assistant_text_and_meta(
-                parsed_resp, model=model, session_id=session_id,
+                parsed_resp,
+                model=model,
+                session_id=session_id,
             )
             if assistant_text and len(assistant_text) > 5:
-                entries.append({
-                    "category": "assistant_response",
-                    "content": assistant_text[:4000],
-                    "metadata": assistant_meta,
-                })
+                entries.append(
+                    {
+                        "category": "assistant_response",
+                        "content": assistant_text[:4000],
+                        "metadata": assistant_meta,
+                    }
+                )
 
     return entries
 
@@ -308,7 +318,7 @@ def _build_entries(
 
 async def ingest_outcome(
     *,
-    app_pool,                      # NautGate's pool — used to load app_config
+    app_pool,  # NautGate's pool — used to load app_config
     agent_id: str,
     session_id: str | None,
     model: str | None,

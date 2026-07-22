@@ -36,6 +36,7 @@ class BehavioralCanary:
     in the prompt itself, so the judge can score compliance against the
     stated instructions.
     """
+
     name: str
     description: str
     prompt: str
@@ -200,7 +201,9 @@ async def _call_openrouter(
     try:
         resp = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            json=body, headers=headers, timeout=60.0,
+            json=body,
+            headers=headers,
+            timeout=60.0,
         )
         duration_ms = int((time.monotonic() - started) * 1000)
     except Exception as exc:
@@ -219,32 +222,49 @@ async def _call_openrouter(
 
     if resp.status_code >= 400:
         return CanaryRunResult(
-            canary_name="", target_model=model, prompt=prompt,
-            response_text=None, prompt_tokens=None, completion_tokens=None,
-            duration_ms=duration_ms, status_code=resp.status_code,
+            canary_name="",
+            target_model=model,
+            prompt=prompt,
+            response_text=None,
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_ms=duration_ms,
+            status_code=resp.status_code,
             error=resp.text[:400],
         )
     try:
         payload = resp.json()
     except Exception as exc:
         return CanaryRunResult(
-            canary_name="", target_model=model, prompt=prompt,
-            response_text=None, prompt_tokens=None, completion_tokens=None,
-            duration_ms=duration_ms, status_code=resp.status_code,
+            canary_name="",
+            target_model=model,
+            prompt=prompt,
+            response_text=None,
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_ms=duration_ms,
+            status_code=resp.status_code,
             error=f"bad_json: {exc}",
         )
     choices = payload.get("choices") or []
     if not choices:
         return CanaryRunResult(
-            canary_name="", target_model=model, prompt=prompt,
-            response_text=None, prompt_tokens=None, completion_tokens=None,
-            duration_ms=duration_ms, status_code=resp.status_code,
+            canary_name="",
+            target_model=model,
+            prompt=prompt,
+            response_text=None,
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_ms=duration_ms,
+            status_code=resp.status_code,
             error="no_choices",
         )
     response_text = (choices[0].get("message") or {}).get("content") or ""
     usage = payload.get("usage") or {}
     return CanaryRunResult(
-        canary_name="", target_model=model, prompt=prompt,
+        canary_name="",
+        target_model=model,
+        prompt=prompt,
         response_text=response_text,
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
@@ -284,7 +304,8 @@ async def _judge_canary(
     api_key = judge_config.get("api_key") or ""
     base_url = (judge_config.get("judge_base_url") or "https://openrouter.ai/api").rstrip("/")
     chat_url = (
-        f"{base_url}/chat/completions" if base_url.endswith("/v1")
+        f"{base_url}/chat/completions"
+        if base_url.endswith("/v1")
         else f"{base_url}/v1/chat/completions"
     )
     body = {
@@ -319,9 +340,14 @@ async def _judge_canary(
         log.warning("behavioral_judge_bad_json", snippet=raw[:200])
         return result
     result.rubric = {
-        k: rubric_full.get(k) for k in
-        ("task_understanding", "task_completion", "reasoning_efficiency",
-         "action_compliance", "prompt_clarity")
+        k: rubric_full.get(k)
+        for k in (
+            "task_understanding",
+            "task_completion",
+            "reasoning_efficiency",
+            "action_compliance",
+            "prompt_clarity",
+        )
     }
     ft = rubric_full.get("failure_tags") or []
     result.failure_tags = [str(t) for t in ft] if isinstance(ft, list) else []
@@ -351,7 +377,11 @@ async def run_comparison(
         for canary in canaries:
             for model in models:
                 result = await _call_openrouter(
-                    ext, openrouter_api_key, model, canary.prompt, canary.max_tokens,
+                    ext,
+                    openrouter_api_key,
+                    model,
+                    canary.prompt,
+                    canary.max_tokens,
                 )
                 result.canary_name = canary.name
                 if result.error is None:
@@ -375,10 +405,22 @@ async def _persist_result(pool, comparison_id: uuid.UUID, r: CanaryRunResult) ->
             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
                     $13::jsonb, $14, $15, $16)
             """,
-            comparison_id, r.canary_name, r.prompt, "openrouter", r.target_model,
-            r.response_text, tcalls_json, r.prompt_tokens, r.completion_tokens,
-            r.duration_ms, r.status_code, r.error, rubric_json, tags,
-            r.coach_notes, r.judge_cost_usd,
+            comparison_id,
+            r.canary_name,
+            r.prompt,
+            "openrouter",
+            r.target_model,
+            r.response_text,
+            tcalls_json,
+            r.prompt_tokens,
+            r.completion_tokens,
+            r.duration_ms,
+            r.status_code,
+            r.error,
+            rubric_json,
+            tags,
+            r.coach_notes,
+            r.judge_cost_usd,
         )
 
 
@@ -414,10 +456,7 @@ async def get_latest_comparison(pool) -> dict:
             except (ValueError, TypeError):
                 d["rubric"] = None
         grouped.setdefault(d["canary_name"], []).append(d)
-    canaries_out = [
-        {"name": name, "results": results}
-        for name, results in grouped.items()
-    ]
+    canaries_out = [{"name": name, "results": results} for name, results in grouped.items()]
     return {
         "comparison_id": str(comp_row["comparison_id"]),
         "ts": comp_row["ts"].isoformat() if comp_row["ts"] else None,

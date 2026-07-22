@@ -66,9 +66,16 @@ _OAUTH_TOKEN_PREFIX = "sk-ant-oat01-"
 
 # Hop-by-hop headers per RFC — never forwarded between client and upstream.
 _HOP_BY_HOP = {
-    "host", "connection", "keep-alive", "proxy-authenticate",
-    "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
-    "content-length",   # httpx recomputes
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",  # httpx recomputes
     "content-encoding",  # let httpx pick / strip
 }
 
@@ -77,8 +84,15 @@ _HOP_BY_HOP = {
 # the way back so the client decompresses. Same for Content-Length — the
 # upstream value is correct for the bytes we relay.
 _HOP_BY_HOP_RESPONSE = {
-    "host", "connection", "keep-alive", "proxy-authenticate",
-    "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
 }
 
 
@@ -108,7 +122,11 @@ def _agent_id_for(token: str) -> str:
     16 chars after the prefix so reissues bind to the same agent but
     distinct accounts get distinct ids.
     """
-    body = token[len(_OAUTH_TOKEN_PREFIX):] if token.lower().startswith(_OAUTH_TOKEN_PREFIX) else token
+    body = (
+        token[len(_OAUTH_TOKEN_PREFIX) :]
+        if token.lower().startswith(_OAUTH_TOKEN_PREFIX)
+        else token
+    )
     return f"claude-oauth-{body[:16]}"
 
 
@@ -124,9 +142,14 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     return out
 
 
-def _notional_cost(pricing, model: str | None, prompt_tk: int | None,
-                   completion_tk: int | None, cache_read_tk: int | None = None,
-                   cache_write_tk: int | None = None) -> float | None:
+def _notional_cost(
+    pricing,
+    model: str | None,
+    prompt_tk: int | None,
+    completion_tk: int | None,
+    cache_read_tk: int | None = None,
+    cache_write_tk: int | None = None,
+) -> float | None:
     """Compute what this call WOULD have cost on metered billing.
 
     Uses the same PricingTable the metered path uses, with ``anthropic``
@@ -138,9 +161,12 @@ def _notional_cost(pricing, model: str | None, prompt_tk: int | None,
         return None
     try:
         return pricing.compute_cost(
-            "anthropic", model,
-            prompt_tokens=prompt_tk, completion_tokens=completion_tk,
-            cache_read_tokens=cache_read_tk, cache_write_tokens=cache_write_tk,
+            "anthropic",
+            model,
+            prompt_tokens=prompt_tk,
+            completion_tokens=completion_tk,
+            cache_read_tokens=cache_read_tk,
+            cache_write_tokens=cache_write_tk,
         )
     except Exception:
         return None
@@ -178,11 +204,13 @@ def _parse_response_meta(body_bytes: bytes, was_streaming: bool) -> dict:
             if btype == "text" and isinstance(block.get("text"), str):
                 text_parts.append(block["text"])
             elif btype == "tool_use":
-                tool_calls.append({
-                    "id": block.get("id"),
-                    "name": block.get("name"),
-                    "arguments": json.dumps(block.get("input") or {}),
-                })
+                tool_calls.append(
+                    {
+                        "id": block.get("id"),
+                        "name": block.get("name"),
+                        "arguments": json.dumps(block.get("input") or {}),
+                    }
+                )
     n = normalize_usage(usage, provider_hint="anthropic")
     return {
         "prompt_tokens": n.prompt_tokens,
@@ -212,8 +240,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     # Identify the caller from their OAuth token. We never log or persist
     # the token; only the derived short id ends up in agent_id.
     auth_hdr = request.headers.get("authorization", "")
-    token = auth_hdr.split(" ", 1)[1].strip() if auth_hdr.lower().startswith("bearer ") else \
-        request.headers.get("x-api-key", "").strip()
+    token = (
+        auth_hdr.split(" ", 1)[1].strip()
+        if auth_hdr.lower().startswith("bearer ")
+        else request.headers.get("x-api-key", "").strip()
+    )
     agent_id = _agent_id_for(token)
 
     decision_id = uuid.uuid4()
@@ -231,6 +262,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             from app.classify import assemble_user_text, classify
             from app.drift import compute_session_id
             from app.scoring import score
+
             score_vector = score(payload or {})
             messages = (payload or {}).get("messages") if isinstance(payload, dict) else None
             # NAUTGATE-1: the passthrough path used to hardcode sensitivity="none",
@@ -242,7 +274,8 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             captured_body = capture_prompt(messages, sensitivity) if messages else None
             captured_tools = (
                 capture_tools(payload.get("tools"), sensitivity)
-                if isinstance(payload, dict) and payload.get("tools") else None
+                if isinstance(payload, dict) and payload.get("tools")
+                else None
             )
             await queries.precapture(
                 pool,
@@ -301,8 +334,10 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
         for _attempt in range(_MAX_OVERLOAD_RETRIES + 1):
             upstream = await client.send(
                 client.build_request(
-                    method=request.method, url=url,
-                    headers=fwd_headers, content=raw_body,
+                    method=request.method,
+                    url=url,
+                    headers=fwd_headers,
+                    content=raw_body,
                 ),
                 stream=True,
             )
@@ -312,10 +347,17 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             if upstream.status_code == 529:
                 overload_retries += 1
             await upstream.aclose()  # drain the failed response before retrying
-            delay = retry_after if retry_after is not None else min(
-                _RETRY_CAP_S, _RETRY_BASE_S * (2 ** _attempt)) + 0.05 * _attempt
-            log.info("anthropic_oauth_retry", status=upstream.status_code,
-                     attempt=_attempt + 1, delay_s=round(delay, 2))
+            delay = (
+                retry_after
+                if retry_after is not None
+                else min(_RETRY_CAP_S, _RETRY_BASE_S * (2**_attempt)) + 0.05 * _attempt
+            )
+            log.info(
+                "anthropic_oauth_retry",
+                status=upstream.status_code,
+                attempt=_attempt + 1,
+                delay_s=round(delay, 2),
+            )
             await asyncio.sleep(delay)
     except httpx.HTTPError as exc:
         await client.aclose()
@@ -325,8 +367,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     # Build the response back to the client. Preserve Content-Encoding
     # so the client decompresses correctly (we forward raw upstream bytes).
     response_headers = {
-        k: v for k, v in upstream.headers.items()
-        if k.lower() not in _HOP_BY_HOP_RESPONSE
+        k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP_RESPONSE
     }
     response_headers["X-Nautgate-Decision-Id"] = str(decision_id)
     response_headers["X-Nautgate-OAuth-Passthrough"] = "anthropic"
@@ -356,7 +397,8 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                 duration_ms = int((_time.monotonic_ns() - started_at_ns) / 1_000_000)
                 first_byte_ms = (
                     int((first_byte_ns - started_at_ns) / 1_000_000)
-                    if first_byte_ns is not None else None
+                    if first_byte_ns is not None
+                    else None
                 )
                 try:
                     # We forward upstream bytes raw to the client (so the
@@ -368,6 +410,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     ce = upstream.headers.get("content-encoding", "").lower()
                     if ce in ("gzip", "x-gzip"):
                         import gzip
+
                         try:
                             decoded = gzip.decompress(bytes(body_buf))
                         except OSError:
@@ -375,12 +418,14 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     elif ce == "br":
                         try:
                             import brotli  # optional dep
+
                             decoded = brotli.decompress(bytes(body_buf))
                         except Exception:
                             decoded = bytes(body_buf)
                     elif ce == "zstd":
                         try:
                             import zstandard  # optional dep
+
                             decoded = zstandard.ZstdDecompressor().decompress(bytes(body_buf))
                         except Exception:
                             decoded = bytes(body_buf)
@@ -402,9 +447,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         meta.get("cache_write_tokens"),
                     )
                     from app.outcome import persist_outcome
+
                     spool = getattr(request.app.state, "outcome_spool", None)
                     await persist_outcome(
-                        pool, spool,
+                        pool,
+                        spool,
                         decision_id=decision_id,
                         status_code=upstream_status,
                         duration_ms=duration_ms,
@@ -435,17 +482,21 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         from app.quality_eval import (
                             process_quality as _process_quality,
                         )
+
                         await _process_quality(
                             pool,
                             decision_id=decision_id,
                             judge_client=getattr(
-                                request.app.state, "quality_judge", None,
+                                request.app.state,
+                                "quality_judge",
+                                None,
                             ),
                             pricing=pricing,
                         )
                     except Exception as exc:
                         log.warning(
-                            "anthropic_oauth_quality_failed", error=str(exc),
+                            "anthropic_oauth_quality_failed",
+                            error=str(exc),
                         )
                     # Brain layer (bloat findings + scorecard) and shadow
                     # trials — passthrough traffic is most of the gateway's
@@ -454,8 +505,10 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     # price); real cost accounting is untouched.
                     try:
                         from app.scorecard import process_brain as _process_brain
+
                         await _process_brain(
-                            pool, pricing,
+                            pool,
+                            pricing,
                             decision_id=decision_id,
                             actual_model=meta.get("actual_model"),
                         )
@@ -467,11 +520,13 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     # the scorecard, using the session_id set in PRECAPTURE.
                     try:
                         from app.drift_engine import process_drift as _process_drift
+
                         await _process_drift(pool, decision_id=decision_id)
                     except Exception as exc:
                         log.warning("anthropic_oauth_drift_failed", error=str(exc))
                     try:
                         from app.shadow import process_shadow as _process_shadow
+
                         await _process_shadow(
                             pool,
                             decision_id=decision_id,
@@ -492,6 +547,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     # while flow-memory-proxy still runs), this is a no-op.
                     try:
                         from app.sb_memory import ingest_outcome as _sb_ingest
+
                         sb_session_id = "proxy"
                         if isinstance(payload, dict):
                             sid = payload.get("_session_id")
@@ -502,14 +558,13 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                             agent_id="claude-code",
                             session_id=sb_session_id,
                             model=meta.get("actual_model") or requested_model,
-                            prompt_body=(
-                                captured_body.body if captured_body else None
-                            ),
+                            prompt_body=(captured_body.body if captured_body else None),
                             response_body=response_captured.body,
                         )
                     except Exception as exc:
                         log.warning(
-                            "anthropic_oauth_engram_failed", error=str(exc),
+                            "anthropic_oauth_engram_failed",
+                            error=str(exc),
                         )
                 except Exception as exc:
                     log.warning("anthropic_oauth_outcome_failed", error=str(exc))
