@@ -990,6 +990,45 @@ async def responses(request: Request) -> Response:
     )
 
 
+async def _lmstudio_models() -> list[dict]:
+    """Locally-loaded LM Studio models, as `lmstudio/<id>` routing targets.
+
+    They belong in /v1/models because they ARE selectable models — without them
+    the Settings→Keys picker cannot pin a key to a local model. Ids are prefixed
+    so NautRouter's `lmstudio/` passthrough routes them.
+
+    Best-effort: LM Studio is usually not running, so any failure returns [] and
+    the rest of the list is unaffected. Note this URL is the HOST-reachable one
+    (localhost), distinct from LMSTUDIO_BASE_URL which NautRouter uses from
+    inside its container (host.docker.internal).
+    """
+    import os as _os
+    base = _os.environ.get("NAUTGATE_LMSTUDIO_URL", "http://localhost:1238").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=0.5)) as c:
+            r = await c.get(f"{base}/v1/models")
+            if r.status_code != 200:
+                return []
+            items = (r.json() or {}).get("data") or []
+    except Exception:
+        return []
+    out = []
+    for m in items:
+        mid = m.get("id") if isinstance(m, dict) else None
+        # Embedding / reranker models can't serve chat completions.
+        if not mid or "embed" in mid or "rerank" in mid:
+            continue
+        out.append({
+            "id": f"lmstudio/{mid}",
+            "object": "model",
+            "owned_by": "lmstudio",
+            "nautgate_provider": "lmstudio",
+            "nautgate_tiers": [],
+            "nautgate_local": True,
+        })
+    return sorted(out, key=lambda m: m["id"])
+
+
 @router.get("/models")
 async def list_models(request: Request) -> Response:
     """Lists models available via NautGate.
@@ -1036,6 +1075,7 @@ async def list_models(request: Request) -> Response:
             item["nautgate_unhealthy"] = True
 
     data = sorted(seen.values(), key=lambda m: (m["nautgate_provider"], m["id"]))
+    data.extend(await _lmstudio_models())
     # Synthetic "auto" entry — NautGate's tier-driven router.
     data.insert(
         0,

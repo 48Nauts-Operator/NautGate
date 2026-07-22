@@ -505,6 +505,20 @@ function resolveModel(modelKey: string): ModelDef | undefined {
       contextWindow: 0,
     };
   }
+  // LM Studio passthrough: "lmstudio/<id>" forwards <id> verbatim to the local
+  // LM Studio server. Without this, only the single hardcoded "local" model was
+  // reachable, so you could not pick which local model to run. The id keeps its
+  // own namespace ("lmstudio/qwen/qwen3.6-35b-a3b" -> "qwen/qwen3.6-35b-a3b").
+  // Context window 0 = unknown; local models vary and NautGate does not price them.
+  if (modelKey.startsWith("lmstudio/")) {
+    return {
+      id: modelKey.slice("lmstudio/".length),
+      provider: "lmstudio" as ModelDef["provider"],
+      inputPrice: 0,
+      outputPrice: 0,
+      contextWindow: 0,
+    };
+  }
   // Anthropic passthrough: clients send dashed snapshot ids (claude-opus-4-8,
   // claude-haiku-4-5-20251001, claude-fable-5) that the curated MODELS map
   // doesn't list. Silently routing those to the DEFAULT provider served
@@ -585,11 +599,19 @@ async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean): Pr
 }
 
 async function forwardLMStudio(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
-  // LM Studio is OpenAI-compatible, just forward
+  // LM Studio is OpenAI-compatible, just forward.
+  // On a STREAM, OpenAI-compatible servers omit the usage block unless it is
+  // explicitly requested — without this, local runs recorded 0 prompt/completion
+  // tokens, so local-vs-cloud could not be measured at all. include_usage adds a
+  // final chunk carrying usage; NautGate's SSE parser already reads it.
+  const out: any = { ...body, model: modelDef.id, stream };
+  if (stream) {
+    out.stream_options = { ...(out.stream_options ?? {}), include_usage: true };
+  }
   return fetch(`${LMSTUDIO_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...body, model: modelDef.id, stream }),
+    body: JSON.stringify(out),
   });
 }
 

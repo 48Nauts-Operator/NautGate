@@ -1409,6 +1409,7 @@
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div class="section-title" style="margin:0">Analysis</div>
         <button class="ghost audit-call-report" data-decision="${esc(d.decision_id || "")}" title="Standalone HTML report for this call — overlay, open in tab, or download">📄 report</button>
+        <button class="ghost audit-call-flow" data-decision="${esc(d.decision_id || "")}" title="Routing flow for this call — client → lane → decision → provider → model actually served">🔀 flow</button>
       </div>
       <details class="coach-accordion" data-decision="${esc(d.decision_id || "")}">
         <summary>▸ Coach <span class="hint">(judge eval, click to load)</span></summary>
@@ -1700,6 +1701,201 @@
       const a = document.createElement("a");
       a.href = blobUrl();
       a.download = `nautgate-call-${(d.decision_id || "report").slice(0, 8)}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) wrap.remove(); });
+  }
+
+  // ── Per-call ROUTING FLOW — the hop-by-hop path a request actually took.
+  // Exists because "which model answered?" cannot be settled by asking the
+  // model: the client's system prompt dictates the identity it claims (Claude
+  // Code tells any routed model it is Fable 5). Only the upstream-reported
+  // `actual_model` is attested, so the flow makes requested-vs-served explicit.
+  document.addEventListener("click", async (ev) => {
+    const btn = ev.target && ev.target.closest ? ev.target.closest(".audit-call-flow") : null;
+    if (!btn) return;
+    const did = btn.dataset.decision;
+    if (!did) return;
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = "building…";
+    try {
+      let d = auditDetailCache.get(did);
+      if (!d) {
+        const scope = getActiveAgentScope();
+        d = await api("/v1/decisions/" + encodeURIComponent(did) + (scope ? "?agent_id=" + encodeURIComponent(scope) : ""));
+        auditDetailCache.set(did, d);
+      }
+      _showCallFlowModal(d);
+    } catch (e) {
+      NG.toast?.("flow failed: " + (e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  });
+
+  function _buildCallFlowHtml(d) {
+    const S = (v) => esc(v == null ? "—" : String(v));
+    const kb = (b) => (b == null ? "—" : (b / 1024).toFixed(1) + " KB");
+    const ms = (v) => (v == null ? "—" : v < 1000 ? v + " ms" : (v / 1000).toFixed(1) + " s");
+    const req = d.model_requested || "—";
+    const served = d.actual_model || d.decision_model || "—";
+    // Substitution = the client asked for one model and a different one answered.
+    // Compare loosely: served ids often carry a provider namespace prefix.
+    const bare = (m) => String(m || "").split("/").pop().toLowerCase();
+    const substituted = req !== "—" && served !== "—" && bare(req) !== bare(served);
+    const lane = d.inbound_format || "—";
+    const oauthLane = /oauth|_ws$/.test(lane);
+
+    // Upstream hop. actual_provider is only known once the outcome lands (and
+    // for OpenRouter it names the sub-host that actually ran the model, e.g.
+    // "Inceptron"). Until then, derive the network the call goes out over from
+    // the model namespace — "openrouter/moonshotai/kimi-k2.6" → openrouter.
+    // Never fall back to decision_provider: that just mirrors the DECISION node
+    // and makes an unknown look like a fact.
+    const ns = (m) => {
+      const s = String(m || "");
+      return s.includes("/") ? s.split("/")[0] : "";
+    };
+    const route = ns(d.decision_model) || ns(d.actual_model)
+      || (/^claude/.test(d.decision_model || "") ? "anthropic" : "")
+      || (/^(gpt-|o[134])/.test(d.decision_model || "") ? "openai" : "");
+    const pending = d.status_code == null && d.duration_ms == null;
+    const upstreamTitle = route || d.actual_provider || "—";
+    const upstreamSub = pending
+      ? "no outcome recorded yet"
+      : d.used_fallback ? `via fallback (${d.fallback_count})`
+      : (d.actual_provider && d.actual_provider !== route)
+        ? `served by ${d.actual_provider}` : "direct";
+
+    const node = (kind, title, sub, rows) => `
+      <div class="node ${kind}">
+        <div class="node-kind">${S(kind.toUpperCase())}</div>
+        <div class="node-title">${S(title)}</div>
+        ${sub ? `<div class="node-sub">${S(sub)}</div>` : ""}
+        ${rows && rows.length ? `<dl>${rows.map(([k, v]) => `<dt>${S(k)}</dt><dd>${S(v)}</dd>`).join("")}</dl>` : ""}
+      </div>`;
+    const arrow = (label, warn) => `
+      <div class="arrow${warn ? " arrow-warn" : ""}">
+        <div class="arrow-line"></div>
+        ${label ? `<div class="arrow-label">${S(label)}</div>` : ""}
+      </div>`;
+
+    const chain = [
+      node("client", d.agent_id || "unknown client",
+        [d.source_hostname, d.source_ip].filter(Boolean).join(" · "),
+        [["asked for", req], ["messages", d.messages_count], ["tools sent", d.tools_count]]),
+      arrow(d.stream_flag ? "stream" : "single"),
+      node("inbound", lane, oauthLane ? "subscription lane" : "api-key lane",
+        [["request", kb(d.request_size_bytes)], ["tier", d.classified_tier],
+         ["sensitivity", d.classified_sensitivity]]),
+      arrow("decide"),
+      node("decision", d.decision_provider || "—", d.decision_reason || "",
+        [["target", d.decision_model]]),
+      arrow(substituted ? "SUBSTITUTED" : "forward", substituted),
+      node("upstream", upstreamTitle, upstreamSub,
+        [["ttfb", ms(d.first_byte_ms)], ["total", ms(d.duration_ms)], ["status", d.status_code]]),
+      arrow("served"),
+      node("served", served.split("/").pop(),
+        pending ? "requested target — outcome not recorded yet"
+                : d.actual_model ? "upstream-reported — attested, not echoed"
+                                 : "routing target — upstream did not report a model",
+        [["route", served.includes("/") ? served : route || "direct"],
+         ["in", d.prompt_tokens], ["out", d.completion_tokens],
+         ["reasoning", d.reasoning_tokens],
+         ["cost", d.cost_usd == null ? "unpriced" : "$" + Number(d.cost_usd).toFixed(4)]]),
+    ].join("");
+
+    const banner = substituted
+      ? `<div class="banner warn"><b>Model substituted.</b> The client asked for
+           <code>${S(req)}</code> and <code>${S(served)}</code>
+           ${pending ? "was routed to (no outcome recorded yet)" : "answered"}.
+           ${S(d.decision_reason || "")}</div>`
+      : `<div class="banner ok">Served by the model the client requested — no substitution.</div>`;
+
+    return `<!doctype html><html><head><meta charset="utf-8">
+      <title>NautGate routing flow</title><style>
+      :root{--bg:#0A0D12;--card:#12161F;--raised:#1A2029;--line:#232B36;--tx:#E6EBF2;
+            --dim:#8893A4;--lb:#5C6675;--ac:#E8833A;--good:#3FB950;--warn:#D6A100;--bad:#E5484D;
+            --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--bg);color:var(--tx);
+           font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:22px}
+      h1{font-size:17px;margin:0 0 2px}
+      .meta{color:var(--lb);font-size:12px;font-family:var(--mono);margin-bottom:16px}
+      .banner{border-radius:8px;padding:10px 13px;margin-bottom:18px;font-size:13px}
+      .banner.warn{background:rgba(214,161,0,.12);border:1px solid rgba(214,161,0,.45)}
+      .banner.ok{background:rgba(63,185,80,.10);border:1px solid rgba(63,185,80,.35)}
+      .banner code{font-family:var(--mono);color:var(--ac)}
+      .flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding-bottom:8px}
+      .node{flex:0 0 190px;background:var(--card);border:1px solid var(--line);
+            border-radius:10px;padding:11px 12px}
+      .node-kind{font-size:9.5px;letter-spacing:.09em;color:var(--lb)}
+      .node-title{font-weight:600;font-size:13px;color:var(--ac);margin-top:3px;
+                  word-break:break-word}
+      .node-sub{font-size:10.5px;color:var(--dim);margin-top:2px;word-break:break-word}
+      .node dl{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;margin:9px 0 0}
+      .node dt{font-size:10px;color:var(--lb)}
+      .node dd{margin:0;font-family:var(--mono);font-size:10.5px;text-align:right}
+      .node.served{border-color:rgba(232,131,58,.5)}
+      .arrow{flex:0 0 62px;display:flex;flex-direction:column;justify-content:center;
+             align-items:center;gap:4px}
+      .arrow-line{width:100%;height:2px;background:var(--line);position:relative}
+      .arrow-line:after{content:"";position:absolute;right:0;top:-3px;border:4px solid transparent;
+                        border-left-color:var(--line)}
+      .arrow-label{font-size:9px;color:var(--lb);font-family:var(--mono);text-align:center}
+      .arrow-warn .arrow-line{background:var(--warn)}
+      .arrow-warn .arrow-line:after{border-left-color:var(--warn)}
+      .arrow-warn .arrow-label{color:var(--warn);font-weight:700}
+      .note{margin-top:18px;border-top:1px solid var(--line);padding-top:12px;
+            font-size:11.5px;color:var(--dim);max-width:820px}
+      .note b{color:var(--tx)}
+      .foot{margin-top:14px;color:var(--lb);font-size:10.5px}
+      </style></head><body>
+      <h1>Routing flow</h1>
+      <div class="meta">${S(d.decision_id)} · ${S(d.ts)}</div>
+      ${banner}
+      <div class="flow">${chain}</div>
+      <div class="note"><b>Why the served model is trustworthy:</b> it is parsed from the
+        upstream response, not copied from the request — so it reflects what actually
+        generated the tokens. <b>Asking the model who it is does not work:</b> the client's
+        system prompt asserts an identity, so any routed model will repeat it.</div>
+      <div class="foot">Generated by NautGate · no prompt or response bodies included — safe to share</div>
+      </body></html>`;
+  }
+
+  function _showCallFlowModal(d) {
+    document.getElementById("audit-flow-modal")?.remove();
+    const html = _buildCallFlowHtml(d);
+    const wrap = document.createElement("div");
+    wrap.id = "audit-flow-modal";
+    wrap.className = "dr-report-modal";
+    wrap.innerHTML = `
+      <div class="dr-report-content">
+        <div class="dr-report-head">
+          <span>Routing flow · ${esc(shortModelName(d.model_requested || "?"))} → ${esc(shortModelName(d.actual_model || d.decision_model || "?"))}</span>
+          <div class="dr-report-actions">
+            <button class="ghost" id="audit-flow-tab" title="Open in a new tab">🖼 open tab</button>
+            <button class="ghost" id="audit-flow-download">💾 download</button>
+            <button class="ghost" id="audit-flow-close">✕ close</button>
+          </div>
+        </div>
+        <iframe class="audit-report-frame" sandbox=""></iframe>
+      </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelector(".audit-report-frame").srcdoc = html;
+    const blobUrl = () => URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    document.getElementById("audit-flow-close").addEventListener("click", () => wrap.remove());
+    document.getElementById("audit-flow-tab").addEventListener("click", () => {
+      window.open(blobUrl(), "_blank", "noopener");
+    });
+    document.getElementById("audit-flow-download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = blobUrl();
+      a.download = `nautgate-flow-${(d.decision_id || "flow").slice(0, 8)}.html`;
       document.body.appendChild(a);
       a.click();
       a.remove();
