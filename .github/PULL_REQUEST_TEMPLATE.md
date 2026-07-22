@@ -1,3 +1,7 @@
+> 👋 Thanks for contributing! First time here? Skim
+> **[CONTRIBUTING.md](https://github.com/48Nauts-Operator/NautGate/blob/main/CONTRIBUTING.md)**
+> — issue/PR routing, the CLA, and what makes a PR land fast. AI-assisted PRs are welcome; just mark them.
+
 ## What and why
 
 <!-- What changes, and what problem it solves. The diff says what; explain why. -->
@@ -10,7 +14,7 @@ Closes #
      client, what did you see? If you couldn't test something, say so. -->
 
 - [ ] `just test` green
-- [ ] `just lint` clean
+- [ ] `ruff check` clean (`cd core && uv run ruff check .`)
 - [ ] Exercised the real surface (not only unit tests)
 
 ## Checklist
