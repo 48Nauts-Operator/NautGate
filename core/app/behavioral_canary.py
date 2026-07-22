@@ -409,8 +409,10 @@ async def get_latest_comparison(pool) -> dict:
     for r in rows:
         d = dict(r)
         if isinstance(d.get("rubric"), str):
-            try: d["rubric"] = json.loads(d["rubric"])
-            except (ValueError, TypeError): d["rubric"] = None
+            try:
+                d["rubric"] = json.loads(d["rubric"])
+            except (ValueError, TypeError):
+                d["rubric"] = None
         grouped.setdefault(d["canary_name"], []).append(d)
     canaries_out = [
         {"name": name, "results": results}

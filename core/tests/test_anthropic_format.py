@@ -362,7 +362,6 @@ async def test_messages_streaming_emits_anthropic_sse(messages_app):
 
 # --- NAUTGATE-2: tool_use / tool_result history preservation ----------------
 
-from app.formats.anthropic import request_to_openai_chat, response_to_anthropic  # noqa: E402
 
 
 def test_request_preserves_tool_use_and_tool_result_history():

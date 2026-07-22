@@ -3097,7 +3097,8 @@ async def behavior_compare_run(request: Request) -> Response:
         )
 
     from app.behavioral_canary import (
-        run_comparison, quality_eval_config_or_default,
+        quality_eval_config_or_default,
+        run_comparison,
     )
     judge_config = await quality_eval_config_or_default(pool)
     judge_client = getattr(request.app.state, "quality_judge", None)
