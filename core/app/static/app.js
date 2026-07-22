@@ -684,7 +684,7 @@
       if (x.length < 2) { chartEl.innerHTML = '<div class="v2-chart-fallback">Not enough traffic in this window.</div>'; return; }
       NG.chart(chartEl, {
         type: "area", x, height: 220,
-        series: [{ label: "requests", values: totals, color: "#808000" }],
+        series: [{ label: "requests", values: totals, color: "#7C9BFF" }],
         fmtY: (v) => fmtNum(v),
         fmtX: (e) => overviewWindow.bucket === "day"
           ? new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" })
@@ -3093,7 +3093,7 @@
       type: "line", x, height: 200,
       series: [
         { label: "Read/Grep/Glob calls", values: daily.map((r) => r.fs_calls), color: "#8893A4" },
-        { label: "MCP calls", values: daily.map((r) => r.mcp_calls), color: "#808000" },
+        { label: "MCP calls", values: daily.map((r) => r.mcp_calls), color: "#7C9BFF" },
       ],
       fmtY: (v) => fmtNum(v),
       fmtX: (e) => new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" }),
@@ -3150,8 +3150,8 @@
     const subsCovered = Math.max(0, (t.notional_usd || 0) - (t.metered_usd || 0));
 
     // --- inline SVG charts (no libs — the report is a standalone document) --
-    const PAL = ["#808000", "#3B6FD4", "#1a7f37", "#8E63CE", "#b35b1e", "#4C8DBB", "#946200", "#767E8B"];
-    // Daily grouped bars: calls (orange, left axis) + spend line (blue, right axis).
+    const PAL = ["#7C9BFF", "#3B6FD4", "#1a7f37", "#8E63CE", "#b35b1e", "#4C8DBB", "#946200", "#767E8B"];
+    // Daily grouped bars: calls (series-1, left axis) + spend line (blue, right axis).
     const dailyChart = (daily) => {
       if (!daily || daily.length < 2) return "";
       const W = 720, H = 170, padL = 46, padR = 52, padT = 12, padB = 26;
@@ -3219,7 +3219,7 @@
     };
 
     const agentSpendChart = hbars(
-      (d.agents || []).slice(0, 10).map((a) => ({ label: a.agent_id, value: a.spend_usd, color: "#808000" })),
+      (d.agents || []).slice(0, 10).map((a) => ({ label: a.agent_id, value: a.spend_usd, color: "#7C9BFF" })),
       (v) => fUsd(v));
     const modelMixChart = hbars(
       (d.models || []).slice(0, 8).map((m, i) => ({ label: shortModelName(m.model || "?"), value: m.calls, color: PAL[i % PAL.length] })),
@@ -3976,7 +3976,7 @@
     body.appendChild(chartEl);
     const legend = [
       NG.el("span", { class: "v2-chart-legend-item", html: '<span style="display:inline-block;width:14px;height:8px;background:rgba(76,141,255,0.25);border:1px solid rgba(76,141,255,0.4);border-radius:2px"></span> ±3σ band' }),
-      NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#808000"></span> observed' }),
+      NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#7C9BFF"></span> observed' }),
     ];
     bandCard.appendChild(NG.card({ title: `${shortModelName(alert.model)} — ${alert.metric}`, meta: alert.is_open ? "open" : "resolved", actions: legend, body }));
     try {
@@ -4428,7 +4428,7 @@
         const chartEl = NG.el("div", { class: "v2-chart", html: '<p class="hint" style="padding:12px">' + (firstModel ? "loading…" : "No targets configured yet.") + "</p>" });
         body.appendChild(chartEl);
         const legend = [
-          NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#808000"></span>subscription' }),
+          NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#7C9BFF"></span>subscription' }),
           NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#4C8DFF"></span>metered' }),
         ];
         fpCard.appendChild(NG.card({ title: "Tokenizer fingerprint over cycles", actions: firstModel ? legend : [], body }));
@@ -4450,7 +4450,7 @@
             else NG.chart(chartEl, {
               type: "line", x, height: 220,
               series: [
-                { label: "subscription", values: rowsT.map((r) => r.sub), color: "#808000" },
+                { label: "subscription", values: rowsT.map((r) => r.sub), color: "#7C9BFF" },
                 { label: "metered", values: rowsT.map((r) => r.met), color: "#4C8DFF" },
               ],
               fmtY: (v) => (v == null ? "" : Number(v).toFixed(3)),
@@ -4653,7 +4653,7 @@
       .join("");
   }
 
-  const COST_DONUT_COLORS = ["#808000", "#4C8DFF", "#3FB950", "#9A6CE0", "#8893A4"];
+  const COST_DONUT_COLORS = ["#7C9BFF", "#B98CF0", "#4FC7C3", "#E38FB4", "#8893A4"];
   function renderCostProviderCard(rows) {
     const mount = document.getElementById("cost-provider-card");
     if (!mount) return;

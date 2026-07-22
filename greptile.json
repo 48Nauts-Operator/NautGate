@@ -1,0 +1,10 @@
+{
+  "commentTypes": ["logic", "syntax"],
+  "ignorePatterns": [
+    "vendor/**",
+    "logs/**",
+    "assets/**",
+    "*.lock",
+    "core/uv.lock"
+  ]
+}

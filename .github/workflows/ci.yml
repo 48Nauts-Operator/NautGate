@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: extractions/setup-just@v2
+      # uv reads requires-python (>=3.12) from core/pyproject.toml and
+      # provisions a matching interpreter; --locked verifies uv.lock is in sync.
+      - name: Install deps
+        run: cd core && uv sync --locked
+      - name: Lint
+        run: just lint
+      - name: Test
+        run: just test

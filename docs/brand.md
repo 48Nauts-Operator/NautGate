@@ -57,6 +57,22 @@ This is why olive works and why red didn't. A brand hue that also carries
 meaning destroys the meaning: if the logo is red, a real failure stops being
 loud. Olive sits nearest `--ng-warn`, so amber is the one to keep clear of.
 
+Which leaves charts needing a third palette of their own — neither brand nor
+semantic:
+
+```css
+--series-1: #7C9BFF;  /* periwinkle */
+--series-2: #B98CF0;  /* violet */
+--series-3: #4FC7C3;  /* teal */
+--series-4: #E38FB4;  /* rose */
+```
+
+Cool and mid-saturation, so a red bar or a green dot inside the same chart
+still reads as *failing* / *healthy* rather than as just another category. The
+first cut of this reused `--ng-good` and `--ng-info` as series 2 and 3, which
+quietly broke the rule from the other direction: the semantic hues have to stay
+as scarce as the brand one.
+
 ## Why a ramp, not one hex
 
 `#808000` is too dark to read as text on near-black — measured, not assumed.

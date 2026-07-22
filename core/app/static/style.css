@@ -14,11 +14,13 @@
   --bad: #E5484D;
   --info: #4C8DFF;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  /* multi-series chart palette */
-  --series-1: #E8833A;
-  --series-2: #4C8DFF;
-  --series-3: #3FB950;
-  --series-4: #9A6CE0;
+  /* multi-series chart palette — deliberately neither the brand olive (the
+     accent never encodes data) nor the semantic hues above (green/amber/red
+     must keep meaning what they mean inside a chart). */
+  --series-1: #7C9BFF;
+  --series-2: #B98CF0;
+  --series-3: #4FC7C3;
+  --series-4: #E38FB4;
 }
 
 * { box-sizing: border-box; }
@@ -266,7 +268,7 @@ code { font-family: var(--mono); background: var(--bg-card); padding: 1px 5px; b
 }
 .bar .name { width: 140px; color: var(--text-dim); }
 .bar .fill {
-  background: var(--accent);
+  background: var(--series-1);
   height: 8px;
   border-radius: 4px;
   min-width: 4px;
@@ -1714,12 +1716,8 @@ html, body { height: 100%; }
   padding: 22px 20px 20px;
   flex-shrink: 0;
 }
-.brand-mark {
-  display: flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; border-radius: 8px;
-  background: var(--accent); flex-shrink: 0;
-}
-.brand-mark > span { width: 12px; height: 12px; border-radius: 3px; background: var(--bg); }
+.brand-mark { display: flex; width: 30px; height: 30px; flex-shrink: 0; }
+.brand-mark svg { width: 30px; height: 30px; display: block; }
 .brand-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); line-height: 18px; }
 .brand-sub  { font-size: 11px; color: var(--text-dim); line-height: 14px; }
 
