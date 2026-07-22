@@ -65,7 +65,9 @@ def test_pii_matches(text, rule_id):
             "jwt",
         ),
         (
-            "internal token ng_e66b0ba05bb94d698b2b351f729bbeaa_QMKKarzhuQq1CuYpFarFMjLwuElOZSQNTufjRmC6Iqg",
+            # Shape-only fixture — deliberately not a real key. Never paste a
+            # live ng_ token here; this file is public.
+            "internal token ng_00000000000000000000000000000000_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "nautgate_token",
         ),
     ],

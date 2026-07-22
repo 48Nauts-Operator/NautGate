@@ -1,57 +1,124 @@
 # NautGate
 
-> One gateway for every LLM call. Routes to the right model, captures every byte, learns from history, protects what's sensitive.
+> One gateway for every LLM call — routed, measured, and provably logged.
 
-Memory-aware LLM gateway. Wraps [NautRouter](https://github.com/48Nauts-Operator/NautRouter) (TS, scoring engine + format translation) inside a Python service that adds capture, classification, plugin extensions, and the durability contract.
+NautGate sits between your coding agents and every model provider. Claude Code,
+Codex, Pi and your own apps point at one endpoint; NautGate routes each call,
+records what actually happened, and tells you what it cost.
 
-## Status
+The point isn't routing — plenty of tools route. The point is **evidence**: for
+every call you can prove which model really answered, what data it saw, how long
+it took and what it cost.
 
-**Week 1, Day 1** scaffold. Repo layout, schema, 501 stubs, tests. Real `/v1/chat/completions` lands Day 2; streaming Day 3.
+```
+Claude Code ─┐
+Codex ───────┤                      ┌─ Anthropic
+Pi ──────────┼──► NautGate :8090 ───┼─ OpenAI
+your app ────┘     │                ├─ OpenRouter
+                   │                └─ LM Studio / local
+                   └──► Postgres (audit, outcomes, analytics)
+```
 
-See the blueprint:
+## Why
 
-- `Knowledge/Obsidian/Business/NautCoder/05-Development/01-Blueprint/NautGate/00 — Index.md` (canonical entry point)
-- Vision · Concept · Working Paper · Build Plan · Tools Inventory · Tech Paper · Risks & Rollback
+Ask a model which model it is and it tells you whatever its client's system
+prompt says. Claude Code asserts an identity in every request, so a routed model
+answers "I am Claude" no matter what generated the tokens. Self-report is
+worthless.
+
+NautGate reads the model name from the **provider's own response**, never from
+the request — so the audit log is attested rather than assumed. That one
+property is what makes cost attribution, substitution detection and compliance
+reporting trustworthy.
+
+## Features
+
+**Gateway**
+- OpenAI-compatible (`/v1/chat/completions`) and Anthropic-compatible (`/v1/messages`) inbound
+- Two credential lanes: OAuth subscription traffic passes through untouched and free; metered keys get routed
+- Per-key model override — pin any model to an API key and run Claude Code on it
+- Local models via LM Studio, addressable as `lmstudio/<id>`
+
+**Evidence**
+- Full audit log: policy-gated prompt/response capture, tokens, timings, cost
+- Routing flow view — client → lane → decision → upstream → model actually served
+- Silent-substitution detection when the served model differs from the requested one
+- Sensitivity classification (PII/secrets) before anything is stored
+
+**Analytics**
+- Quality gate — post-hoc judge scoring with failure-mode buckets
+- Head-to-head — real calls grouped by task, so models compare like-for-like
+- Champion/challenger shadow testing with a blind judge
+- Tooling — what your MCP servers cost in carried schema vs what they save
+- Cache accounting, context-bloat detection, drift and behavioural control charts
+- Cost by project/agent/model, plus notional subscription savings
 
 ## Quickstart
 
-```bash
-docker compose -f deploy/docker-compose.yml up -d nautgate-db
-cd core && uv sync
-NAUTGATE_DB_URL=postgres://nautgate:nautgate@localhost:5432/nautgate \
-  uv run uvicorn app.main:app --host 0.0.0.0 --port 8090
-```
+Requires Docker, Python 3.12+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
-curl http://localhost:8090/health                           # → 200
-curl -isS -X POST http://localhost:8090/v1/chat/completions # → 501 with X-Nautgate-Coming-In header (Day 1 stub)
+git clone https://github.com/48Nauts-Operator/NautGate.git
+cd NautGate
+cp .env.example deploy/.env      # add the provider keys you want to use
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Full quickstart: [`docs/quickstart.md`](docs/quickstart.md). Architecture: [`docs/architecture.md`](docs/architecture.md).
+Point a client at it:
+
+```bash
+# OpenAI-compatible
+export OPENAI_BASE_URL=http://localhost:8090/v1
+export OPENAI_API_KEY=ng_…      # mint one in Settings → Keys
+
+# Claude Code (--bare is required, or its stored OAuth login wins)
+ANTHROPIC_BASE_URL=http://localhost:8090 ANTHROPIC_API_KEY=ng_… claude --bare
+```
+
+Dashboard: <http://localhost:8090/dashboard>
 
 ## Layout
 
 ```
 core/         FastAPI gateway (Python 3.12, uv)
-extensions/   Sidecar microservices (sb-capture, sb-brain, sb-privacy) — Week 2+
-deploy/       docker-compose stacks
-config/       nautgate.yaml example
-docs/         quickstart, architecture
+vendor/       NautRouter — scoring + format translation (TypeScript)
+deploy/       docker-compose stack
+config/       routing + pricing tables
+extensions/   optional capture / brain / privacy sidecars
 scripts/      operational scripts
-vendor/       wrapped NautRouter source (Day 2+)
-memory/       repo-local Claude memory index
 ```
 
 ## Development
 
 ```bash
-just test     # cd core && uv run pytest
-just lint     # uv run ruff check .
-just fix      # uv run ruff check --fix . && uv run ruff format .
-just up       # docker compose -f deploy/docker-compose.yml up -d
-just down     # docker compose -f deploy/docker-compose.yml down
+just test     # pytest
+just lint     # ruff check
+just fix      # ruff check --fix && ruff format
+just dev      # uvicorn --reload
+just up/down  # docker compose
 ```
 
-## Repo
+## Status
 
-`48Nauts-Operator/NautGate`, private. Issues + PRs welcome from the 48Nauts org.
+Actively developed and in daily use, but **pre-1.0** — schema and endpoints can
+still change between releases. Endpoints that aren't implemented yet return
+`501` with an `X-Nautgate-Coming-In` header rather than 404.
+
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Start with
+[`good first issue`](https://github.com/48Nauts-Operator/NautGate/labels/good%20first%20issue).
+
+Found a security problem? Please don't open a public issue — see
+[SECURITY.md](SECURITY.md).
+
+## License
+
+[AGPL-3.0](LICENSE). Use, modify and self-host NautGate freely. If you run a
+modified version as a network service, the AGPL requires you to publish your
+changes.
+
+A separate commercial license is available for anyone who wants NautGate without
+AGPL obligations — <hello@48nauts.com>. Contributions are accepted under the
+terms in [CONTRIBUTING.md](CONTRIBUTING.md#contributor-license-agreement), which
+is what makes that dual-licensing possible.

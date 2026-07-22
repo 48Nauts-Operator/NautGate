@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: ["feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        NautGate is deliberately small. The strongest requests describe a
+        **problem you hit**, not a solution you'd like implemented.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting
+      description: What are you trying to do, and where does NautGate get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional — a sketch is fine. Say if you'd like to implement it.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds, other tools, why they didn't fit.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This belongs in the gateway, not in my client or a script around it
+        - label: I'd be willing to work on it

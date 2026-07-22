@@ -1,0 +1,79 @@
+name: Bug report
+description: Something behaves differently than it should
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For routing or wrong-model problems, the **decision id** from the Audit
+        Log is the single most useful thing you can give us — it pins down which
+        hop failed. Please redact API keys and captured prompts.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: |
+        1. Point <client> at http://localhost:8090
+        2. Send ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: input
+    id: decision
+    attributes:
+      label: Decision id (if applicable)
+      description: From the Audit Log row, or the flow view.
+      placeholder: 3ab2b610-8f58-4add-83bd-b716faf6277a
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options:
+        - Claude Code
+        - Codex
+        - Pi
+        - Own app / curl
+        - Dashboard
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: lane
+    attributes:
+      label: Which lane
+      description: OAuth subscription passthrough, or a routed `ng_` key?
+      options:
+        - "Routed (ng_ key)"
+        - "OAuth passthrough (subscription)"
+        - "Not sure"
+
+  - type: input
+    id: model
+    attributes:
+      label: Model requested → model served
+      placeholder: claude-fable-5 → moonshotai/kimi-k2.6
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output. **Redact keys and prompt bodies.**
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: git rev-parse --short HEAD
