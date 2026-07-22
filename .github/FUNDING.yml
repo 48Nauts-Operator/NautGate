@@ -1,0 +1,20 @@
+# GitHub repository funding links — controls the "Sponsor" button shown
+# at the top of the repo page and on profile pages.
+#
+# Active source(s):
+github: [48Nauts-Operator]
+
+# Other supported platforms (uncomment + fill in to enable):
+# patreon: <username>
+# open_collective: <name>
+# ko_fi: <username>
+# tidelift: <package-manager-platform/package-name>
+# community_bridge: <project-name>
+# liberapay: <username>
+# issuehunt: <username>
+# otechie: <username>
+# lfx_crowdfunding: <project>
+# polar: <username>
+# buy_me_a_coffee: <username>
+# thanks_dev: <username>
+# custom: ['https://48nauts.com', 'https://...']

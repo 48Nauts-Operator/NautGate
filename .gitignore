@@ -45,3 +45,6 @@ logs/
 
 # Pi agent tool state (not project source)
 .pi/
+
+# Separate project that lives in this dir — not part of NautGate
+gitvm-extension/

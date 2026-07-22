@@ -13,6 +13,42 @@ to get a PR merged is to open an issue first and agree the shape.
 - **Tests for behaviour.** Non-trivial logic needs a test that fails without
   your change.
 
+## Where things go
+
+- **Bug or regression** → an issue via the templates. For routing or wrong-model
+  problems, the **decision id** from the Audit Log plus the flow view is the
+  single most useful thing you can attach.
+- **Feature or architecture change** → open an issue or a
+  [Discussion](https://github.com/48Nauts-Operator/NautGate/discussions) and
+  agree the shape *before* writing code.
+- **Question, setup help, an idea** →
+  [Discussions](https://github.com/48Nauts-Operator/NautGate/discussions), not
+  an issue.
+- **Security vulnerability** → privately, see [SECURITY.md](SECURITY.md). Never a
+  public issue.
+
+### Please don't open a PR for
+
+- **Refactors nobody asked for.** Match the surrounding code; style-only churn
+  gets closed.
+- **Test or CI tweaks chasing a failure that's already red on `main`.** It's a
+  known issue — if you've found a *new* regression, report it as one.
+- **Drive-by "security" findings from an AI scanner** with no reproduction and no
+  demonstrated impact. [SECURITY.md](SECURITY.md) says what a real report needs.
+
+## AI-assisted PRs are welcome
+
+Built it with Claude, Codex or another agent? Good — just say so. In the PR:
+
+- Mark it as AI-assisted in the title or description.
+- Confirm you actually understand what the code does. You're the author; the
+  model isn't.
+- Include the useful validation — a test that fails without the change, command
+  output, a screenshot. Prompts or session logs are a bonus, not required.
+
+The bar is the same as any PR: correct, focused, and something you'll stand
+behind in review. Marking it just tells the reviewer what to look for.
+
 ## Setup
 
 Requires Docker, Python 3.12+ and [uv](https://github.com/astral-sh/uv).
