@@ -229,7 +229,7 @@
   // --- uPlot chart wrapper -------------------------------------------
   // chart(el, {type:'area'|'line', x:[...epoch_s], series:[{label,values,color,fill}], opts})
   // Returns the uPlot instance. Handles dark theme + responsive width.
-  const SERIES_COLORS = ["#E8833A", "#4C8DFF", "#3FB950", "#9A6CE0"];
+  const SERIES_COLORS = ["#808000", "#4C8DFF", "#3FB950", "#9A6CE0"];
   function chart(mount, cfg) {
     if (!window.uPlot) { mount.innerHTML = '<div class="v2-chart-fallback">uPlot not loaded</div>'; return null; }
     mount.innerHTML = "";
@@ -417,7 +417,7 @@
     // mean dashed line
     svg.appendChild(mk("polyline", { points: pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.mean ?? p.observed).toFixed(1)}`).join(" "), fill: "none", stroke: "#5C6675", "stroke-width": "1", "stroke-dasharray": "4 4" }));
     // observed line
-    svg.appendChild(mk("polyline", { points: pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.observed).toFixed(1)}`).join(" "), fill: "none", stroke: "#E8833A", "stroke-width": "2", "vector-effect": "non-scaling-stroke" }));
+    svg.appendChild(mk("polyline", { points: pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.observed).toFixed(1)}`).join(" "), fill: "none", stroke: "#808000", "stroke-width": "2", "vector-effect": "non-scaling-stroke" }));
     // observed points — every sample is a hoverable/clickable dot (anomalies emphasised)
     const fmtTs = (ts) => { try { return new Date(ts).toLocaleString(); } catch (_e) { return String(ts); } };
     const fmtV = o.fmtV || ((v) => (v == null ? "—" : (typeof v === "number" ? v.toFixed(4) : String(v))));
@@ -426,7 +426,7 @@
       const clickable = !!(o.onPointClick && p.decisionId);
       const c = mk("circle", {
         cx: X(i), cy: Y(p.observed), r: anomaly ? "5" : "3.4",
-        fill: anomaly ? "#E5484D" : "#E8833A",
+        fill: anomaly ? "#E5484D" : "#808000",
         class: "v2-anom-dot" + (clickable ? " v2-anom-dot-click" : ""),
       });
       const title = document.createElementNS(ns, "title");

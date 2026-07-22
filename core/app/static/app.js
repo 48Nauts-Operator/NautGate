@@ -684,7 +684,7 @@
       if (x.length < 2) { chartEl.innerHTML = '<div class="v2-chart-fallback">Not enough traffic in this window.</div>'; return; }
       NG.chart(chartEl, {
         type: "area", x, height: 220,
-        series: [{ label: "requests", values: totals, color: "#E8833A" }],
+        series: [{ label: "requests", values: totals, color: "#808000" }],
         fmtY: (v) => fmtNum(v),
         fmtX: (e) => overviewWindow.bucket === "day"
           ? new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" })
@@ -1626,7 +1626,7 @@
     return `<!doctype html><html><head><meta charset="utf-8"><title>NautGate call report</title><style>
       body { background:#0A0D12; color:#E6EBF2; font: 13px/1.55 ui-monospace,"SF Mono",Menlo,monospace; margin:0; padding:32px; }
       .wrap { max-width: 760px; margin: 0 auto; }
-      h1 { font-size:16px; color:#E8833A; margin:0 0 2px; } h3 { font-size:12px; color:#8893A4; text-transform:uppercase; letter-spacing:.08em; margin:22px 0 8px; border-bottom:1px solid #232B36; padding-bottom:4px; }
+      h1 { font-size:16px; color:#C3CE1F; margin:0 0 2px; } h3 { font-size:12px; color:#8893A4; text-transform:uppercase; letter-spacing:.08em; margin:22px 0 8px; border-bottom:1px solid #232B36; padding-bottom:4px; }
       .sub { color:#8893A4; font-size:11px; margin-bottom:20px; }
       .grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 24px; }
       .kv { display:flex; justify-content:space-between; gap:12px; border-bottom:1px dotted #232B36; padding:3px 0; }
@@ -1819,7 +1819,7 @@
     return `<!doctype html><html><head><meta charset="utf-8">
       <title>NautGate routing flow</title><style>
       :root{--bg:#0A0D12;--card:#12161F;--raised:#1A2029;--line:#232B36;--tx:#E6EBF2;
-            --dim:#8893A4;--lb:#5C6675;--ac:#E8833A;--good:#3FB950;--warn:#D6A100;--bad:#E5484D;
+            --dim:#8893A4;--lb:#5C6675;--ac:#C3CE1F;--good:#3FB950;--warn:#D6A100;--bad:#E5484D;
             --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
       *{box-sizing:border-box}
       body{margin:0;background:var(--bg);color:var(--tx);
@@ -1840,7 +1840,7 @@
       .node dl{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;margin:9px 0 0}
       .node dt{font-size:10px;color:var(--lb)}
       .node dd{margin:0;font-family:var(--mono);font-size:10.5px;text-align:right}
-      .node.served{border-color:rgba(232,131,58,.5)}
+      .node.served{border-color:rgba(128,128,0,.5)}
       .arrow{flex:0 0 62px;display:flex;flex-direction:column;justify-content:center;
              align-items:center;gap:4px}
       .arrow-line{width:100%;height:2px;background:var(--line);position:relative}
@@ -3093,7 +3093,7 @@
       type: "line", x, height: 200,
       series: [
         { label: "Read/Grep/Glob calls", values: daily.map((r) => r.fs_calls), color: "#8893A4" },
-        { label: "MCP calls", values: daily.map((r) => r.mcp_calls), color: "#E8833A" },
+        { label: "MCP calls", values: daily.map((r) => r.mcp_calls), color: "#808000" },
       ],
       fmtY: (v) => fmtNum(v),
       fmtX: (e) => new Date(e * 1000).toLocaleDateString([], { month: "short", day: "numeric" }),
@@ -3150,7 +3150,7 @@
     const subsCovered = Math.max(0, (t.notional_usd || 0) - (t.metered_usd || 0));
 
     // --- inline SVG charts (no libs — the report is a standalone document) --
-    const PAL = ["#E8833A", "#3B6FD4", "#1a7f37", "#8E63CE", "#b35b1e", "#4C8DBB", "#946200", "#767E8B"];
+    const PAL = ["#808000", "#3B6FD4", "#1a7f37", "#8E63CE", "#b35b1e", "#4C8DBB", "#946200", "#767E8B"];
     // Daily grouped bars: calls (orange, left axis) + spend line (blue, right axis).
     const dailyChart = (daily) => {
       if (!daily || daily.length < 2) return "";
@@ -3219,7 +3219,7 @@
     };
 
     const agentSpendChart = hbars(
-      (d.agents || []).slice(0, 10).map((a) => ({ label: a.agent_id, value: a.spend_usd, color: "#E8833A" })),
+      (d.agents || []).slice(0, 10).map((a) => ({ label: a.agent_id, value: a.spend_usd, color: "#808000" })),
       (v) => fUsd(v));
     const modelMixChart = hbars(
       (d.models || []).slice(0, 8).map((m, i) => ({ label: shortModelName(m.model || "?"), value: m.calls, color: PAL[i % PAL.length] })),
@@ -3278,7 +3278,7 @@
       body { background: #fff; color: #1a1f28; font: 13px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; padding: 40px; }
       .wrap { max-width: 780px; margin: 0 auto; }
       h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
-      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #B35B1E; border-bottom: 2px solid #E8833A; padding-bottom: 4px; margin: 30px 0 10px; page-break-after: avoid; }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #5F6600; border-bottom: 2px solid #808000; padding-bottom: 4px; margin: 30px 0 10px; page-break-after: avoid; }
       .sub { color: #6b7482; margin: 4px 0 24px; font-size: 13px; }
       .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 18px 0; }
       .kpi { border: 1px solid #e3e6ea; border-radius: 8px; padding: 12px 14px; }
@@ -3976,7 +3976,7 @@
     body.appendChild(chartEl);
     const legend = [
       NG.el("span", { class: "v2-chart-legend-item", html: '<span style="display:inline-block;width:14px;height:8px;background:rgba(76,141,255,0.25);border:1px solid rgba(76,141,255,0.4);border-radius:2px"></span> ±3σ band' }),
-      NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#E8833A"></span> observed' }),
+      NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#808000"></span> observed' }),
     ];
     bandCard.appendChild(NG.card({ title: `${shortModelName(alert.model)} — ${alert.metric}`, meta: alert.is_open ? "open" : "resolved", actions: legend, body }));
     try {
@@ -4428,7 +4428,7 @@
         const chartEl = NG.el("div", { class: "v2-chart", html: '<p class="hint" style="padding:12px">' + (firstModel ? "loading…" : "No targets configured yet.") + "</p>" });
         body.appendChild(chartEl);
         const legend = [
-          NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#E8833A"></span>subscription' }),
+          NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#808000"></span>subscription' }),
           NG.el("span", { class: "v2-chart-legend-item", html: '<span class="v2-legend-dot" style="background:#4C8DFF"></span>metered' }),
         ];
         fpCard.appendChild(NG.card({ title: "Tokenizer fingerprint over cycles", actions: firstModel ? legend : [], body }));
@@ -4450,7 +4450,7 @@
             else NG.chart(chartEl, {
               type: "line", x, height: 220,
               series: [
-                { label: "subscription", values: rowsT.map((r) => r.sub), color: "#E8833A" },
+                { label: "subscription", values: rowsT.map((r) => r.sub), color: "#808000" },
                 { label: "metered", values: rowsT.map((r) => r.met), color: "#4C8DFF" },
               ],
               fmtY: (v) => (v == null ? "" : Number(v).toFixed(3)),
@@ -4653,7 +4653,7 @@
       .join("");
   }
 
-  const COST_DONUT_COLORS = ["#E8833A", "#4C8DFF", "#3FB950", "#9A6CE0", "#8893A4"];
+  const COST_DONUT_COLORS = ["#808000", "#4C8DFF", "#3FB950", "#9A6CE0", "#8893A4"];
   function renderCostProviderCard(rows) {
     const mount = document.getElementById("cost-provider-card");
     if (!mount) return;
