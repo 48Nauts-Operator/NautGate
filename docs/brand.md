@@ -66,17 +66,26 @@ single flat tone makes everything it touches go quiet (verified against
 
 ## Type
 
-- **Display / UI**: Inter Tight — 800 for headlines (tracking `-0.035em` at 52px),
-  700 for nav and stat figures, 400 for body.
-- **Mono**: JetBrains Mono — labels in caps at 10–11px with `0.16em` tracking,
-  code and all machine values (model ids, costs, status).
-- Never set body copy below 14px; never set mono labels below 10px.
+The 48Nauts system, already self-hosted on xnaut.dev and nautloop — use the same
+three files rather than introducing a fourth face:
+
+| Face | Role | File |
+|---|---|---|
+| **Space Grotesk** | display — headlines, the wordmark, stat figures | `space-grotesk.woff2` |
+| **Inter** | body copy, UI, everything at reading size | `inter.woff2` |
+| **JetBrains Mono** | labels in caps, and every machine value — model ids, costs, status, commands | `jetbrains-mono.woff2` |
+
+Space Grotesk carries the terminal register better than a neutral grotesque: it
+is geometric and slightly mechanical without being a novelty face. Inter does the
+reading. Mono is reserved — see the rule at the end of this file.
+
+Copy the woff2 files from `xNAUT/website/fonts/`. Latin subset only.
 
 ## Scale
 
 | Role | Size / line-height | Weight |
 |---|---|---|
-| Hero | 52 / 52, `-0.035em` | 800 |
+| Hero | 52 / 52, `-0.035em` | 700 (Space Grotesk max) |
 | Section | 30–38 / 44, `-0.02em` | 700 |
 | Stat figure | 26 | 700 |
 | Body | 16 / 25 | 400 |
@@ -134,7 +143,7 @@ chevron in a rounded square is the universal play button.
 
 ## Type in the terminal register
 
-Body copy below the fold is **Inter Tight**, not mono. A full page of monospace
+Body copy below the fold is **Inter**, not mono. A full page of monospace
 is tiring — mono is reserved for labels, machine values (model ids, costs,
 status) and the command line. This is the thing most likely to break the
 direction at length, so hold it.
