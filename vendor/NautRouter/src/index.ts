@@ -519,6 +519,19 @@ function resolveModel(modelKey: string): ModelDef | undefined {
       contextWindow: 200_000,
     };
   }
+  // OpenAI passthrough — same fix as claude-* above. Unknown OpenAI-family ids
+  // (gpt-5.6-sol, o3-*, chatgpt-*) were falling into auto-routing and getting
+  // silently served by Gemini. Forward them verbatim to OpenAI, which
+  // NautRouter already has a direct forwarder + key for (forwardOpenAI).
+  if (/^(gpt-|o1-|o3-|o4-|chatgpt-)/.test(modelKey) || modelKey.startsWith("openai/")) {
+    return {
+      id: modelKey.replace(/^openai\//, ""),
+      provider: "openai" as ModelDef["provider"],
+      inputPrice: 0,
+      outputPrice: 0,
+      contextWindow: 128_000,
+    };
+  }
   return undefined;
 }
 
@@ -554,13 +567,20 @@ async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean)
 }
 
 async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+  const out: any = { ...body, model: modelDef.id, stream };
+  // The gpt-5 / o-series reasoning models reject `max_tokens` and require
+  // `max_completion_tokens`; translate so callers (e.g. Fusion) don't 400.
+  if (/^(gpt-5|o1|o3|o4)/.test(modelDef.id) && out.max_tokens != null) {
+    out.max_completion_tokens = out.max_tokens;
+    delete out.max_tokens;
+  }
   return fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${OPENAI_API_KEY}`,
     },
-    body: JSON.stringify({ ...body, model: modelDef.id, stream }),
+    body: JSON.stringify(out),
   });
 }
 
