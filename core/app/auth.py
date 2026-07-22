@@ -96,19 +96,20 @@ def _split_token(raw: str) -> tuple[uuid.UUID, str]:
     return key_id, secret
 
 
-def _cache_get(token: str, *, now: float) -> tuple[str, str | None] | None:
+def _cache_get(token: str, *, now: float) -> tuple[str, str | None, str | None] | None:
     entry = _CACHE.get(token)
     if entry is None:
         return None
-    agent_id, project_id, expires_at = entry
+    agent_id, project_id, override_model, expires_at = entry
     if expires_at < now:
         _CACHE.pop(token, None)
         return None
-    return (agent_id, project_id)
+    return (agent_id, project_id, override_model)
 
 
-def _cache_put(token: str, agent_id: str, project_id: str | None, *, now: float) -> None:
-    _CACHE[token] = (agent_id, project_id, now + _CACHE_TTL_SEC)
+def _cache_put(token: str, agent_id: str, project_id: str | None,
+               override_model: str | None, *, now: float) -> None:
+    _CACHE[token] = (agent_id, project_id, override_model, now + _CACHE_TTL_SEC)
 
 
 def cache_clear() -> None:
@@ -135,16 +136,17 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
     now = time.monotonic()
     cached = _cache_get(raw, now=now)
     if cached is not None:
-        agent_id, project_id = cached
+        agent_id, project_id, override_model = cached
         request.state.agent_id = agent_id
         request.state.project_id = project_id
+        request.state.override_model = override_model
         return agent_id
 
     key_id, secret = _split_token(raw)
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT key_hash, agent_id, project_id, expires_at, revoked_at "
+            "SELECT key_hash, agent_id, project_id, override_model, expires_at, revoked_at "
             "FROM nautgate.api_keys WHERE id = $1",
             key_id,
         )
@@ -174,7 +176,13 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
         project_id = row["project_id"]
     except (KeyError, IndexError):
         project_id = None
-    _cache_put(raw, agent_id, project_id, now=now)
+    # override_model added in migration 003; tolerate its absence (fake test rows).
+    try:
+        override_model = row["override_model"]
+    except (KeyError, IndexError):
+        override_model = None
+    _cache_put(raw, agent_id, project_id, override_model, now=now)
     request.state.agent_id = agent_id
     request.state.project_id = project_id
+    request.state.override_model = override_model
     return agent_id

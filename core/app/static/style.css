@@ -969,6 +969,9 @@ table.clickable tbody tr { cursor: pointer; }
 .bn-prompt { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: inherit; font-size: 13px; resize: vertical; }
 .bn-models-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
 .bn-model { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-family: var(--mono); font-size: 11.5px; }
+/* the model slots are <select> — fill the grid cell and keep the native caret */
+select.bn-model { width: 100%; min-width: 0; cursor: pointer; }
+select.bn-model:focus { outline: none; border-color: var(--accent); }
 .bn-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .bn-tools-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
 .bn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
@@ -2242,4 +2245,33 @@ html, body { height: 100%; }
   .page-toolbar { gap: 10px; }
   /* Let long code / token blocks wrap instead of forcing horizontal scroll. */
   .code { word-break: break-all; }
+}
+
+/* ── Head-to-head: same task, N models side by side (Bench page) ────────── */
+.h2h-wrap { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 14px; }
+.h2h-task { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.h2h-task-head {
+  display: flex; gap: 10px; align-items: baseline; padding: 8px 12px;
+  background: var(--bg-raised); border-bottom: 1px solid var(--border);
+}
+.h2h-when { font-family: var(--mono); font-size: 11px; color: var(--label); flex: 0 0 auto; }
+.h2h-excerpt { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* auto-fit so 2 models sit side by side and 4 still fit without overflow */
+.h2h-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.h2h-col { padding: 10px 12px; border-right: 1px solid var(--border); }
+.h2h-col:last-child { border-right: 0; }
+.h2h-model { font-weight: 600; color: var(--accent-bright); font-size: 13px; }
+.h2h-sub { font-size: 11px; color: var(--label); }
+.h2h-metrics { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0 0; }
+.h2h-metrics dt { font-size: 11px; color: var(--label); }
+.h2h-metrics dd { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--text); text-align: right; }
+.h2h-metrics dd.h2h-win { color: var(--good); font-weight: 600; }
+.h2h-unpriced { color: var(--warn); font-family: var(--mono); font-size: 11px; }
+.h2h-tools { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+.h2h-tools code { font-size: 10px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; color: var(--text-dim); }
+@media (max-width: 700px) {
+  .h2h-cols { grid-template-columns: 1fr; }
+  .h2h-col { border-right: 0; border-bottom: 1px solid var(--border); }
+  .h2h-col:last-child { border-bottom: 0; }
+  .h2h-excerpt { white-space: normal; }
 }

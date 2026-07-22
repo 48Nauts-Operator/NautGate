@@ -373,6 +373,7 @@
       <button class="reload" id="bn-reload" hidden>↻</button>
       <div id="bn-form" class="v2-section"></div>
       <div id="bn-results" class="v2-section"></div>
+      <div id="bn-h2h" class="v2-section"></div>
       <div id="bn-working" class="v2-section"></div>
       <div id="bn-history" class="v2-section"></div>
     </section>
@@ -765,6 +766,9 @@
                 <option value="60">60 days</option>
                 <option value="90">90 days (max)</option>
               </select>
+            </label>
+            <label>Pin to model <span class="hint">(optional — makes a fixed-model alias)</span>
+              <select id="key-model"><option value="">— auto (client picks) —</option></select>
             </label>
             <button id="key-create">Create key</button>
             <span id="key-create-state" class="hint"></span>

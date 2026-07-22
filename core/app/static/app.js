@@ -2567,11 +2567,12 @@
 
   // === Bench — same task, N models, side by side ==============================
 
+  // Preferred default picks, in slot order. Only entries the gateway reports as
+  // routable are preselected — the full option list comes from the server, so
+  // this list going stale can no longer make a model unpickable.
   const BENCH_PRESETS = [
-    "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-8",
-    "openrouter/openai/gpt-4o-mini", "openrouter/openai/gpt-4o",
-    "openrouter/deepseek/deepseek-v4-flash", "openrouter/google/gemini-flash",
-    "openrouter/moonshotai/kimi-k2.6",
+    "anthropic/claude-fable-5", "openai/gpt-5.6-sol",
+    "anthropic/claude-opus-4-8", "openrouter/moonshotai/kimi-k2.6",
   ];
 
   async function loadBench() {
@@ -2581,9 +2582,16 @@
     const histEl = document.getElementById("bn-history");
     try {
       const scope = getActiveAgentScope();
-      const d = await api("/v1/bench?hours=24" + (scope ? "&agent_id=" + encodeURIComponent(scope) : ""));
+      const qs = "hours=24" + (scope ? "&agent_id=" + encodeURIComponent(scope) : "");
+      const d = await api("/v1/bench?" + qs);
+      fillBenchModels(d.available_models);
       renderBenchWorking(workingEl, d.working);
       renderBenchHistory(histEl, d.runs || []);
+      // Head-to-head is a separate query so a slow/empty pairing never blocks
+      // the rest of the page.
+      api("/v1/bench/head-to-head?" + qs)
+        .then((h) => renderBenchH2H(document.getElementById("bn-h2h"), h))
+        .catch(() => {});
     } catch (e) {
       if (workingEl) workingEl.innerHTML = `<p class="hint" style="color:var(--bad)">load failed: ${esc(e.message || e)}</p>`;
     }
@@ -2593,13 +2601,16 @@
     const mount = document.getElementById("bn-form");
     if (!mount || mount.dataset.built) return;
     mount.dataset.built = "1";
+    // Real <select>s, not a datalist on a text input — the datalist gave no
+    // visible affordance, so the models looked unpickable. Options are filled
+    // by fillBenchModels() once /v1/bench reports what's actually routable.
     const modelInputs = [0, 1, 2, 3].map((i) =>
-      `<input class="bn-model" list="bn-model-presets" placeholder="model ${i + 1}${i > 1 ? " (optional)" : ""}"
-        value="${esc(BENCH_PRESETS[i] || "")}" />`).join("");
+      `<select class="bn-model" data-slot="${i}" aria-label="model ${i + 1}">
+         <option value="">— model ${i + 1}${i > 1 ? " (optional)" : ""} —</option>
+       </select>`).join("");
     mount.innerHTML = `
       <div class="v2-card" style="padding:16px">
         <textarea id="bn-prompt" class="bn-prompt" rows="3" placeholder="The task — every model gets exactly this prompt…">A user's payment webhook fails intermittently with 502 errors. What is your first debugging step? If tools are available, use one.</textarea>
-        <datalist id="bn-model-presets">${BENCH_PRESETS.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
         <div class="bn-models-row">${modelInputs}</div>
         <div class="bn-actions">
           <label class="bn-tools-toggle"><input type="checkbox" id="bn-tools" checked /> give models a sample tool set (read_file, search_code, run_command) — calls are captured, never executed</label>
@@ -2608,6 +2619,24 @@
         </div>
       </div>`;
     document.getElementById("bn-run").addEventListener("click", runBench);
+  }
+
+  // Populate the model dropdowns from what the gateway can actually route.
+  // Preselects the first BENCH_PRESETS entries that survived, so the form is
+  // runnable without picking anything.
+  function fillBenchModels(models) {
+    const list = (models && models.length ? models : BENCH_PRESETS).slice();
+    const defaults = BENCH_PRESETS.filter((m) => list.includes(m));
+    document.querySelectorAll("select.bn-model").forEach((sel) => {
+      if (sel.dataset.filled) return;
+      sel.dataset.filled = "1";
+      const slot = Number(sel.dataset.slot);
+      const keep = sel.options[0].outerHTML;
+      sel.innerHTML = keep + list.map((m) =>
+        `<option value="${esc(m)}">${esc(shortModelName(m))}</option>`).join("");
+      const want = defaults[slot];
+      if (want) sel.value = want;
+    });
   }
 
   async function runBench() {
@@ -2672,6 +2701,65 @@
     }).join("");
     mount.innerHTML = `<div class="section-title">Results — ${esc(tsShort(run.ts || new Date().toISOString()))}</div>
       <div class="bn-grid">${cards}</div>`;
+  }
+
+  // Same task, N models, real traffic — paired so the comparison is
+  // like-for-like. `working` above averages a model across ALL its traffic,
+  // which mixes a 57-tool builder session with a 5-tool opinion call and makes
+  // tool-schema overhead look like model inefficiency.
+  function renderBenchH2H(mount, h) {
+    if (!mount) return;
+    mount.innerHTML = "";
+    const tasks = (h || {}).tasks || [];
+    if (!tasks.length) {
+      mount.appendChild(NG.card({
+        title: "Head-to-head — same task, real calls",
+        meta: `last ${(h || {}).hours || 24}h · no paired tasks yet`,
+        body: NG.el("div", { html: '<p class="hint" style="padding:10px 14px">Nothing to compare yet — this fills in when two models answer the same prompt (e.g. a Fusion <code>/opinion</code> run).</p>' }),
+      }));
+      return;
+    }
+    const num = (v, f) => (v == null ? "—" : f(v));
+    const blocks = tasks.map((t) => {
+      // Best (lowest) value per metric wins the highlight; nulls never win.
+      const best = (key, lower = true) => {
+        const vals = t.models.map((m) => m[key]).filter((v) => v != null);
+        if (!vals.length) return null;
+        return lower ? Math.min(...vals) : Math.max(...vals);
+      };
+      const bIO = best("in_per_out"), bDur = best("duration_ms"), bTtfb = best("ttfb_ms");
+      const cols = t.models.map((m) => {
+        const win = (v, b) => (v != null && b != null && v === b ? ' class="h2h-win"' : "");
+        const cost = m.unpriced
+          ? '<span class="h2h-unpriced" title="No pricing.yaml entry for this model — cost is unknown, not zero">unpriced</span>'
+          : num(m.cost_usd, (v) => "$" + v.toFixed(4));
+        const tools = m.tool_names.length
+          ? `<div class="h2h-tools">${m.tool_names.slice(0, 8).map((n) => `<code>${esc(n)}</code>`).join(" ")}${m.tool_names.length > 8 ? " +" + (m.tool_names.length - 8) : ""}</div>`
+          : "";
+        return `<div class="h2h-col">
+          <div class="h2h-model">${esc(shortModelName(m.model))}</div>
+          <div class="h2h-sub">${m.calls} call${m.calls === 1 ? "" : "s"}${m.tools_offered ? " · " + Math.round(m.tools_offered) + " tools offered" : ""}</div>
+          <dl class="h2h-metrics">
+            <dt>context in : out</dt><dd${win(m.in_per_out, bIO)}>${num(m.in_per_out, (v) => v + " : 1")}</dd>
+            <dt>tokens</dt><dd>${(m.tokens_in || 0).toLocaleString()} in / ${(m.tokens_out || 0).toLocaleString()} out${m.tokens_reasoning ? ` <span class="h2h-sub">(${m.tokens_reasoning.toLocaleString()} reasoning)</span>` : ""}</dd>
+            <dt>cost</dt><dd>${cost}</dd>
+            <dt>first byte</dt><dd${win(m.ttfb_ms, bTtfb)}>${num(m.ttfb_ms, (v) => Math.round(v) + "ms")}</dd>
+            <dt>total time</dt><dd${win(m.duration_ms, bDur)}>${num(m.duration_ms, (v) => (v / 1000).toFixed(1) + "s")}</dd>
+            <dt>tool calls</dt><dd>${m.tool_calls}</dd>
+          </dl>${tools}
+        </div>`;
+      }).join("");
+      return `<div class="h2h-task">
+        <div class="h2h-task-head"><span class="h2h-when">${t.first_ts ? esc(new Date(t.first_ts).toLocaleTimeString()) : ""}</span>
+          <span class="h2h-excerpt">${esc(t.excerpt || "").slice(0, 140)}</span></div>
+        <div class="h2h-cols">${cols}</div>
+      </div>`;
+    }).join("");
+    mount.appendChild(NG.card({
+      title: "Head-to-head — same task, real calls",
+      meta: `last ${(h || {}).hours || 24}h · ${tasks.length} paired task${tasks.length === 1 ? "" : "s"} · lower context ratio and faster time are highlighted · unpriced models show as unknown, never $0`,
+      body: NG.el("div", { html: `<div class="h2h-wrap">${blocks}</div>` }),
+    }));
   }
 
   function renderBenchWorking(mount, w) {
@@ -5642,9 +5730,22 @@
   }
 
   // --- NautGate API key management (Settings → Keys) --------------------
+  async function populateKeyModelPicker() {
+    const sel = document.getElementById("key-model");
+    if (!sel || sel.dataset.loaded) return;
+    try {
+      const r = await api("/v1/models");
+      (r.data || []).filter((m) => m.id && m.id !== "auto").forEach((m) => {
+        sel.appendChild(NG.el("option", { value: m.id }, m.id));
+      });
+      sel.dataset.loaded = "1";
+    } catch (_e) { /* picker stays auto-only */ }
+  }
+
   async function loadKeys() {
     const mount = document.getElementById("keys-card");
     if (!mount || !getToken()) return;
+    populateKeyModelPicker();
     try {
       const r = await api("/v1/keys");
       const rows = r.keys || [];
@@ -5658,6 +5759,7 @@
         columns: [
           { key: "name", label: "Name", render: (k) => NG.el("span", { class: "v2-strong" }, k.name || "—"), sortValue: (k) => k.name || "" },
           { key: "agent_id", label: "Agent", render: (k) => k.agent_id || "—", sortValue: (k) => k.agent_id || "" },
+          { key: "pinned", label: "Model", sortable: false, render: (k) => k.override_model ? NG.el("span", { class: "audit-tool-chip", title: "pinned model" }, shortModelName(k.override_model)) : NG.el("span", { class: "hint" }, "auto") },
           { key: "created", label: "Created", render: (k) => (k.created_at ? fmtAge(k.created_at) : "—"), sortValue: (k) => k.created_at || "" },
           { key: "last_used", label: "Last used", render: (k) => (k.last_used_at ? fmtAge(k.last_used_at) : "never"), sortValue: (k) => k.last_used_at || "" },
           { key: "expires", label: "Expires", render: (k) => (k.expires_at ? fmtAge(k.expires_at) : "never"), sortValue: (k) => k.expires_at || "" },
@@ -5679,6 +5781,7 @@
     const name = document.getElementById("key-name").value.trim();
     const agent = document.getElementById("key-agent").value.trim();
     const ttl = Number(document.getElementById("key-ttl").value) || 30;
+    const overrideModel = (document.getElementById("key-model")?.value || "").trim();
     const stateEl = document.getElementById("key-create-state");
     const out = document.getElementById("key-created");
     if (!name || !agent) { if (stateEl) stateEl.textContent = "name + agent id required"; return; }
@@ -5687,7 +5790,7 @@
       const t = getToken();
       const res = await fetch("/v1/keys", {
         method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" },
-        body: JSON.stringify({ name, agent_id: agent, ttl_days: ttl }),
+        body: JSON.stringify({ name, agent_id: agent, ttl_days: ttl, override_model: overrideModel || null }),
       });
       if (!res.ok) { let d = ""; try { d = (await res.json()).detail || ""; } catch (_e) {} throw new Error(d || ("http_" + res.status)); }
       const k = await res.json();
@@ -5703,6 +5806,21 @@
         row.appendChild(code); row.appendChild(copy);
         out.appendChild(row);
         out.appendChild(NG.el("div", { class: "key-created-warn" }, k.expires_at ? `Expires ${new Date(k.expires_at).toLocaleString()}.` : "No expiry."));
+        // NAUTGATE-3: pinned key → paste-ready alias snippet. Launch Claude Code
+        // with these env vars and every request is served by the pinned model,
+        // whatever model name Claude Code's picker sends.
+        if (k.override_model) {
+          const base = location.origin;
+          const snippet = `ANTHROPIC_BASE_URL=${base} ANTHROPIC_API_KEY=${k.token} claude`;
+          out.appendChild(NG.el("div", { class: "v2-card-meta", style: { margin: "10px 0 4px" } },
+            `Pinned to ${shortModelName(k.override_model)} — launch Claude Code with this alias:`));
+          const arow = NG.el("div", { class: "key-created-row" });
+          const acode = NG.el("code", null, snippet);
+          const acopy = NG.el("button", { class: "v2-pg-btn" }, "Copy");
+          acopy.addEventListener("click", () => { navigator.clipboard?.writeText(snippet); acopy.textContent = "Copied ✓"; setTimeout(() => acopy.textContent = "Copy", 1500); });
+          arow.appendChild(acode); arow.appendChild(acopy);
+          out.appendChild(arow);
+        }
       }
       document.getElementById("key-name").value = "";
       loadKeys();

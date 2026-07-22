@@ -277,7 +277,7 @@ async def _process_chat_request(
 
     # DECIDE — precedence ladder per Tech Paper §2.5:
     #   2: X-Naut-Model header (per-request hard override)
-    #   3: api_keys.override_model (per-key hard override)  — deferred for v1
+    #   3: api_keys.override_model (per-key hard override)  — NAUTGATE-3
     #   4: routing_preferences.preferred_models (caller soft pref)  — deferred for v1
     #   5: brain.override_model (brain hard override)
     #   6: brain.demoted_models (extends banned_models)
@@ -286,13 +286,18 @@ async def _process_chat_request(
     routing_table = getattr(request.app.state, "routing_table", None)
     health_tracker = getattr(request.app.state, "health_tracker", None)
 
+    # NAUTGATE-3: a key can pin one model, so the model is chosen by the KEY
+    # (e.g. a `claude-deepseek` alias) rather than by Claude Code's picker.
+    # Precedence: per-request header > per-key override > brain override.
+    key_override = getattr(request.state, "override_model", None)
     header_override = request.headers.get("x-naut-model")
-    hard_override = header_override or plugin_override_model
+    hard_override = header_override or key_override or plugin_override_model
 
     if hard_override:
         decision_provider = "override"
         decision_model = hard_override
-        source = "header" if header_override else "brain"
+        source = ("header" if header_override
+                  else "key" if key_override else "brain")
         decision_reason = f"override:{source}->{hard_override}"
         payload["model"] = decision_model
     elif model_requested == AUTO_MODEL_TOKEN:
@@ -1400,8 +1405,10 @@ async def keys_create(request: Request) -> Response:
             raise HTTPException(status_code=400, detail="ttl_days must be an integer") from None
         if ttl_days < 1 or ttl_days > _KEY_TTL_MAX_DAYS:
             raise HTTPException(status_code=400, detail=f"ttl_days must be in 1..{_KEY_TTL_MAX_DAYS}")
+    override_model = (body.get("override_model") or "").strip() or None
     created = await queries.create_api_key(
         pool, name=name, agent_id=agent_id, ttl_days=ttl_days, profile=profile,
+        override_model=override_model,
     )
     return JSONResponse(created)
 
@@ -1845,7 +1852,26 @@ async def bench_list(request: Request) -> Response:
         "working": await bench.working_compare(
             pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id),
         "sample_tools": bench.SAMPLE_TOOLS,
+        "available_models": await bench.available_models(
+            pool, getattr(request.app.state, "pricing", None)),
     })
+
+
+@router.get("/bench/head-to-head")
+async def bench_head_to_head(request: Request) -> Response:
+    """Real calls paired by task, so two models are compared like-for-like."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    agent_id = request.query_params.get("agent_id", "").strip() or None
+    try:
+        hours = int(request.query_params.get("hours", "24"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    from app import bench
+    return JSONResponse(await bench.head_to_head(
+        pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id))
 
 
 # ── Champion–challenger shadow testing ──────────────────────────────────────

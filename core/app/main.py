@@ -188,6 +188,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(v1.router)
+    # Isolated Pi-only OpenAI Responses passthrough (POST /pi/v1/responses).
+    # Additive; touches no existing route. See app/pi_responses.py.
+    from app import pi_responses
+    app.include_router(pi_responses.router)
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():

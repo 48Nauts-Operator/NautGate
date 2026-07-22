@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 import asyncpg
 import httpx
@@ -60,6 +61,11 @@ def _split_target(target: str) -> tuple[str, str]:
         return (provider, model)
     if t.startswith("claude"):
         return ("anthropic", t)
+    # Bare OpenAI ids go direct to OpenAI. Without this they fell through to
+    # the openrouter branch below as "openrouter/gpt-5.6-sol" — an id that
+    # doesn't exist there, so the bench leg failed instead of running.
+    if re.match(r"^(gpt-|o1|o3|o4|chatgpt-)", t):
+        return ("openai", t)
     return ("openrouter", f"openrouter/{t}")
 
 
@@ -154,3 +160,149 @@ async def working_compare(pool: asyncpg.Pool, *, hours: int = 24,
         """, hours, agent_id)
     return {"hours": hours, "agent_id": agent_id,
             "models": [dict(r) for r in rows]}
+
+
+async def head_to_head(pool: asyncpg.Pool, *, hours: int = 24,
+                       agent_id: str | None = None,
+                       min_models: int = 2) -> dict:
+    """Pair REAL calls that answered the SAME task, one row per model.
+
+    `working_compare` averages a model over all its traffic, which is
+    misleading when the same model runs in two roles: a 57-tool builder session
+    and a 5-tool opinion call land in one bucket, so tool-schema overhead looks
+    like model inefficiency. Here we group by the task (the user prompt) and
+    only keep tasks that >= `min_models` distinct models actually answered, so
+    every comparison is like-for-like.
+
+    Correlation key is md5(prompt_excerpt) — the harness sends both models the
+    same question, so the excerpt matches with no client change and no schema
+    change. ponytail: excerpt-hash beats a new correlation column until a
+    caller needs to pair tasks whose first 200 chars collide.
+    """
+    rows = await pool.fetch(
+        """
+        WITH calls AS (
+            SELECT md5(d.prompt_excerpt) AS task_hash,
+                   d.prompt_excerpt       AS excerpt,
+                   COALESCE(o.actual_model, d.decision_model) AS model,
+                   d.tools_count, o.prompt_tokens, o.completion_tokens,
+                   o.reasoning_tokens, o.cost_usd, o.duration_ms,
+                   o.first_byte_ms, o.ts,
+                   CASE WHEN jsonb_typeof(o.tool_calls_made) = 'array'
+                        THEN o.tool_calls_made ELSE '[]'::jsonb END AS tcalls
+              FROM nautgate.route_outcomes o
+              JOIN nautgate.route_decisions d ON d.id = o.decision_id
+             WHERE o.ts > NOW() - make_interval(hours => $1)
+               AND o.status_code BETWEEN 200 AND 299
+               AND COALESCE(d.prompt_excerpt, '') <> ''
+               AND ($2::text IS NULL OR d.agent_id = $2)
+        ), per_model AS (
+            SELECT task_hash, MIN(excerpt) AS excerpt, model,
+                   COUNT(*)                          AS calls,
+                   MIN(ts)                           AS first_ts,
+                   AVG(tools_count)::float           AS tools_offered,
+                   SUM(prompt_tokens)                AS tokens_in,
+                   SUM(completion_tokens)            AS tokens_out,
+                   SUM(reasoning_tokens)             AS tokens_reasoning,
+                   SUM(cost_usd)::float              AS cost_usd,
+                   COUNT(cost_usd)                   AS priced_calls,
+                   AVG(first_byte_ms)::float         AS ttfb_ms,
+                   SUM(duration_ms)                  AS duration_ms,
+                   SUM(jsonb_array_length(tcalls))   AS tool_calls,
+                   COALESCE(jsonb_agg(DISTINCT tc->>'name')
+                            FILTER (WHERE tc->>'name' IS NOT NULL),
+                            '[]'::jsonb)             AS tool_names
+              FROM calls LEFT JOIN LATERAL jsonb_array_elements(tcalls) tc ON TRUE
+             GROUP BY task_hash, model
+        )
+        SELECT * FROM per_model
+         WHERE task_hash IN (SELECT task_hash FROM per_model
+                             GROUP BY task_hash HAVING COUNT(DISTINCT model) >= $3)
+         ORDER BY first_ts DESC, model
+        """, hours, agent_id, min_models)
+
+    tasks: dict[str, dict] = {}
+    for r in rows:
+        d = dict(r)
+        t = tasks.setdefault(d["task_hash"], {
+            "task_hash": d["task_hash"],
+            "excerpt": d["excerpt"],
+            "first_ts": d["first_ts"].isoformat() if d.get("first_ts") else None,
+            "models": [],
+        })
+        tin, tout = d.get("tokens_in") or 0, d.get("tokens_out") or 0
+        t["models"].append({
+            "model": d["model"],
+            "calls": d["calls"],
+            "tools_offered": d["tools_offered"],
+            "tokens_in": tin,
+            "tokens_out": tout,
+            "tokens_reasoning": d.get("tokens_reasoning") or 0,
+            # context efficiency: input tokens burned per output token produced.
+            "in_per_out": round(tin / tout, 2) if tout else None,
+            "cost_usd": d.get("cost_usd"),
+            # unpriced models must read as UNKNOWN, never as $0 — a missing
+            # pricing.yaml entry otherwise looks like a free model.
+            "unpriced": (d.get("priced_calls") or 0) < d["calls"],
+            "ttfb_ms": d.get("ttfb_ms"),
+            "duration_ms": d.get("duration_ms"),
+            "tool_calls": d.get("tool_calls") or 0,
+            "tool_names": json.loads(d["tool_names"]) if d.get("tool_names") else [],
+        })
+    return {"hours": hours, "agent_id": agent_id,
+            "tasks": list(tasks.values())}
+
+
+def _qualify(model: str) -> str | None:
+    """Bare model id → a provider-qualified bench target `_split_target` can
+    route. Returns None when we can't tell who serves it (offering an
+    unroutable target is worse than omitting it)."""
+    m = (model or "").strip()
+    if not m or m == "auto":
+        return None
+    if "/" in m:
+        return m
+    if m.startswith("claude"):
+        return f"anthropic/{m}"
+    if re.match(r"^(gpt-|o1|o3|o4|chatgpt-)", m):
+        return f"openai/{m}"
+    return None
+
+
+async def available_models(pool: asyncpg.Pool, pricing=None) -> list[str]:
+    """Bench targets to offer in the UI: everything we have a price for, plus
+    everything that actually served traffic recently.
+
+    The old UI hardcoded this list, so newly-adopted models (gpt-5.6-*,
+    claude-fable-5) were simply unpickable. Deriving it keeps the picker
+    honest as models come and go.
+    """
+    # Only these providers have a transport in _select_transports; anything
+    # else (gemini/*, deepseek/*, lmstudio/*) would resolve to "no_transport"
+    # and fail the leg, so it must not be offered.
+    ROUTABLE = ("anthropic/", "openai/", "openrouter/")
+
+    def usable(t: str) -> bool:
+        return (t.startswith(ROUTABLE)
+                and not t.endswith("]")        # pricing aliases like "…[1m]"
+                and not t.endswith("/local"))  # lmstudio / local stubs
+
+    targets: set[str] = set()
+    for key in getattr(pricing, "_prices", {}):
+        if usable(key) and not key.startswith("openrouter/openrouter/"):
+            targets.add(key)
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT COALESCE(o.actual_model, d.decision_model) AS m
+              FROM nautgate.route_decisions d
+              LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+             WHERE d.ts > NOW() - INTERVAL '30 days'
+            """)
+        for r in rows:
+            q = _qualify(r["m"])
+            if q and usable(q):
+                targets.add(q)
+    except Exception as exc:  # noqa: BLE001 - picker must not break the page
+        log.warning("bench_available_models_failed", error=str(exc))
+    return sorted(targets)

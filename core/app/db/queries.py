@@ -1782,22 +1782,25 @@ async def get_provider_status(pool: asyncpg.Pool, *, minutes: int = 10) -> dict:
 
 # --- API key management (Settings → Keys: name + TTL + revoke) ----------
 async def create_api_key(
-    pool: asyncpg.Pool, *, name: str, agent_id: str, ttl_days: int | None, profile: str = "auto"
+    pool: asyncpg.Pool, *, name: str, agent_id: str, ttl_days: int | None,
+    profile: str = "auto", override_model: str | None = None
 ) -> dict:
     """Mint a key with a name + optional TTL. Returns metadata + the plaintext
-    token (shown once, never stored)."""
+    token (shown once, never stored). ``override_model`` pins the key to one
+    model (NAUTGATE-3) — the model is then chosen by the key, not the client."""
     from app.auth import issue_key
 
     plaintext, key_id, key_hash = issue_key()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO nautgate.api_keys (id, key_hash, agent_id, name, default_profile, expires_at)
-            VALUES ($1, $2, $3, $4, $5,
-                    CASE WHEN $6::int IS NULL THEN NULL ELSE NOW() + make_interval(days => $6) END)
-            RETURNING id::text, name, agent_id, default_profile, created_at, expires_at
+            INSERT INTO nautgate.api_keys
+                (id, key_hash, agent_id, name, default_profile, override_model, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6,
+                    CASE WHEN $7::int IS NULL THEN NULL ELSE NOW() + make_interval(days => $7) END)
+            RETURNING id::text, name, agent_id, default_profile, override_model, created_at, expires_at
             """,
-            key_id, key_hash, agent_id, name, profile, ttl_days,
+            key_id, key_hash, agent_id, name, profile, override_model or None, ttl_days,
         )
     d = dict(row)
     for k in ("created_at", "expires_at"):
@@ -1811,7 +1814,7 @@ async def list_api_keys(pool: asyncpg.Pool) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id::text, name, agent_id, default_profile,
+            SELECT id::text, name, agent_id, default_profile, override_model,
                    created_at, last_used_at, expires_at, revoked_at
             FROM nautgate.api_keys
             ORDER BY created_at DESC
