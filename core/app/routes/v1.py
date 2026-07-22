@@ -138,19 +138,34 @@ def _resolve_pricing_provider(
     (`actual_provider`), then fall back to a model-prefix heuristic so the cost
     table still lines up with a real provider/* key.
     """
-    if decision_provider and decision_provider not in ("passthrough", "chatgpt-oauth"):
+    # "override" is a routing DECISION, not a provider — an api_keys.override_model
+    # request would otherwise look up "override/<model>" and never match, so every
+    # pinned-key call recorded NULL cost. Same for OpenRouter's sub-host names
+    # (actual_provider is e.g. "Inceptron", the machine that ran the model), which
+    # are not pricing keys either. Both fall through to the model heuristic below.
+    _NOT_A_PRICING_PROVIDER = (
+        "passthrough", "chatgpt-oauth", "override", "openai-responses",
+    )
+    if decision_provider and decision_provider not in _NOT_A_PRICING_PROVIDER:
         return decision_provider
-    if actual_provider and actual_provider not in ("passthrough", "chatgpt-oauth"):
-        return actual_provider
     if not model:
         return decision_provider
     m = model.lower()
+    # Namespaced ids carry their own provider — "openrouter/moonshotai/kimi-k2.6"
+    # prices under the openrouter table. Checked before actual_provider because
+    # the namespace is authoritative and the sub-host name is not.
+    if m.startswith("openrouter/"):
+        return "openrouter"
+    if actual_provider and actual_provider not in _NOT_A_PRICING_PROVIDER:
+        return actual_provider
     if m.startswith("claude"):
         return "anthropic"
     if m.startswith("gpt") or m.startswith("o1") or m.startswith("o3") or m.startswith("codex"):
         return "openai"
     if m.startswith("gemini"):
         return "gemini"
+    if m.startswith("lmstudio/"):
+        return "lmstudio"
     return decision_provider
 
 
