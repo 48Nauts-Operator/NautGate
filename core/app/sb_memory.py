@@ -52,8 +52,14 @@ async def _get_config(pool) -> dict:
     now = time.monotonic()
     if _config_cache is not None and (now - _config_cached_at) < _CONFIG_CACHE_TTL_SEC:
         return _config_cache
-    from app.app_config import sb_ingest_config
+    from app.app_config import is_offline, sb_ingest_config
     cfg = await sb_ingest_config(pool)
+    # Offline / air-gapped: SB ingest usually points at a Postgres on ANOTHER
+    # host, so it is real data leaving the box even though it isn't a model
+    # provider. Report it disabled rather than connecting, so "this process
+    # only opens sockets to localhost" holds without a second switch.
+    if await is_offline(pool):
+        cfg = {**cfg, "enabled": False}
     _config_cache = cfg
     _config_cached_at = now
     return cfg

@@ -19,11 +19,16 @@ log = structlog.get_logger()
 async def run_scheduler(pool: asyncpg.Pool, *, pricing, judge_client,
                         tick_seconds: int = 60) -> None:
     log.info("llm_probe_scheduler_started", tick_seconds=tick_seconds)
-    from app.app_config import quality_eval_config
+    from app.app_config import is_offline, quality_eval_config
     from app.llm_probe import run_probe_cycle
 
     while True:
         try:
+            # Offline / air-gapped: probes fire real calls at providers, so they
+            # stand down entirely. See app_config.is_offline.
+            if await is_offline(pool):
+                await asyncio.sleep(tick_seconds)
+                continue
             cfg = await pool.fetchrow(
                 "SELECT enabled, interval_hours, targets, next_run_at "
                 "FROM nautgate.llm_probe_config WHERE id=1"

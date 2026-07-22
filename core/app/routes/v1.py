@@ -3381,6 +3381,14 @@ async def openrouter_balance(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
 
+    from app.app_config import is_offline
+    if await is_offline(pool):
+        return JSONResponse(
+            {"error": "Offline mode — the gateway makes no outbound calls.",
+             "offline": True},
+            status_code=503,
+        )
+
     import os as _os
     api_key = _os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:

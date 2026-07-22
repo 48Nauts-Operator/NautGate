@@ -2275,3 +2275,8 @@ html, body { height: 100%; }
   .h2h-col:last-child { border-bottom: 0; }
   .h2h-excerpt { white-space: normal; }
 }
+
+/* Offline / air-gapped mode toggle (Settings → Profile) */
+.offline-toggle { display: flex; align-items: center; gap: 9px; margin: 10px 0 4px; font-size: 13px; cursor: pointer; }
+.offline-toggle input { width: 15px; height: 15px; cursor: pointer; }
+.settings-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }

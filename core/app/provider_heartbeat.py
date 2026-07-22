@@ -80,8 +80,17 @@ async def run_scheduler(pool, *, pricing, state, tick_seconds: int = 60) -> None
     """Populate ``state.provider_status[label]`` every tick. Never raises."""
     log.info("provider_heartbeat_started", tick_seconds=tick_seconds)
     import time as _time
+
+    from app.app_config import is_offline
     while True:
         try:
+            # Offline / air-gapped: stand down. This loop is the main source of
+            # unsolicited outbound traffic — it pings providers on a timer even
+            # when every request is being served locally.
+            if await is_offline(pool):
+                state.clear()
+                await asyncio.sleep(tick_seconds)
+                continue
             async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0), http2=False) as client:
                 for label, provider, model, require_via in DEFAULT_TARGETS:
                     try:

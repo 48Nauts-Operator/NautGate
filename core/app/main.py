@@ -122,11 +122,27 @@ async def lifespan(app: FastAPI):
     app.state.heartbeat_task = None
     # Live provider-status heartbeat results, keyed by transport label.
     app.state.provider_status = {}
+    # NAUTGATE_OFFLINE=1 — air-gapped deployments (on-prem, local models only).
+    # The heartbeat and probe schedulers call out to api.anthropic.com /
+    # openrouter.ai on a timer regardless of where traffic is actually routed,
+    # so on an isolated box they produce a steady outbound beacon to providers
+    # that aren't being used. Serving local models needs neither.
+    import os as _os
+    app.state.offline = _os.environ.get("NAUTGATE_OFFLINE", "").strip().lower() in ("1", "true", "yes")
+
     if app.state.db is not None:
         import asyncio as _asyncio
 
+        # Backup is local-only (writes to disk) — it runs in offline mode too.
         from app.backup import run_scheduler as _backup_scheduler
         app.state.backup_task = _asyncio.create_task(_backup_scheduler(app.state.db))
+
+        # Both schedulers check app_config.is_offline() each tick and stand
+        # down while offline, so the Settings toggle takes effect live — no
+        # restart, which is what makes it demonstrable in front of an audience.
+        if app.state.offline:
+            log.info("offline_mode_forced_by_env",
+                     hint="NAUTGATE_OFFLINE=1 — no outbound provider calls on a timer")
 
         # LLM-Probing scheduler — disabled by default in config, so this idles
         # until the operator enables it + sets targets on the dashboard.

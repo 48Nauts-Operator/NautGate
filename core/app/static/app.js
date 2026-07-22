@@ -4869,9 +4869,36 @@
   document.getElementById("sb-save")?.addEventListener("click", saveSBConfig);
   document.getElementById("sb-test")?.addEventListener("click", testSBConfig);
 
+  // Offline mode — the air-gapped demo switch. Reads/writes the same
+  // /v1/config document; the schedulers poll it each tick so flipping it takes
+  // effect without a restart.
+  document.getElementById("offline-save")?.addEventListener("click", saveOfflineMode);
+
+  async function saveOfflineMode() {
+    const stateEl = document.getElementById("offline-state");
+    const on = document.getElementById("offline-mode").checked;
+    stateEl.textContent = "saving…";
+    try {
+      const res = await fetch("/v1/config", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify({ offline: on }),
+      });
+      if (!res.ok) throw new Error("http_" + res.status);
+      stateEl.textContent = on
+        ? "✓ offline — outbound calls stop within a minute"
+        : "✓ online — provider monitoring resumed";
+      setTimeout(() => { stateEl.textContent = ""; }, 5000);
+    } catch (e) {
+      stateEl.textContent = "✗ save failed: " + (e.message || e);
+    }
+  }
+
   async function loadSBConfig() {
     try {
       const cfg = await api("/v1/config");
+      const offlineEl = document.getElementById("offline-mode");
+      if (offlineEl) offlineEl.checked = !!(cfg && cfg.offline);
       const sb = (cfg && cfg.sb_ingest) || {};
       document.getElementById("sb-enabled").checked = !!sb.enabled;
       document.getElementById("sb-host").value = sb.host || "";

@@ -38,6 +38,12 @@ _DEFAULTS: dict[str, Any] = {
         "judge_model": "openai/gpt-4o-mini",
         "judge_base_url": "https://openrouter.ai/api",
     },
+    # Offline / air-gapped mode. When true, NautGate makes NO outbound calls on
+    # a timer — the provider heartbeat, the LLM probe cycle and the OpenRouter
+    # credits lookup all stand down. Serving traffic (including local models)
+    # is unaffected; none of those are load-bearing. Toggled from Settings so
+    # it can be demonstrated live on an isolated network.
+    "offline": False,
     # Champion–challenger shadow testing (app/shadow.py). Disabled by default;
     # toggled from the Insights page.
     "shadow": {
@@ -205,3 +211,19 @@ async def quality_eval_config(pool: asyncpg.Pool | None) -> dict[str, Any]:
     qe["api_key_env"] = api_key_env
     qe["api_key"] = os.environ.get(api_key_env, "") if api_key_env else ""
     return qe
+
+
+async def is_offline(pool: asyncpg.Pool | None) -> bool:
+    """True when NautGate must not make outbound provider calls.
+
+    Env `NAUTGATE_OFFLINE=1` forces it on regardless of the stored setting, so
+    an air-gapped deployment can't be switched back online from the dashboard.
+    Never raises — on any failure we assume ONLINE (the pre-existing behaviour)
+    rather than silently disabling monitoring.
+    """
+    if os.environ.get("NAUTGATE_OFFLINE", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    try:
+        return bool((await get_settings(pool)).get("offline"))
+    except Exception:
+        return False

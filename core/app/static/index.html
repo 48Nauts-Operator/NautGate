@@ -625,6 +625,17 @@
 
       <!-- Profile sub-pane -->
       <div class="settings-pane" data-pane="profile">
+        <h2>Offline mode</h2>
+        <p class="hint" style="max-width:920px">Air-gapped / on-prem demos. NautGate stops making <b>any</b> outbound call on a timer — the provider heartbeat, LLM probes and the OpenRouter credits lookup all stand down. Serving traffic is unaffected: local models and every routed request keep working. Takes effect within a minute, no restart. Set <code>NAUTGATE_OFFLINE=1</code> to force it on and lock this toggle out.</p>
+        <label class="offline-toggle">
+          <input type="checkbox" id="offline-mode" />
+          <span>Offline mode — no outbound provider calls</span>
+        </label>
+        <div class="settings-row">
+          <button id="offline-save">Save offline mode</button>
+          <span id="offline-state" class="hint"></span>
+        </div>
+
         <h2>Profile</h2>
         <p class="hint">These settings are stored on <code>nautgate.routing_preferences</code> for the agent your bearer token belongs to.</p>
 
