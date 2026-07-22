@@ -64,6 +64,81 @@ def _normalize_content_blocks(content: object) -> list[dict]:
 # --- Request: Anthropic → OpenAI Chat -------------------------------------
 
 
+def _tool_result_text(content: Any) -> str:
+    """Flatten an Anthropic tool_result's content (str or list of blocks) to a
+    plain string for an OpenAI {role:tool} message."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text":
+                parts.append(b.get("text", ""))
+            elif isinstance(b, str):
+                parts.append(b)
+        return "\n".join(parts)
+    return "" if content is None else str(content)
+
+
+def _translate_message(role: str, content: list) -> list[dict]:
+    """Translate one Anthropic message (list-of-blocks form) into one or more
+    OpenAI messages, preserving tool history.
+
+      assistant text/tool_use → {role:assistant, content, tool_calls}
+      user tool_result        → {role:tool, tool_call_id, content} (one each)
+      user/assistant text|image → the normal normalized message
+    """
+    if not isinstance(content, list):
+        return [{"role": role, "content": str(content)}]
+
+    tool_uses = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+    tool_results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+    other = [b for b in content if isinstance(b, dict) and b.get("type") in ("text", "image")]
+
+    out: list[dict] = []
+
+    # Assistant turn that issued tool calls.
+    if role == "assistant" and tool_uses:
+        text = "\n".join(b.get("text", "") for b in other if b.get("type") == "text")
+        msg: dict[str, Any] = {"role": "assistant"}
+        msg["content"] = text or None  # OpenAI allows null content with tool_calls
+        msg["tool_calls"] = [
+            {
+                "id": tu.get("id") or f"call_{i}",
+                "type": "function",
+                "function": {
+                    "name": tu.get("name", ""),
+                    "arguments": json.dumps(tu.get("input") or {}),
+                },
+            }
+            for i, tu in enumerate(tool_uses)
+        ]
+        return [msg]
+
+    # User turn carrying tool results → one OpenAI tool message per result.
+    if role == "user" and tool_results:
+        for tr in tool_results:
+            out.append({
+                "role": "tool",
+                "tool_call_id": tr.get("tool_use_id") or "",
+                "content": _tool_result_text(tr.get("content")),
+            })
+        # Any accompanying text/image blocks become a normal user message.
+        if other:
+            blocks = _normalize_content_blocks(other)
+            if blocks:
+                out.append({"role": "user",
+                            "content": blocks[0]["text"] if len(blocks) == 1
+                            and blocks[0].get("type") == "text" else blocks})
+        return out
+
+    # Plain text/image message (no tool blocks).
+    blocks = _normalize_content_blocks(content)
+    if len(blocks) == 1 and blocks[0].get("type") == "text":
+        return [{"role": role, "content": blocks[0]["text"]}]
+    return [{"role": role, "content": blocks}]
+
+
 def request_to_openai_chat(payload: dict) -> dict:
     """Translate an Anthropic Messages request into an OpenAI Chat request.
 
@@ -97,12 +172,11 @@ def request_to_openai_chat(payload: dict) -> dict:
         if isinstance(content, str):
             msgs.append({"role": role, "content": content})
         else:
-            blocks = _normalize_content_blocks(content)
-            # Collapse single-text-block to a string for cleanliness.
-            if len(blocks) == 1 and blocks[0].get("type") == "text":
-                msgs.append({"role": role, "content": blocks[0]["text"]})
-            else:
-                msgs.append({"role": role, "content": blocks})
+            # NAUTGATE-2: preserve tool_use/tool_result history so agentic
+            # loops don't derail on routed models. One Anthropic message can
+            # expand into several OpenAI messages (assistant.tool_calls, and a
+            # separate {role:tool} per tool_result).
+            msgs.extend(_translate_message(role, content))
 
     out["messages"] = msgs
 
@@ -158,11 +232,30 @@ def response_to_anthropic(openai_resp: dict, model: str | None = None) -> dict:
     finish = (choices[0] if choices else {}).get("finish_reason")
     usage = openai_resp.get("usage") or {}
 
+    # NAUTGATE-2 (issue #2): map OpenAI tool_calls → Anthropic tool_use blocks
+    # so non-streamed tool responses aren't returned as empty content.
+    blocks: list[dict] = []
+    if content:
+        blocks.append({"type": "text", "text": content})
+    for tc in msg.get("tool_calls") or []:
+        fn = (tc or {}).get("function") or {}
+        args = fn.get("arguments")
+        try:
+            parsed = json.loads(args) if isinstance(args, str) else (args or {})
+        except (ValueError, TypeError):
+            parsed = {}
+        blocks.append({
+            "type": "tool_use",
+            "id": tc.get("id") or f"toolu_{uuid.uuid4().hex[:20]}",
+            "name": fn.get("name", ""),
+            "input": parsed,
+        })
+
     return {
         "id": openai_resp.get("id") or f"msg_{uuid.uuid4().hex[:24]}",
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "text", "text": content}] if content else [],
+        "content": blocks,
         "model": openai_resp.get("model") or model,
         "stop_reason": _FINISH_TO_STOP.get(finish, finish),
         "stop_sequence": None,

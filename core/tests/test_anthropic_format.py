@@ -358,3 +358,56 @@ async def test_messages_streaming_emits_anthropic_sse(messages_app):
     assert "Hi" in blob and "there" in blob
     # And NOT raw OpenAI shapes leaking through.
     assert '"choices"' not in blob
+
+
+# --- NAUTGATE-2: tool_use / tool_result history preservation ----------------
+
+from app.formats.anthropic import request_to_openai_chat, response_to_anthropic  # noqa: E402
+
+
+def test_request_preserves_tool_use_and_tool_result_history():
+    payload = {
+        "model": "deepseek",
+        "messages": [
+            {"role": "user", "content": "read config.py"},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "I'll read it."},
+                {"type": "tool_use", "id": "toolu_1", "name": "read_file",
+                 "input": {"path": "config.py"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1",
+                 "content": "PORT = 8090"},
+            ]},
+            {"role": "user", "content": "now what port?"},
+        ],
+    }
+    out = request_to_openai_chat(payload)["messages"]
+    # assistant message carries the tool call
+    asst = next(m for m in out if m["role"] == "assistant")
+    assert asst["tool_calls"][0]["id"] == "toolu_1"
+    assert asst["tool_calls"][0]["function"]["name"] == "read_file"
+    assert '"path": "config.py"' in asst["tool_calls"][0]["function"]["arguments"]
+    # a {role:tool} message carries the result, linked by id
+    tool_msg = next(m for m in out if m["role"] == "tool")
+    assert tool_msg["tool_call_id"] == "toolu_1"
+    assert tool_msg["content"] == "PORT = 8090"
+    # the trailing user text survives too
+    assert any(m["role"] == "user" and m["content"] == "now what port?" for m in out)
+
+
+def test_response_maps_tool_calls_to_tool_use():
+    openai_resp = {
+        "id": "cmpl_x", "model": "deepseek",
+        "choices": [{"finish_reason": "tool_calls", "message": {
+            "content": None,
+            "tool_calls": [{"id": "call_9", "type": "function",
+                            "function": {"name": "search", "arguments": '{"q":"port"}'}}],
+        }}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+    }
+    out = response_to_anthropic(openai_resp)
+    tu = next(b for b in out["content"] if b["type"] == "tool_use")
+    assert tu["id"] == "call_9" and tu["name"] == "search"
+    assert tu["input"] == {"q": "port"}
+    assert out["stop_reason"] == "tool_use"
