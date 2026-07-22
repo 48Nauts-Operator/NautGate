@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 34" width="200" height="34" role="img" aria-label="NautGate">
+  <g transform="translate(0,1)">
+    <rect width="32" height="32" rx="7" fill="currentColor"/>
+    <rect x="4.5" y="8.5" width="23" height="6.6" rx="1" fill="#0A0B00"/>
+    <rect x="7.5" y="19.8" width="5" height="5" rx="0.9" fill="#0A0B00"/>
+    <rect x="13.5" y="19.8" width="5" height="5" rx="0.9" fill="#0A0B00"/>
+    <rect x="19.5" y="19.8" width="5" height="5" rx="0.9" fill="#0A0B00"/>
+  </g>
+  <text x="43" y="25" font-family="Inter Tight, Inter, system-ui, sans-serif" font-size="21" font-weight="700" letter-spacing="-0.5" fill="currentColor">NautGate</text>
+</svg>
