@@ -93,17 +93,23 @@ def test_compute_cost_cache_tiers(cache_pricing):
     # cache_write 1000 @ $18.75/M = 0.01875
     # completion 512 @ $75/M = 0.0384
     cost = cache_pricing.compute_cost(
-        "anthropic", "claude-opus-4",
-        prompt_tokens=245, completion_tokens=512,
-        cache_read_tokens=18420, cache_write_tokens=1000,
+        "anthropic",
+        "claude-opus-4",
+        prompt_tokens=245,
+        completion_tokens=512,
+        cache_read_tokens=18420,
+        cache_write_tokens=1000,
     )
     assert cost == pytest.approx(0.003675 + 0.02763 + 0.01875 + 0.0384, rel=1e-6)
 
 
 def test_compute_cost_cache_read_only(cache_pricing):
     cost = cache_pricing.compute_cost(
-        "anthropic", "claude-opus-4",
-        prompt_tokens=None, completion_tokens=None, cache_read_tokens=10000,
+        "anthropic",
+        "claude-opus-4",
+        prompt_tokens=None,
+        completion_tokens=None,
+        cache_read_tokens=10000,
     )
     assert cost == pytest.approx(10000 * 1.5 / 1_000_000, rel=1e-6)
 
@@ -111,9 +117,12 @@ def test_compute_cost_cache_read_only(cache_pricing):
 def test_compute_cost_unpriced_tier_falls_back_to_input(cache_pricing):
     # gpt-4o-mini has no cache_read/cache_write → both fall back to input rate.
     cost = cache_pricing.compute_cost(
-        "openai", "gpt-4o-mini",
-        prompt_tokens=0, completion_tokens=0,
-        cache_read_tokens=1000, cache_write_tokens=1000,
+        "openai",
+        "gpt-4o-mini",
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_tokens=1000,
+        cache_write_tokens=1000,
     )
     assert cost == pytest.approx(2000 * 0.15 / 1_000_000, rel=1e-6)
 
@@ -156,13 +165,18 @@ def test_repo_pricing_loads():
     assert p.size > 0
     assert p.lookup("anthropic", "claude-haiku-4.5") is not None
     # Snapshot IDs that Claude Code actually sends must resolve to a price.
-    for snap in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
-                 "claude-haiku-4-5-20251001"):
+    for snap in (
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+    ):
         assert p.lookup("anthropic", snap) is not None, f"missing pricing for {snap}"
 
 
 def test_resolve_pricing_provider_passthrough_anthropic():
     from app.routes.v1 import _resolve_pricing_provider as resolve
+
     # Pure passthrough → derive from model prefix
     assert resolve("passthrough", None, "claude-opus-4-7") == "anthropic"
     assert resolve("passthrough", None, "gpt-4o-mini") == "openai"

@@ -11,10 +11,25 @@ from app.bloat import (
 def _anatomy(system_b=0, tools_b=0, history_b=0, user_b=0):
     """Minimal payload_anatomy fixture."""
     return {
-        "system": {"bytes": system_b, "tokens": system_b // 4, "count": 1 if system_b else 0, "items": []},
-        "tools":  {"bytes": tools_b,  "tokens": tools_b // 4,  "count": 1 if tools_b else 0,  "items": []},
-        "history": {"bytes": history_b, "tokens": history_b // 4, "count": 1 if history_b else 0, "items": []},
-        "user":   {"bytes": user_b,   "tokens": user_b // 4,   "count": 1 if user_b else 0,   "items": []},
+        "system": {
+            "bytes": system_b,
+            "tokens": system_b // 4,
+            "count": 1 if system_b else 0,
+            "items": [],
+        },
+        "tools": {
+            "bytes": tools_b,
+            "tokens": tools_b // 4,
+            "count": 1 if tools_b else 0,
+            "items": [],
+        },
+        "history": {
+            "bytes": history_b,
+            "tokens": history_b // 4,
+            "count": 1 if history_b else 0,
+            "items": [],
+        },
+        "user": {"bytes": user_b, "tokens": user_b // 4, "count": 1 if user_b else 0, "items": []},
         "totals": {
             "bytes": system_b + tools_b + history_b + user_b,
             "tokens": (system_b + tools_b + history_b + user_b) // 4,
@@ -72,8 +87,10 @@ def test_unused_capabilities_fires_when_few_tools_invoked():
     # 50 tools shipped, only 2 used → 4% usage, well below 20% threshold.
     a = _anatomy(system_b=1000, tools_b=20000, user_b=200)
     findings, _ = compute_bloat(
-        a, classified_tier="balanced",
-        tools_count=50, tool_calls_made_count=2,
+        a,
+        classified_tier="balanced",
+        tools_count=50,
+        tool_calls_made_count=2,
     )
     f = next((f for f in findings if f.finding_type == "unused_capabilities"), None)
     assert f is not None
@@ -83,8 +100,10 @@ def test_unused_capabilities_fires_when_few_tools_invoked():
 def test_unused_capabilities_does_not_fire_when_most_tools_used():
     a = _anatomy(tools_b=10000, user_b=200)
     findings, _ = compute_bloat(
-        a, classified_tier="balanced",
-        tools_count=10, tool_calls_made_count=8,  # 80% usage
+        a,
+        classified_tier="balanced",
+        tools_count=10,
+        tool_calls_made_count=8,  # 80% usage
     )
     assert not any(f.finding_type == "unused_capabilities" for f in findings)
 
@@ -94,8 +113,10 @@ def test_unused_capabilities_does_not_fire_for_few_tools():
     # tools "just in case" without it being abusive.
     a = _anatomy(tools_b=5000, user_b=100)
     findings, _ = compute_bloat(
-        a, classified_tier="balanced",
-        tools_count=4, tool_calls_made_count=0,
+        a,
+        classified_tier="balanced",
+        tools_count=4,
+        tool_calls_made_count=0,
     )
     assert not any(f.finding_type == "unused_capabilities" for f in findings)
 
@@ -124,8 +145,10 @@ def test_oversized_for_tier_does_not_fire_within_envelope():
 def test_waste_usd_computed_from_input_price():
     a = _anatomy(history_b=18000, user_b=500)
     _, waste = compute_bloat(
-        a, classified_tier="balanced",
-        tools_count=0, input_price_per_million=10.0,
+        a,
+        classified_tier="balanced",
+        tools_count=0,
+        input_price_per_million=10.0,
     )
     # Some waste should be attributed; positive non-zero number.
     assert waste > 0
@@ -134,8 +157,10 @@ def test_waste_usd_computed_from_input_price():
 def test_waste_usd_zero_when_no_pricing():
     a = _anatomy(history_b=18000, user_b=500)
     _, waste = compute_bloat(
-        a, classified_tier="balanced",
-        tools_count=0, input_price_per_million=None,
+        a,
+        classified_tier="balanced",
+        tools_count=0,
+        input_price_per_million=None,
     )
     assert waste == 0.0
 
@@ -161,6 +186,7 @@ def test_no_findings_for_zero_byte_payload():
 def test_aggregate_score_penalty_capped_at_0_10():
     # Build many crit findings — sum would exceed 0.10 without cap.
     from app.bloat import BloatFinding
+
     crits = [
         BloatFinding("excessive_context", "crit", PENALTY_BY_SEVERITY["crit"], "x", 0),
         BloatFinding("history_dominance", "crit", PENALTY_BY_SEVERITY["crit"], "x", 0),

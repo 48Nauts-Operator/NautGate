@@ -16,8 +16,9 @@ import structlog
 log = structlog.get_logger()
 
 
-async def run_scheduler(pool: asyncpg.Pool, *, pricing, judge_client,
-                        tick_seconds: int = 60) -> None:
+async def run_scheduler(
+    pool: asyncpg.Pool, *, pricing, judge_client, tick_seconds: int = 60
+) -> None:
     log.info("llm_probe_scheduler_started", tick_seconds=tick_seconds)
     from app.app_config import is_offline, quality_eval_config
     from app.llm_probe import run_probe_cycle
@@ -41,7 +42,8 @@ async def run_scheduler(pool: asyncpg.Pool, *, pricing, judge_client,
             if cfg["next_run_at"] is None:
                 planned = now + timedelta(hours=cfg["interval_hours"])
                 await pool.execute(
-                    "UPDATE nautgate.llm_probe_config SET next_run_at=$1 WHERE id=1", planned)
+                    "UPDATE nautgate.llm_probe_config SET next_run_at=$1 WHERE id=1", planned
+                )
                 await asyncio.sleep(tick_seconds)
                 continue
 
@@ -49,15 +51,20 @@ async def run_scheduler(pool: asyncpg.Pool, *, pricing, judge_client,
                 try:
                     judge_config = await quality_eval_config(pool)
                     await run_probe_cycle(
-                        pool=pool, pricing=pricing, judge_client=judge_client,
-                        judge_config=judge_config, targets=list(cfg["targets"]),
+                        pool=pool,
+                        pricing=pricing,
+                        judge_client=judge_client,
+                        judge_config=judge_config,
+                        targets=list(cfg["targets"]),
                     )
                 except Exception as exc:
                     log.warning("scheduled_probe_failed", error=str(exc))
                 planned = now + timedelta(hours=cfg["interval_hours"])
                 await pool.execute(
                     "UPDATE nautgate.llm_probe_config SET last_run_at=$1, next_run_at=$2 WHERE id=1",
-                    now, planned)
+                    now,
+                    planned,
+                )
         except asyncio.CancelledError:
             log.info("llm_probe_scheduler_cancelled")
             raise

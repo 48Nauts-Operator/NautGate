@@ -148,7 +148,10 @@ def openrouter_claude_id(model: str) -> str:
 
 
 async def call_challenger(
-    client: httpx.AsyncClient, provider: str, model: str, messages: list[dict],
+    client: httpx.AsyncClient,
+    provider: str,
+    model: str,
+    messages: list[dict],
     tools: list[dict] | None = None,
 ) -> dict:
     """One non-streaming completion on the challenger, with a self-healing leg:
@@ -156,9 +159,13 @@ async def call_challenger(
     a Claude model, retry once through OpenRouter — same weights, different
     biller. The result carries via_fallback so the trial is honest about it."""
     res = await _call_challenger_once(client, provider, model, messages, tools=tools)
-    if (res.get("status") in (400, 401, 403) and not res.get("text")
-            and provider in ("passthrough", "anthropic") and "claude" in (model or "").lower()
-            and os.environ.get("OPENROUTER_API_KEY")):
+    if (
+        res.get("status") in (400, 401, 403)
+        and not res.get("text")
+        and provider in ("passthrough", "anthropic")
+        and "claude" in (model or "").lower()
+        and os.environ.get("OPENROUTER_API_KEY")
+    ):
         alt = openrouter_claude_id(model)
         res2 = await _call_challenger_once(client, "openrouter", alt, messages, tools=tools)
         if res2.get("text"):
@@ -175,17 +182,23 @@ def anthropic_tools(tools: list[dict]) -> list[dict]:
         fn = t.get("function") if isinstance(t, dict) and t.get("type") == "function" else t
         if not isinstance(fn, dict) or not fn.get("name"):
             continue
-        out.append({
-            "name": fn["name"],
-            "description": fn.get("description") or "",
-            "input_schema": fn.get("parameters") or fn.get("input_schema")
+        out.append(
+            {
+                "name": fn["name"],
+                "description": fn.get("description") or "",
+                "input_schema": fn.get("parameters")
+                or fn.get("input_schema")
                 or {"type": "object", "properties": {}},
-        })
+            }
+        )
     return out
 
 
 async def _call_challenger_once(
-    client: httpx.AsyncClient, provider: str, model: str, messages: list[dict],
+    client: httpx.AsyncClient,
+    provider: str,
+    model: str,
+    messages: list[dict],
     tools: list[dict] | None = None,
 ) -> dict:
     """One non-streaming completion on the challenger. Returns
@@ -193,8 +206,14 @@ async def _call_challenger_once(
     (text None on error). Tool calls are CAPTURED, never executed."""
     transports = _select_transports(provider, model, prefer_oauth=True)
     if not transports:
-        return {"text": None, "status": None, "latency_ms": None,
-                "prompt_tokens": None, "completion_tokens": None, "error": "no_transport"}
+        return {
+            "text": None,
+            "status": None,
+            "latency_ms": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "error": "no_transport",
+        }
     t = transports[0]
     api_key = os.environ.get(t.api_key_env, "")
     headers = {"Content-Type": "application/json"}
@@ -231,17 +250,35 @@ async def _call_challenger_once(
     try:
         resp = await client.post(url, json=body, headers=headers, timeout=30.0)
     except Exception as exc:
-        return {"text": None, "status": 0, "latency_ms": int((time.monotonic() - started) * 1000),
-                "prompt_tokens": None, "completion_tokens": None, "error": str(exc)}
+        return {
+            "text": None,
+            "status": 0,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "error": str(exc),
+        }
     latency = int((time.monotonic() - started) * 1000)
     if resp.status_code >= 400:
-        return {"text": None, "status": resp.status_code, "latency_ms": latency,
-                "prompt_tokens": None, "completion_tokens": None, "error": resp.text[:300]}
+        return {
+            "text": None,
+            "status": resp.status_code,
+            "latency_ms": latency,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "error": resp.text[:300],
+        }
     try:
         payload = resp.json()
     except ValueError:
-        return {"text": None, "status": resp.status_code, "latency_ms": latency,
-                "prompt_tokens": None, "completion_tokens": None, "error": "bad_json"}
+        return {
+            "text": None,
+            "status": resp.status_code,
+            "latency_ms": latency,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "error": "bad_json",
+        }
     text = None
     tool_calls: list[dict] = []
     usage = payload.get("usage") or {}
@@ -251,18 +288,32 @@ async def _call_challenger_once(
         for tc in msg.get("tool_calls") or []:
             fn = (tc or {}).get("function") or {}
             if fn.get("name"):
-                tool_calls.append({"name": fn["name"], "arguments": (fn.get("arguments") or "")[:400]})
+                tool_calls.append(
+                    {"name": fn["name"], "arguments": (fn.get("arguments") or "")[:400]}
+                )
         pt, ct = usage.get("prompt_tokens"), usage.get("completion_tokens")
     else:  # Anthropic Messages shape
         blocks = payload.get("content") or []
-        text = "\n".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text") or None
+        text = (
+            "\n".join(
+                b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+            )
+            or None
+        )
         for b in blocks:
             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name"):
-                tool_calls.append({"name": b["name"],
-                                   "arguments": json.dumps(b.get("input") or {})[:400]})
+                tool_calls.append(
+                    {"name": b["name"], "arguments": json.dumps(b.get("input") or {})[:400]}
+                )
         pt, ct = usage.get("input_tokens"), usage.get("output_tokens")
-    return {"text": text, "status": resp.status_code, "latency_ms": latency,
-            "prompt_tokens": pt, "completion_tokens": ct, "tool_calls": tool_calls}
+    return {
+        "text": text,
+        "status": resp.status_code,
+        "latency_ms": latency,
+        "prompt_tokens": pt,
+        "completion_tokens": ct,
+        "tool_calls": tool_calls,
+    }
 
 
 # ── Blind paired judge ──────────────────────────────────────────────────────
@@ -275,22 +326,31 @@ Respond with ONLY this JSON, no prose:
 {"winner": "1" | "2" | "tie", "reason": "<one sentence, ≤120 chars>"}"""
 
 
-async def judge_pair(client: httpx.AsyncClient, judge_cfg: dict,
-                     prompt_text: str, answer_1: str, answer_2: str) -> tuple[dict | None, dict]:
+async def judge_pair(
+    client: httpx.AsyncClient, judge_cfg: dict, prompt_text: str, answer_1: str, answer_2: str
+) -> tuple[dict | None, dict]:
     """Blind comparison. Returns (verdict {winner, reason} | None, telemetry)."""
     telemetry: dict[str, Any] = {"prompt_tokens": None, "completion_tokens": None}
     base_url = (judge_cfg.get("judge_base_url") or "https://openrouter.ai/api").rstrip("/")
-    chat_url = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+    chat_url = (
+        f"{base_url}/chat/completions"
+        if base_url.endswith("/v1")
+        else f"{base_url}/v1/chat/completions"
+    )
     headers = {"Content-Type": "application/json"}
     if judge_cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {judge_cfg['api_key']}"
-    user = (f"### User prompt\n{prompt_text[:6000]}\n\n"
-            f"### Answer 1\n{answer_1[:6000]}\n\n"
-            f"### Answer 2\n{answer_2[:6000]}\n\nReturn the JSON now.")
+    user = (
+        f"### User prompt\n{prompt_text[:6000]}\n\n"
+        f"### Answer 1\n{answer_1[:6000]}\n\n"
+        f"### Answer 2\n{answer_2[:6000]}\n\nReturn the JSON now."
+    )
     body = {
         "model": judge_cfg.get("judge_model"),
-        "messages": [{"role": "system", "content": _PAIR_RUBRIC},
-                     {"role": "user", "content": user}],
+        "messages": [
+            {"role": "system", "content": _PAIR_RUBRIC},
+            {"role": "user", "content": user},
+        ],
         "temperature": 0.0,
         "response_format": {"type": "json_object"},
         "max_tokens": 120,
@@ -327,15 +387,23 @@ def shadow_verdict(verdicts: list[str], p0: float = 0.90) -> dict:
     binomial test of H0: true ok-rate < p0, normal approximation with
     continuity correction. Pure."""
     import math
+
     counted = [v for v in verdicts if v in ("champion", "challenger", "tie")]
     n = len(counted)
     wins = sum(1 for v in counted if v == "challenger")
     ties = sum(1 for v in counted if v == "tie")
     losses = n - wins - ties
     ok = wins + ties
-    out = {"n": n, "wins": wins, "ties": ties, "losses": losses,
-           "ok_pct": round(ok / n, 3) if n else None, "p0": p0, "p_value": None,
-           "non_inferior": None}
+    out = {
+        "n": n,
+        "wins": wins,
+        "ties": ties,
+        "losses": losses,
+        "ok_pct": round(ok / n, 3) if n else None,
+        "p0": p0,
+        "p_value": None,
+        "non_inferior": None,
+    }
     if n >= 10:
         z = (ok - n * p0 - 0.5) / math.sqrt(n * p0 * (1 - p0))
         p = 0.5 * math.erfc(z / math.sqrt(2))
@@ -350,7 +418,8 @@ def shadow_verdict(verdicts: list[str], p0: float = 0.90) -> dict:
 async def _daily_spend(pool) -> float:
     row = await pool.fetchval(
         "SELECT COALESCE(SUM(COALESCE(challenger_cost_usd,0) + COALESCE(judge_cost_usd,0)), 0) "
-        "FROM nautgate.shadow_trials WHERE ts > date_trunc('day', NOW())")
+        "FROM nautgate.shadow_trials WHERE ts > date_trunc('day', NOW())"
+    )
     return float(row or 0)
 
 
@@ -365,18 +434,29 @@ async def _insert_trial(pool, **kw) -> None:
              trial_type, diet_strategy, original_bytes, pruned_bytes)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         """,
-        kw["decision_id"], kw["champion_provider"], kw["champion_model"],
-        kw["challenger_provider"], kw["challenger_model"], kw.get("challenger_response"),
-        kw.get("challenger_status"), kw.get("challenger_latency_ms"),
-        kw.get("challenger_cost_usd"), kw.get("champion_cost_usd"),
-        kw.get("verdict"), kw.get("judge_reason"), kw.get("judge_cost_usd"),
-        kw.get("trial_type", "model"), kw.get("diet_strategy"),
-        kw.get("original_bytes"), kw.get("pruned_bytes"),
+        kw["decision_id"],
+        kw["champion_provider"],
+        kw["champion_model"],
+        kw["challenger_provider"],
+        kw["challenger_model"],
+        kw.get("challenger_response"),
+        kw.get("challenger_status"),
+        kw.get("challenger_latency_ms"),
+        kw.get("challenger_cost_usd"),
+        kw.get("champion_cost_usd"),
+        kw.get("verdict"),
+        kw.get("judge_reason"),
+        kw.get("judge_cost_usd"),
+        kw.get("trial_type", "model"),
+        kw.get("diet_strategy"),
+        kw.get("original_bytes"),
+        kw.get("pruned_bytes"),
     )
 
 
-async def process_shadow(pool, *, decision_id, shadow_client: httpx.AsyncClient | None = None,
-                         pricing=None) -> None:
+async def process_shadow(
+    pool, *, decision_id, shadow_client: httpx.AsyncClient | None = None, pricing=None
+) -> None:
     """Post-outcome hook. Fire-and-forget; never raises."""
     if pool is None or shadow_client is None:
         return
@@ -415,6 +495,7 @@ async def process_shadow(pool, *, decision_id, shadow_client: httpx.AsyncClient 
         # remove something. When both are live, flip a coin — one trial per
         # call keeps cost accounting simple.
         from app.diet import payload_bytes, prune_messages
+
         champ_provider = decision.get("decision_provider") or "?"
         champ_model = decision.get("decision_model") or "?"
         options: list[str] = []
@@ -432,9 +513,11 @@ async def process_shadow(pool, *, decision_id, shadow_client: httpx.AsyncClient 
         if trial_type == "prompt_diet":
             ch_provider, ch_model = champ_provider, champ_model
             send_messages = pruned
-            extras.update(diet_strategy=diet_strategy,
-                          original_bytes=payload_bytes(messages),
-                          pruned_bytes=payload_bytes(pruned))
+            extras.update(
+                diet_strategy=diet_strategy,
+                original_bytes=payload_bytes(messages),
+                pruned_bytes=payload_bytes(pruned),
+            )
         else:
             ch_provider = cfg["challenger_provider"]
             ch_model = cfg["challenger_model"]
@@ -444,20 +527,24 @@ async def process_shadow(pool, *, decision_id, shadow_client: httpx.AsyncClient 
         ch_cost = None
         if pricing is not None and res.get("prompt_tokens") is not None:
             ch_cost = pricing.compute_cost(
-                _pricing_provider(ch_provider, ch_model), ch_model,
+                _pricing_provider(ch_provider, ch_model),
+                ch_model,
                 prompt_tokens=res["prompt_tokens"],
-                completion_tokens=res["completion_tokens"])
+                completion_tokens=res["completion_tokens"],
+            )
         champion_cost = outcome.get("notional_cost_usd") or outcome.get("cost_usd")
 
         trial = dict(
             decision_id=decision["decision_id"],
             champion_provider=champ_provider,
             champion_model=champ_model,
-            challenger_provider=ch_provider, challenger_model=ch_model,
+            challenger_provider=ch_provider,
+            challenger_model=ch_model,
             challenger_response=res.get("text"),
             challenger_status=res.get("status"),
             challenger_latency_ms=res.get("latency_ms"),
-            challenger_cost_usd=ch_cost, champion_cost_usd=champion_cost,
+            challenger_cost_usd=ch_cost,
+            champion_cost_usd=champion_cost,
             **extras,
         )
         if not res.get("text"):
@@ -467,6 +554,7 @@ async def process_shadow(pool, *, decision_id, shadow_client: httpx.AsyncClient 
 
         # Blind judge — randomize which answer is "1".
         from app.app_config import quality_eval_config
+
         judge_cfg = await quality_eval_config(pool)
         prompt_text = "\n".join(m["content"] for m in messages if m["role"] == "user")
         champ_first = random.random() < 0.5
@@ -476,19 +564,29 @@ async def process_shadow(pool, *, decision_id, shadow_client: httpx.AsyncClient 
             trial.update(verdict="error", judge_reason="judge_failed")
         else:
             w = verdict["winner"]
-            mapped = "tie" if w == "tie" else (
-                "champion" if (w == "1") == champ_first else "challenger")
+            mapped = (
+                "tie" if w == "tie" else ("champion" if (w == "1") == champ_first else "challenger")
+            )
             judge_cost = None
             if pricing is not None:
                 judge_cost = pricing.compute_cost(
-                    judge_cfg.get("judge_provider"), judge_cfg.get("judge_model"),
+                    judge_cfg.get("judge_provider"),
+                    judge_cfg.get("judge_model"),
                     prompt_tokens=telem.get("prompt_tokens"),
-                    completion_tokens=telem.get("completion_tokens"))
-            trial.update(verdict=mapped, judge_reason=(verdict.get("reason") or "")[:300],
-                         judge_cost_usd=judge_cost)
+                    completion_tokens=telem.get("completion_tokens"),
+                )
+            trial.update(
+                verdict=mapped,
+                judge_reason=(verdict.get("reason") or "")[:300],
+                judge_cost_usd=judge_cost,
+            )
         await _insert_trial(pool, **trial)
-        log.info("shadow_trial_written", decision_id=str(decision_id),
-                 verdict=trial.get("verdict"), challenger=ch_model)
+        log.info(
+            "shadow_trial_written",
+            decision_id=str(decision_id),
+            verdict=trial.get("verdict"),
+            challenger=ch_model,
+        )
     except Exception as exc:
         log.warning("shadow_trial_failed", error=str(exc), decision_id=str(decision_id))
 
@@ -513,8 +611,9 @@ def replace_last_user(messages: list[dict], new_text: str) -> list[dict] | None:
     return out
 
 
-async def simulate_improvement(pool, *, decision_id, client: httpx.AsyncClient,
-                               pricing=None) -> dict:
+async def simulate_improvement(
+    pool, *, decision_id, client: httpx.AsyncClient, pricing=None
+) -> dict:
     """On-demand: re-run this call with the judge's suggested_prompt in place
     of the user's last message, blind-judge both answers, persist as a
     'prompt_improve' shadow trial. Returns the trial result (or {'error': …}).
@@ -522,8 +621,8 @@ async def simulate_improvement(pool, *, decision_id, client: httpx.AsyncClient,
     if client is None:
         return {"error": "judge_client_unavailable"}
     eval_row = await pool.fetchrow(
-        "SELECT suggested_prompt FROM nautgate.quality_evals WHERE decision_id = $1",
-        decision_id)
+        "SELECT suggested_prompt FROM nautgate.quality_evals WHERE decision_id = $1", decision_id
+    )
     suggested = (eval_row["suggested_prompt"] if eval_row else None) or ""
     if not suggested.strip():
         return {"error": "no_suggested_prompt"}
@@ -546,13 +645,19 @@ async def simulate_improvement(pool, *, decision_id, client: httpx.AsyncClient,
     ch_cost = None
     if pricing is not None and res.get("prompt_tokens") is not None:
         ch_cost = pricing.compute_cost(
-            _pricing_provider(champ_provider, champ_model), champ_model,
-            prompt_tokens=res["prompt_tokens"], completion_tokens=res["completion_tokens"])
+            _pricing_provider(champ_provider, champ_model),
+            champ_model,
+            prompt_tokens=res["prompt_tokens"],
+            completion_tokens=res["completion_tokens"],
+        )
     trial = dict(
         decision_id=decision["decision_id"],
-        champion_provider=champ_provider, champion_model=champ_model,
-        challenger_provider=champ_provider, challenger_model=champ_model,
-        challenger_response=res.get("text"), challenger_status=res.get("status"),
+        champion_provider=champ_provider,
+        champion_model=champ_model,
+        challenger_provider=champ_provider,
+        challenger_model=champ_model,
+        challenger_response=res.get("text"),
+        challenger_status=res.get("status"),
         challenger_latency_ms=res.get("latency_ms"),
         challenger_cost_usd=ch_cost,
         champion_cost_usd=outcome.get("notional_cost_usd") or outcome.get("cost_usd"),
@@ -561,10 +666,14 @@ async def simulate_improvement(pool, *, decision_id, client: httpx.AsyncClient,
     if not res.get("text"):
         trial.update(verdict="error", judge_reason=(res.get("error") or "empty_response")[:200])
         await _insert_trial(pool, **trial)
-        return {"verdict": "error", "detail": res.get("error"),
-                "challenger_status": res.get("status")}
+        return {
+            "verdict": "error",
+            "detail": res.get("error"),
+            "challenger_status": res.get("status"),
+        }
 
     from app.app_config import quality_eval_config
+
     judge_cfg = await quality_eval_config(pool)
     prompt_text = "\n".join(m["content"] for m in messages if m["role"] == "user")
     champ_first = random.random() < 0.5
@@ -574,16 +683,22 @@ async def simulate_improvement(pool, *, decision_id, client: httpx.AsyncClient,
         trial.update(verdict="error", judge_reason="judge_failed")
     else:
         w = verdict["winner"]
-        mapped = "tie" if w == "tie" else (
-            "champion" if (w == "1") == champ_first else "challenger")
+        mapped = (
+            "tie" if w == "tie" else ("champion" if (w == "1") == champ_first else "challenger")
+        )
         judge_cost = None
         if pricing is not None:
             judge_cost = pricing.compute_cost(
-                judge_cfg.get("judge_provider"), judge_cfg.get("judge_model"),
+                judge_cfg.get("judge_provider"),
+                judge_cfg.get("judge_model"),
                 prompt_tokens=telem.get("prompt_tokens"),
-                completion_tokens=telem.get("completion_tokens"))
-        trial.update(verdict=mapped, judge_reason=(verdict.get("reason") or "")[:300],
-                     judge_cost_usd=judge_cost)
+                completion_tokens=telem.get("completion_tokens"),
+            )
+        trial.update(
+            verdict=mapped,
+            judge_reason=(verdict.get("reason") or "")[:300],
+            judge_cost_usd=judge_cost,
+        )
     await _insert_trial(pool, **trial)
     return {
         "verdict": trial.get("verdict"),
@@ -591,7 +706,9 @@ async def simulate_improvement(pool, *, decision_id, client: httpx.AsyncClient,
         "improved_prompt": suggested,
         "original_response": champion_text[:4000],
         "improved_response": (res.get("text") or "")[:4000],
-        "original_cost_usd": float(trial["champion_cost_usd"]) if trial.get("champion_cost_usd") is not None else None,
+        "original_cost_usd": float(trial["champion_cost_usd"])
+        if trial.get("champion_cost_usd") is not None
+        else None,
         "improved_cost_usd": float(ch_cost) if ch_cost is not None else None,
         "improved_latency_ms": res.get("latency_ms"),
     }
@@ -615,7 +732,9 @@ async def summary(pool, days: int = 30) -> dict:
           FROM nautgate.shadow_trials
          WHERE ts > NOW() - make_interval(days => $1)
          GROUP BY 1, 2, 3, 4
-        """, days)
+        """,
+        days,
+    )
     experiments = []
     for r in rows:
         v = shadow_verdict([x for x in (r["verdicts"] or []) if x])
@@ -626,30 +745,45 @@ async def summary(pool, days: int = 30) -> dict:
               JOIN nautgate.route_outcomes o ON o.decision_id = d.id
              WHERE d.decision_model = $1 AND d.ts > NOW() - interval '30 days'
                AND o.status_code BETWEEN 200 AND 299
-            """, r["champion_model"])
+            """,
+            r["champion_model"],
+        )
         saving = None
         if r["champ_avg_cost"] is not None and r["chall_avg_cost"] is not None:
             saving = round((r["champ_avg_cost"] - r["chall_avg_cost"]) * int(volume or 0), 2)
-        experiments.append({
-            "champion": r["champion_model"], "challenger": r["challenger_model"],
-            "trial_type": r["trial_type"], "diet_strategy": r["diet_strategy"],
-            "avg_reduction": round(r["avg_reduction"], 3) if r["avg_reduction"] is not None else None,
-            **v, "errors": int(r["errors"]),
-            "champ_avg_cost": r["champ_avg_cost"], "chall_avg_cost": r["chall_avg_cost"],
-            "chall_avg_latency_ms": r["chall_avg_latency"],
-            "monthly_volume": int(volume or 0), "projected_monthly_saving_usd": saving,
-            "last_trial": r["last_trial"].isoformat() if r["last_trial"] else None,
-        })
+        experiments.append(
+            {
+                "champion": r["champion_model"],
+                "challenger": r["challenger_model"],
+                "trial_type": r["trial_type"],
+                "diet_strategy": r["diet_strategy"],
+                "avg_reduction": round(r["avg_reduction"], 3)
+                if r["avg_reduction"] is not None
+                else None,
+                **v,
+                "errors": int(r["errors"]),
+                "champ_avg_cost": r["champ_avg_cost"],
+                "chall_avg_cost": r["chall_avg_cost"],
+                "chall_avg_latency_ms": r["chall_avg_latency"],
+                "monthly_volume": int(volume or 0),
+                "projected_monthly_saving_usd": saving,
+                "last_trial": r["last_trial"].isoformat() if r["last_trial"] else None,
+            }
+        )
     experiments.sort(key=lambda e: -(e["n"] or 0))
-    trials = [dict(r) for r in await pool.fetch(
-        """
+    trials = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT t.id::text, t.ts, t.champion_model, t.challenger_model, t.verdict,
                t.judge_reason, t.challenger_latency_ms, t.trial_type, t.diet_strategy,
                d.prompt_excerpt
           FROM nautgate.shadow_trials t
           JOIN nautgate.route_decisions d ON d.id = t.decision_id
          ORDER BY t.ts DESC LIMIT 20
-        """)]
+        """
+        )
+    ]
     for t in trials:
         t["ts"] = t["ts"].isoformat()
     return {"days": days, "experiments": experiments, "recent_trials": trials}
@@ -668,15 +802,20 @@ async def trial_detail(pool, trial_id: str) -> dict | None:
           JOIN nautgate.route_decisions d ON d.id = t.decision_id
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE t.id::text = $1
-        """, trial_id)
+        """,
+        trial_id,
+    )
     if row is None:
         return None
     d = dict(row)
     d["ts"] = d["ts"].isoformat()
     d["champion_response"] = _readable_response(d.pop("response_body") or "")
     msgs = flatten_messages(d.pop("prompt_body"))
-    d["prompt_text"] = ("\n".join(m["content"] for m in msgs if m["role"] == "user")
-                        if msgs else (d.get("prompt_excerpt") or ""))
+    d["prompt_text"] = (
+        "\n".join(m["content"] for m in msgs if m["role"] == "user")
+        if msgs
+        else (d.get("prompt_excerpt") or "")
+    )
     for k in ("champion_cost_usd", "challenger_cost_usd"):
         if d.get(k) is not None:
             d[k] = float(d[k])

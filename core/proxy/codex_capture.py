@@ -38,9 +38,7 @@ from app.outcome import persist_outcome
 from app.scoring import score
 from app.usage import cache_prefix_hash, normalize_usage
 
-_DB_URL = os.environ.get(
-    "NAUTGATE_DB_URL", "postgres://nautgate:nautgate@127.0.0.1:5432/nautgate"
-)
+_DB_URL = os.environ.get("NAUTGATE_DB_URL", "postgres://nautgate:nautgate@127.0.0.1:5432/nautgate")
 # Only these are ours to record. Everything else passes through untouched.
 _CODEX_HOST = "chatgpt.com"
 _CODEX_PATH_PREFIX = "/backend-api/codex/responses"
@@ -59,9 +57,8 @@ _DEBUG_DUMP = os.environ.get("CODEX_CAPTURE_DEBUG") == "1"
 
 
 def _is_codex_responses(flow: http.HTTPFlow) -> bool:
-    return (
-        flow.request.pretty_host == _CODEX_HOST
-        and flow.request.path.startswith(_CODEX_PATH_PREFIX)
+    return flow.request.pretty_host == _CODEX_HOST and flow.request.path.startswith(
+        _CODEX_PATH_PREFIX
     )
 
 
@@ -100,8 +97,14 @@ def _pair_turns(messages) -> list[tuple[dict, dict, float | None, float | None]]
             start_ts = getattr(m, "timestamp", None)
         elif (not m.from_client) and t == "response.completed" and pending is not None:
             resp = ev.get("response")
-            turns.append((pending, resp if isinstance(resp, dict) else {},
-                          start_ts, getattr(m, "timestamp", None)))
+            turns.append(
+                (
+                    pending,
+                    resp if isinstance(resp, dict) else {},
+                    start_ts,
+                    getattr(m, "timestamp", None),
+                )
+            )
             pending = None
     return turns
 
@@ -115,8 +118,10 @@ async def websocket_end(flow: http.HTTPFlow) -> None:
         with open("/tmp/codex_ws_dump.txt", "w") as f:
             for i, m in enumerate(flow.websocket.messages):
                 who = "CLIENT" if m.from_client else "SERVER"
-                f.write(f"--- [{i}] {who} ({len(m.content)}b)\n"
-                        f"{m.content.decode('utf-8', errors='replace')[:4000]}\n\n")
+                f.write(
+                    f"--- [{i}] {who} ({len(m.content)}b)\n"
+                    f"{m.content.decode('utf-8', errors='replace')[:4000]}\n\n"
+                )
 
     # Friendly fixed label for the dashboard session list. ponytail: single
     # GPT-MAX account → one name; switch to a map if multiple accounts appear.
@@ -137,8 +142,7 @@ async def websocket_end(flow: http.HTTPFlow) -> None:
             print(f"[codex_capture] record failed: {exc}", flush=True)
 
 
-async def _record_turn(pool, agent_id, src_ip, req: dict, resp: dict,
-                       start_ts, end_ts) -> None:
+async def _record_turn(pool, agent_id, src_ip, req: dict, resp: dict, start_ts, end_ts) -> None:
     decision_id = uuid.uuid4()
     model = req.get("model")
     # Responses-API request carries `input` (items) + `instructions` (system) +
@@ -179,7 +183,8 @@ async def _record_turn(pool, agent_id, src_ip, req: dict, resp: dict,
     response_captured = capture_response(resp_json, "none")
     duration_ms = int((end_ts - start_ts) * 1000) if start_ts and end_ts else 0
     await persist_outcome(
-        pool, None,
+        pool,
+        None,
         decision_id=decision_id,
         status_code=200,
         duration_ms=duration_ms,
