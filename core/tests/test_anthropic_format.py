@@ -363,21 +363,29 @@ async def test_messages_streaming_emits_anthropic_sse(messages_app):
 # --- NAUTGATE-2: tool_use / tool_result history preservation ----------------
 
 
-
 def test_request_preserves_tool_use_and_tool_result_history():
     payload = {
         "model": "deepseek",
         "messages": [
             {"role": "user", "content": "read config.py"},
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "I'll read it."},
-                {"type": "tool_use", "id": "toolu_1", "name": "read_file",
-                 "input": {"path": "config.py"}},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "toolu_1",
-                 "content": "PORT = 8090"},
-            ]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll read it."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "read_file",
+                        "input": {"path": "config.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "PORT = 8090"},
+                ],
+            },
             {"role": "user", "content": "now what port?"},
         ],
     }
@@ -397,12 +405,23 @@ def test_request_preserves_tool_use_and_tool_result_history():
 
 def test_response_maps_tool_calls_to_tool_use():
     openai_resp = {
-        "id": "cmpl_x", "model": "deepseek",
-        "choices": [{"finish_reason": "tool_calls", "message": {
-            "content": None,
-            "tool_calls": [{"id": "call_9", "type": "function",
-                            "function": {"name": "search", "arguments": '{"q":"port"}'}}],
-        }}],
+        "id": "cmpl_x",
+        "model": "deepseek",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_9",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": '{"q":"port"}'},
+                        }
+                    ],
+                },
+            }
+        ],
         "usage": {"prompt_tokens": 5, "completion_tokens": 3},
     }
     out = response_to_anthropic(openai_resp)

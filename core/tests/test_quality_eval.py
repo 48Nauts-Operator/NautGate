@@ -51,14 +51,18 @@ def _config(**overrides) -> dict:
 
 def test_should_evaluate_disabled_short_circuits():
     decision, outcome = _make_pair()
-    assert quality_eval.should_evaluate(decision, outcome, _config(enabled=False)) \
-        == (False, "disabled")
+    assert quality_eval.should_evaluate(decision, outcome, _config(enabled=False)) == (
+        False,
+        "disabled",
+    )
 
 
 def test_should_evaluate_sensitive_blocks():
     decision, outcome = _make_pair(decision={"classified_sensitivity": "secret"})
-    assert quality_eval.should_evaluate(decision, outcome, _config(sample_rate=1.0)) \
-        == (False, "sensitive")
+    assert quality_eval.should_evaluate(decision, outcome, _config(sample_rate=1.0)) == (
+        False,
+        "sensitive",
+    )
 
 
 def test_should_evaluate_was_empty_anomaly():
@@ -126,8 +130,8 @@ def test_should_evaluate_sampling_uses_random(monkeypatch):
 
 
 def test_strip_fences_handles_fenced_json():
-    assert quality_eval._strip_fences("```json\n{\"a\":1}\n```") == '{"a":1}'
-    assert quality_eval._strip_fences("```\n{\"a\":1}\n```") == '{"a":1}'
+    assert quality_eval._strip_fences('```json\n{"a":1}\n```') == '{"a":1}'
+    assert quality_eval._strip_fences('```\n{"a":1}\n```') == '{"a":1}'
     assert quality_eval._strip_fences('{"a":1}') == '{"a":1}'
 
 
@@ -146,14 +150,18 @@ def test_make_user_message_includes_meta_and_bodies():
 @pytest.mark.asyncio
 async def test_call_judge_happy_path():
     decision, outcome = _make_pair()
-    cfg = _config(judge_provider="openai", judge_model="gpt-4o-mini",
-                  judge_base_url="https://api.openai.com")
+    cfg = _config(
+        judge_provider="openai", judge_model="gpt-4o-mini", judge_base_url="https://api.openai.com"
+    )
     cfg["api_key"] = "sk-test"
 
     rubric_json = {
-        "task_understanding": 4, "task_completion": 4,
-        "reasoning_efficiency": 3, "prompt_clarity": 3,
-        "failure_tags": [], "suggested_prompt": "",
+        "task_understanding": 4,
+        "task_completion": 4,
+        "reasoning_efficiency": 3,
+        "prompt_clarity": 3,
+        "failure_tags": [],
+        "suggested_prompt": "",
         "coach_notes": "Looks fine.",
     }
     judge_response = MagicMock()
@@ -195,6 +203,7 @@ async def test_call_judge_http_error_returns_none():
 @pytest.mark.asyncio
 async def test_call_judge_timeout_returns_none():
     import httpx
+
     decision, outcome = _make_pair()
     cfg = _config(judge_provider="openai", judge_model="gpt-4o-mini")
     cfg["api_key"] = "sk-test"
@@ -236,37 +245,46 @@ async def test_process_quality_returns_silently_with_no_judge_client():
 async def test_process_quality_skips_when_disabled(monkeypatch):
     fake_pool = MagicMock()
     fake_client = MagicMock()
-    async def _cfg(_pool): return {"enabled": False}
+
+    async def _cfg(_pool):
+        return {"enabled": False}
+
     monkeypatch.setattr(quality_eval, "_get_config", _cfg)
     # If it tried to call the judge, this would explode.
-    await quality_eval.process_quality(fake_pool, decision_id="abc",
-                                        judge_client=fake_client)
+    await quality_eval.process_quality(fake_pool, decision_id="abc", judge_client=fake_client)
 
 
 def test_should_evaluate_skips_machine_probe():
     # The real-world shape: Claude Code's model-switch quota probe that 404s.
     # Without the filter, status_404 would anomaly-trigger a judge eval.
     decision, outcome = _make_pair(
-        decision={"prompt_body": '[{"role":"user","content":"quota"}]',
-                  "prompt_excerpt": "quota"},
+        decision={"prompt_body": '[{"role":"user","content":"quota"}]', "prompt_excerpt": "quota"},
         outcome={"status_code": 404},
     )
-    assert quality_eval.should_evaluate(decision, outcome, _config(sample_rate=1.0)) \
-        == (False, "machine_probe")
+    assert quality_eval.should_evaluate(decision, outcome, _config(sample_rate=1.0)) == (
+        False,
+        "machine_probe",
+    )
 
 
 def test_is_machine_probe_shapes():
     # Anthropic content-blocks form
     assert quality_eval.is_machine_probe(
-        {"prompt_body": '[{"role":"user","content":[{"type":"text","text":"quota"}]}]'})
+        {"prompt_body": '[{"role":"user","content":[{"type":"text","text":"quota"}]}]'}
+    )
     # dict-wrapped messages form
     assert quality_eval.is_machine_probe(
-        {"prompt_body": '{"messages":[{"role":"user","content":"PING"}]}'})
+        {"prompt_body": '{"messages":[{"role":"user","content":"PING"}]}'}
+    )
     # excerpt-only fallback (body suppressed by capture policy)
     assert quality_eval.is_machine_probe({"prompt_body": None, "prompt_excerpt": "quota"})
     # real prompts that merely mention quota are NOT probes
     assert not quality_eval.is_machine_probe(
-        {"prompt_body": '[{"role":"user","content":"what is my API quota this month?"}]'})
+        {"prompt_body": '[{"role":"user","content":"what is my API quota this month?"}]'}
+    )
     # multi-message conversations are never probes
     assert not quality_eval.is_machine_probe(
-        {"prompt_body": '[{"role":"user","content":"quota"},{"role":"assistant","content":"?"},{"role":"user","content":"quota"}]'})
+        {
+            "prompt_body": '[{"role":"user","content":"quota"},{"role":"assistant","content":"?"},{"role":"user","content":"quota"}]'
+        }
+    )

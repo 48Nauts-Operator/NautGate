@@ -27,11 +27,21 @@ def test_first_sample_initializes_baseline():
 def test_z_score_none_until_warmup():
     state = {"mean": 0.0, "var": 0.0, "n": 0}
     for i in range(MIN_SAMPLES_FOR_ANOMALY - 1):
-        u = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=10.0)
+        u = update_ewma(
+            prev_mean=state["mean"],
+            prev_variance=state["var"],
+            prev_sample_count=state["n"],
+            observation=10.0,
+        )
         state.update(mean=u.new_mean, var=u.new_variance, n=u.new_sample_count)
         assert u.z_score is None, f"z_score should be None on sample {i}"
     # Final sample completes warmup but variance is still 0 (constant input) → still None.
-    u = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=10.0)
+    u = update_ewma(
+        prev_mean=state["mean"],
+        prev_variance=state["var"],
+        prev_sample_count=state["n"],
+        observation=10.0,
+    )
     assert u.z_score is None
 
 
@@ -41,9 +51,19 @@ def test_anomaly_fires_on_outlier_after_warmup():
     for i in range(20):
         # Vary slightly to give variance > 0.
         v = 100.0 + (i % 3 - 1) * 5.0
-        u = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=v)
+        u = update_ewma(
+            prev_mean=state["mean"],
+            prev_variance=state["var"],
+            prev_sample_count=state["n"],
+            observation=v,
+        )
         state.update(mean=u.new_mean, var=u.new_variance, n=u.new_sample_count)
-    outlier = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=500.0)
+    outlier = update_ewma(
+        prev_mean=state["mean"],
+        prev_variance=state["var"],
+        prev_sample_count=state["n"],
+        observation=500.0,
+    )
     assert outlier.is_anomaly
     assert outlier.z_score is not None and outlier.z_score > DEFAULT_Z_THRESHOLD
 
@@ -51,9 +71,19 @@ def test_anomaly_fires_on_outlier_after_warmup():
 def test_normal_sample_after_warmup_is_not_anomaly():
     state = {"mean": 0.0, "var": 0.0, "n": 0}
     for _ in range(20):
-        u = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=100.0 + (_ % 3 - 1) * 2.0)
+        u = update_ewma(
+            prev_mean=state["mean"],
+            prev_variance=state["var"],
+            prev_sample_count=state["n"],
+            observation=100.0 + (_ % 3 - 1) * 2.0,
+        )
         state.update(mean=u.new_mean, var=u.new_variance, n=u.new_sample_count)
-    next_normal = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=101.0)
+    next_normal = update_ewma(
+        prev_mean=state["mean"],
+        prev_variance=state["var"],
+        prev_sample_count=state["n"],
+        observation=101.0,
+    )
     assert not next_normal.is_anomaly
 
 
@@ -128,27 +158,36 @@ def test_session_id_returns_none_when_unidentifiable():
 
 def test_extract_metrics_omits_missing_inputs():
     m = extract_metrics(
-        prompt_tokens=None, request_size_bytes=None,
-        response_size_bytes=1234, first_byte_ms=None,
-        duration_ms=None, messages_count_delta=None,
+        prompt_tokens=None,
+        request_size_bytes=None,
+        response_size_bytes=1234,
+        first_byte_ms=None,
+        duration_ms=None,
+        messages_count_delta=None,
     )
     assert m == {"response_size_bytes": 1234.0}
 
 
 def test_extract_metrics_computes_tokens_per_byte():
     m = extract_metrics(
-        prompt_tokens=400, request_size_bytes=1600,
-        response_size_bytes=None, first_byte_ms=None,
-        duration_ms=None, messages_count_delta=None,
+        prompt_tokens=400,
+        request_size_bytes=1600,
+        response_size_bytes=None,
+        first_byte_ms=None,
+        duration_ms=None,
+        messages_count_delta=None,
     )
     assert m["input_tokens_per_byte"] == 0.25
 
 
 def test_extract_metrics_handles_zero_request_size():
     m = extract_metrics(
-        prompt_tokens=400, request_size_bytes=0,
-        response_size_bytes=None, first_byte_ms=None,
-        duration_ms=None, messages_count_delta=None,
+        prompt_tokens=400,
+        request_size_bytes=0,
+        response_size_bytes=None,
+        first_byte_ms=None,
+        duration_ms=None,
+        messages_count_delta=None,
     )
     assert "input_tokens_per_byte" not in m
 
@@ -183,14 +222,26 @@ def test_consecutive_anomalies_can_accumulate():
     # Warm up around 100, slight noise.
     for i in range(20):
         v = 100.0 + (i % 3 - 1) * 5.0
-        u = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=v)
+        u = update_ewma(
+            prev_mean=state["mean"],
+            prev_variance=state["var"],
+            prev_sample_count=state["n"],
+            observation=v,
+        )
         state.update(mean=u.new_mean, var=u.new_variance, n=u.new_sample_count)
     # Now sustained shift to ~600 (z ≈ 50 vs original baseline).
     consecutive = 0
     for _ in range(5):
-        u = update_ewma(prev_mean=state["mean"], prev_variance=state["var"], prev_sample_count=state["n"], observation=600.0)
+        u = update_ewma(
+            prev_mean=state["mean"],
+            prev_variance=state["var"],
+            prev_sample_count=state["n"],
+            observation=600.0,
+        )
         state.update(mean=u.new_mean, var=u.new_variance, n=u.new_sample_count)
         consecutive = consecutive + 1 if u.is_anomaly else 0
         if consecutive >= ANOMALY_CLUSTER_THRESHOLD:
             return
-    raise AssertionError(f"Cluster threshold {ANOMALY_CLUSTER_THRESHOLD} never reached during sustained shift")
+    raise AssertionError(
+        f"Cluster threshold {ANOMALY_CLUSTER_THRESHOLD} never reached during sustained shift"
+    )

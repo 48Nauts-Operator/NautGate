@@ -93,7 +93,9 @@ async def apply_findings(
              WHERE provider = $1 AND model = $2 AND tier = $3
              FOR UPDATE
             """,
-            provider, model, tier,
+            provider,
+            model,
+            tier,
         )
 
         if row is None:
@@ -107,10 +109,17 @@ async def apply_findings(
                     (provider, model, tier, score, sample_size, total_waste_usd, last_updated)
                 VALUES ($1, $2, $3, $4, $5, $6, now())
                 """,
-                provider, model, tier, new_score, new_sample, new_waste,
+                provider,
+                model,
+                tier,
+                new_score,
+                new_sample,
+                new_waste,
             )
         else:
-            elapsed = (await conn.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", row["last_updated"])) or 0.0
+            elapsed = (
+                await conn.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", row["last_updated"])
+            ) or 0.0
             decayed = _decay_toward_neutral(float(row["score"]), float(elapsed))
             new_score = _clamp(decayed + delta)
             new_sample = row["sample_size"] + 1
@@ -124,7 +133,12 @@ async def apply_findings(
                        last_updated = now()
                  WHERE provider = $1 AND model = $2 AND tier = $3
                 """,
-                provider, model, tier, new_score, new_sample, new_waste,
+                provider,
+                model,
+                tier,
+                new_score,
+                new_sample,
+                new_waste,
             )
 
         # 2) Write one incident row per finding (audit trail).
@@ -136,19 +150,30 @@ async def apply_findings(
                      severity, score_penalty, estimated_waste_usd)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                provider, model, tier, decision_id,
-                f.finding_type, f.severity, f.score_penalty,
+                provider,
+                model,
+                tier,
+                decision_id,
+                f.finding_type,
+                f.severity,
+                f.score_penalty,
                 # Per-finding cost share, proportional to its byte attribution.
                 _per_finding_waste_usd(f, findings, estimated_waste_usd),
             )
 
     return ScorecardEntry(
-        provider=provider, model=model, tier=tier,
-        score=new_score, sample_size=new_sample, total_waste_usd=new_waste,
+        provider=provider,
+        model=model,
+        tier=tier,
+        score=new_score,
+        sample_size=new_sample,
+        total_waste_usd=new_waste,
     )
 
 
-def _per_finding_waste_usd(f: BloatFinding, all_findings: list[BloatFinding], total_usd: float) -> float:
+def _per_finding_waste_usd(
+    f: BloatFinding, all_findings: list[BloatFinding], total_usd: float
+) -> float:
     """Split the request's wasted USD across findings by waste_bytes share."""
     total_b = sum(x.estimated_waste_bytes for x in all_findings) or 1
     return total_usd * (f.estimated_waste_bytes / total_b)
@@ -172,11 +197,15 @@ async def get_score(
           FROM nautgate.model_scorecard
          WHERE provider = $1 AND model = $2 AND tier = $3
         """,
-        provider, model, tier,
+        provider,
+        model,
+        tier,
     )
     if row is None:
         return NEUTRAL_SCORE
-    elapsed = (await pool.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", row["last_updated"])) or 0.0
+    elapsed = (
+        await pool.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", row["last_updated"])
+    ) or 0.0
     return _decay_toward_neutral(float(row["score"]), float(elapsed))
 
 
@@ -240,6 +269,7 @@ async def process_brain(
 
     # Build payload_anatomy fresh (queries._payload_anatomy is the source of truth).
     from app.audit_meta import _content_text, _estimate_tokens
+
     anatomy = queries._payload_anatomy(
         row["prompt_body"], row["tools_body"], _content_text, _estimate_tokens
     )
@@ -258,6 +288,7 @@ async def process_brain(
     if isinstance(tool_calls_made, str):
         try:
             import json
+
             tool_calls_made = json.loads(tool_calls_made)
         except (ValueError, TypeError):
             tool_calls_made = None
@@ -277,6 +308,7 @@ async def process_brain(
 
     # Persist bloat data on the decision row (UPDATE — fire-and-forget).
     import json
+
     findings_json = json.dumps([f.to_dict() for f in findings]) if findings else None
     bloat_score = aggregate_score_penalty(findings)  # 0 .. 0.10 cap
     await pool.execute(
@@ -321,7 +353,9 @@ async def get_scorecard_with_incidents(
     )
     out: list[dict] = []
     for r in rows:
-        elapsed = (await pool.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", r["last_updated"])) or 0.0
+        elapsed = (
+            await pool.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", r["last_updated"])
+        ) or 0.0
         live_score = _decay_toward_neutral(float(r["score"]), float(elapsed))
         incidents = await pool.fetch(
             """
@@ -332,29 +366,34 @@ async def get_scorecard_with_incidents(
              ORDER BY ts DESC
              LIMIT $4
             """,
-            r["provider"], r["model"], r["tier"], incidents_per_row,
+            r["provider"],
+            r["model"],
+            r["tier"],
+            incidents_per_row,
         )
-        out.append({
-            "provider": r["provider"],
-            "model": r["model"],
-            "tier": r["tier"],
-            "score_stored": float(r["score"]),
-            "score": live_score,                # decay-applied "as of now"
-            "sample_size": r["sample_size"],
-            "total_waste_usd": float(r["total_waste_usd"]),
-            "last_updated": r["last_updated"].isoformat() if r["last_updated"] else None,
-            "is_demoted": live_score < DEMOTION_THRESHOLD_DEFAULT,
-            "recent_incidents": [
-                {
-                    "id": inc["id"],
-                    "decision_id": inc["decision_id"],
-                    "finding_type": inc["finding_type"],
-                    "severity": inc["severity"],
-                    "score_penalty": float(inc["score_penalty"]),
-                    "estimated_waste_usd": float(inc["estimated_waste_usd"] or 0),
-                    "ts": inc["ts"].isoformat() if inc["ts"] else None,
-                }
-                for inc in incidents
-            ],
-        })
+        out.append(
+            {
+                "provider": r["provider"],
+                "model": r["model"],
+                "tier": r["tier"],
+                "score_stored": float(r["score"]),
+                "score": live_score,  # decay-applied "as of now"
+                "sample_size": r["sample_size"],
+                "total_waste_usd": float(r["total_waste_usd"]),
+                "last_updated": r["last_updated"].isoformat() if r["last_updated"] else None,
+                "is_demoted": live_score < DEMOTION_THRESHOLD_DEFAULT,
+                "recent_incidents": [
+                    {
+                        "id": inc["id"],
+                        "decision_id": inc["decision_id"],
+                        "finding_type": inc["finding_type"],
+                        "severity": inc["severity"],
+                        "score_penalty": float(inc["score_penalty"]),
+                        "estimated_waste_usd": float(inc["estimated_waste_usd"] or 0),
+                        "ts": inc["ts"].isoformat() if inc["ts"] else None,
+                    }
+                    for inc in incidents
+                ],
+            }
+        )
     return out
