@@ -23,6 +23,14 @@ COPY core/app/ ./app/
 FROM python:3.12-slim
 WORKDIR /app
 
+# pg_dump/psql so backups run inside the container via a direct DSN connection
+# to the db service — no docker-exec, which can't work from inside a container
+# (NAUTGATE-7). Debian trixie's own postgresql-client is v17, which dumps a PG16
+# server fine (pg_dump must be >= the server major, and 17 >= 16).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/app /app/app
 
