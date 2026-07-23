@@ -25,7 +25,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const LMSTUDIO_URL = process.env.LMSTUDIO_URL ?? "http://192.168.74.243:1238";
+const LMSTUDIO_URL = process.env.LMSTUDIO_URL ?? "http://localhost:1238";
 const MEMORY_API = process.env.MEMORY_API ?? "http://100.71.163.122:8085/memories";
 const DEFAULT_PROFILE = (process.env.NAUT_PROFILE ?? "auto") as Profile;
 
