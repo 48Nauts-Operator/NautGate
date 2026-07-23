@@ -75,6 +75,10 @@ services:
       NAUTGATE_LOG_LEVEL: ${NAUTGATE_LOG_LEVEL:-INFO}
       NAUTGATE_PROFILE: ${NAUTGATE_PROFILE:-auto}
       NAUTROUTER_BASE_URL: http://nautrouter:8404
+      # Encrypts in-app provider keys at rest (Settings -> Providers).
+      # Set to a random secret and BACK IT UP — losing it means re-entering
+      # those keys. Leave empty to keep provider keys in the env only.
+      NAUTGATE_MASTER_KEY: ${NAUTGATE_MASTER_KEY:-}
       # Provider keys also reach core — quality-eval, shadow and the drift
       # investigator call models from here, not through the router.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
