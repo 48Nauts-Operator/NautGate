@@ -2393,12 +2393,18 @@ async def list_providers_endpoint(request: Request) -> Response:
     out = []
     for provider, env_name in _PROVIDER_ENV.items():
         if provider in stored:
-            out.append({"provider": provider, "source": "db",
-                        "last4": stored[provider]["last4"],
-                        "updated_at": stored[provider]["updated_at"]})
+            out.append(
+                {
+                    "provider": provider,
+                    "source": "db",
+                    "last4": stored[provider]["last4"],
+                    "updated_at": stored[provider]["updated_at"],
+                }
+            )
         elif os.environ.get(env_name, "").strip():
-            out.append({"provider": provider, "source": "env",
-                        "last4": os.environ[env_name].strip()[-4:]})
+            out.append(
+                {"provider": provider, "source": "env", "last4": os.environ[env_name].strip()[-4:]}
+            )
         else:
             out.append({"provider": provider, "source": "none"})
     return JSONResponse({"providers": out, "master_key_configured": crypto.master_key_configured()})
@@ -2420,7 +2426,7 @@ async def set_provider_endpoint(provider: str, request: Request) -> Response:
         raise HTTPException(
             status_code=400,
             detail="NAUTGATE_MASTER_KEY is not set — cannot store provider keys. "
-                   "Set it (and keep a backup) to enable in-app key management.",
+            "Set it (and keep a backup) to enable in-app key management.",
         )
     body = await request.json()
     key = (body or {}).get("key", "")

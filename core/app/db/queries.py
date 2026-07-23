@@ -2018,7 +2018,10 @@ async def set_provider_credential(pool: asyncpg.Pool, *, provider: str, plaintex
                 updated_at = NOW()
         RETURNING provider, last4, updated_at
         """,
-        provider, ciphertext, nonce, crypto.last4(plaintext),
+        provider,
+        ciphertext,
+        nonce,
+        crypto.last4(plaintext),
     )
     d = dict(row)
     d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else None
