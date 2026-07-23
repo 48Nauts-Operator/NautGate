@@ -2335,6 +2335,7 @@ html, body { height: 100%; }
   place-items: center;
   padding: 24px;
   background: rgba(5, 7, 10, 0.72);
+  -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
 }
 .firstrun[hidden] { display: none; }
