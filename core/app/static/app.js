@@ -6192,11 +6192,21 @@
     const show = () => { overlay.hidden = !!getToken(); };
     const input = document.getElementById("firstrun-token");
     const err = document.getElementById("firstrun-err");
+    const btn = document.getElementById("firstrun-activate");
+    let busy = false;
     const activate = async () => {
+      if (busy) return;                 // guard against double-click racing two saves
+      busy = true;
+      if (btn) btn.disabled = true;
       err.textContent = "";
-      const r = await activateToken(input.value);
-      if (!r.ok) { err.textContent = r.error; return; }
-      overlay.hidden = true;
+      try {
+        const r = await activateToken(input.value);
+        if (!r.ok) { err.textContent = r.error; return; }
+        overlay.hidden = true;
+      } finally {
+        busy = false;
+        if (btn) btn.disabled = false;
+      }
     };
     document.getElementById("firstrun-activate")?.addEventListener("click", activate);
     input?.addEventListener("keydown", (e) => { if (e.key === "Enter") activate(); });
