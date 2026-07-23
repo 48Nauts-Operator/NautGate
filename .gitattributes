@@ -1,0 +1,10 @@
+# Keep the GitHub Languages bar honest — it should show our stack, not bundled libs.
+
+# Bundled front-end libraries aren't our code:
+core/app/static/vendor/** linguist-vendored
+*.min.js linguist-generated
+*.min.css linguist-generated
+
+# NautRouter is our own TypeScript. Linguist auto-vendors any /vendor path,
+# which hides it — override so the TypeScript source counts.
+vendor/NautRouter/src/** -linguist-vendored

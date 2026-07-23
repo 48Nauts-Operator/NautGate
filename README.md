@@ -1,5 +1,10 @@
 # NautGate
 
+[![CI](https://github.com/48Nauts-Operator/NautGate/actions/workflows/ci.yml/badge.svg)](https://github.com/48Nauts-Operator/NautGate/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-6b7233.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-nautgate.dev-6b7233.svg)](https://docs.nautgate.dev)
+[![Release](https://img.shields.io/github/v/release/48Nauts-Operator/NautGate?color=6b7233&label=release)](https://github.com/48Nauts-Operator/NautGate/releases)
+
 > One gateway for every LLM call — routed, measured, and provably logged.
 
 NautGate sits between your coding agents and every model provider. Claude Code,
