@@ -95,7 +95,13 @@ echo "$LOG" | grep -q '"event": "pricing_table_loaded"' && \
 
 info "first-run key (NAUTGATE-5)"
 KEY="$(echo "$LOG" | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+' | head -1)"
-[ -n "$KEY" ] && pass "first-run key minted + printed to log" || fail "no first-run key in log"
+if [ -z "$KEY" ]; then
+  # Every later check sends `Bearer $KEY`; with an empty key they'd all 401 and
+  # report one root cause as several failures. Fail once and bail to the verdict.
+  fail "no first-run key in log — skipping key-dependent checks"
+  echo; [ "$FAILED" -eq 0 ] && exit 0 || { printf "\033[31mSMOKE FAILED — %d check(s)\033[0m\n" "$FAILED"; exit 1; }
+fi
+pass "first-run key minted + printed to log"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KEY" "$B/v1/whoami")" = "200" ] \
   && pass "key authenticates (whoami 200)" || fail "key did not authenticate"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$B/v1/whoami")" = "401" ] \
