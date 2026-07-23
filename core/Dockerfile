@@ -40,6 +40,9 @@ COPY --from=builder /app/app /app/app
 # prefer the env vars over that fragile default. A user can still override the
 # whole dir with a `./config:/app/config:ro` bind mount.
 COPY config/ /app/config/
+# pyproject is the single source of the version shown in the dashboard (health.py
+# reads it when NAUTGATE_VERSION isn't set).
+COPY core/pyproject.toml /app/pyproject.toml
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
