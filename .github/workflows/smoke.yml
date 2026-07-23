@@ -1,0 +1,23 @@
+name: Go-live smoke
+
+# Builds the images and runs the full stack in an isolated project, asserting the
+# go-live functions (config baked, first-run key, backups in-container, provider
+# keys). Runs on demand and on pushes to main — not every PR, to keep it cheap.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "vendor/NautRouter/**"
+      - "config/**"
+      - "deploy/**"
+      - "scripts/smoke-golive.sh"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run smoke test
+        run: bash scripts/smoke-golive.sh
