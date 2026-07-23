@@ -66,13 +66,15 @@ async def _bootstrap_first_run_key(pool) -> None:
             pool, name="first-run", agent_id="first-run", ttl_days=None
         )
         token = key["token"]
+        # Print the key ALONE on its own line — no box, no decoration — so it
+        # copy-pastes cleanly and `grep -oE 'ng_[a-f0-9]{32}_...'` extracts it whole.
         banner = (
             "\n"
-            "  ┌─────────────────────────────────────────────────────────────┐\n"
-            "  │  NautGate first-run API key (shown once, store it now):       │\n"
-            f"  │  {token:<59}│\n"
-            "  │  Mint more, or revoke this, in Settings → Keys.               │\n"
-            "  └─────────────────────────────────────────────────────────────┘\n"
+            "  NautGate first-run API key — shown once, store it now:\n"
+            "\n"
+            f"{token}\n"
+            "\n"
+            "  Use as:  Authorization: Bearer <key>   ·   mint/revoke in Settings -> Keys\n"
         )
         print(banner, flush=True)
         log.warning("first_run_key_minted", agent_id="first-run")

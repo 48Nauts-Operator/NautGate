@@ -15,7 +15,6 @@
 services:
   nautgate-db:
     image: postgres:16
-    container_name: nautgate-db
     environment:
       POSTGRES_USER: nautgate
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nautgate}
@@ -36,7 +35,6 @@ services:
     # build:
     #   context: ..
     #   dockerfile: vendor/NautRouter/Dockerfile
-    container_name: nautrouter
     environment:
       NAUT_PORT: "8404"
       NAUT_WS_PORT: "8403"
@@ -60,7 +58,6 @@ services:
     # build:
     #   context: ..
     #   dockerfile: core/Dockerfile
-    container_name: nautgate
     depends_on:
       nautgate-db:
         condition: service_healthy
