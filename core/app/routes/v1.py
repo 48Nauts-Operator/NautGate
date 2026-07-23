@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -455,10 +456,12 @@ async def _process_chat_request(
         )
 
     # --- non-streaming ---
+    _overrides = await _resolve_provider_overrides(pool)
+    _router_headers = {"x-ng-provider-keys": json.dumps(_overrides)} if _overrides else None
     upstream_status = 200
     upstream_resp: dict | None = None
     try:
-        raw = await nautrouter.chat_completions(payload)
+        raw = await nautrouter.chat_completions(payload, headers=_router_headers)
     except httpx.HTTPStatusError as exc:
         upstream_status = exc.response.status_code
         log.warning("nautrouter_status_error", status=upstream_status, decision_id=str(decision_id))
@@ -688,8 +691,10 @@ def _streaming_response(
     state = {"first_byte_ms": None, "client_disconnected": False}
 
     async def gen() -> AsyncIterator[bytes]:
+        _overrides = await _resolve_provider_overrides(pool)
+        _rhdr = {"x-ng-provider-keys": json.dumps(_overrides)} if _overrides else None
         try:
-            async for chunk in nautrouter.chat_completions_stream(payload):
+            async for chunk in nautrouter.chat_completions_stream(payload, headers=_rhdr):
                 if state["first_byte_ms"] is None:
                     state["first_byte_ms"] = int((time.monotonic() - started) * 1000)
                 # Capture the upstream (canonical) bytes for parsing/audit.
@@ -2179,6 +2184,123 @@ async def get_config_endpoint(request: Request) -> Response:
     if isinstance(s.get("sb_ingest"), dict):
         s["sb_ingest"].pop("password", None)
     return JSONResponse(s)
+
+
+# ── Provider credentials (NAUTGATE-8) ──────────────────────────────────────
+# In-app provider API keys, encrypted at rest. An in-app key overrides the
+# matching env var; the env stays as a fallback so existing setups keep working.
+#
+# Delivery to NautRouter (which otherwise reads keys from its own env): core
+# decrypts the db-stored keys and passes them as a per-request header, so the
+# plaintext only exists transiently in memory and nothing new is persisted.
+_PROVIDER_OVERRIDE_CACHE: dict = {"at": 0.0, "keys": {}}
+_PROVIDER_OVERRIDE_TTL = 30.0  # ponytail: 30s cache; writes invalidate immediately
+
+
+def _invalidate_provider_overrides() -> None:
+    _PROVIDER_OVERRIDE_CACHE["at"] = 0.0
+
+
+async def _resolve_provider_overrides(pool) -> dict:
+    """{provider: decrypted_key} for every db-stored key. Cached; keeps the last
+    good value if a decrypt/query fails so a transient error can't drop keys."""
+    if pool is None:
+        return {}
+    now = time.monotonic()
+    if now - _PROVIDER_OVERRIDE_CACHE["at"] < _PROVIDER_OVERRIDE_TTL:
+        return _PROVIDER_OVERRIDE_CACHE["keys"]
+    from app.db import queries
+
+    keys: dict = {}
+    try:
+        for c in await queries.list_provider_credentials(pool):
+            k = await queries.get_provider_credential(pool, c["provider"])
+            if k:
+                keys[c["provider"]] = k
+    except Exception as exc:  # bad master key, decrypt failure, etc.
+        log.warning("provider_override_resolve_failed", error=str(exc))
+        return _PROVIDER_OVERRIDE_CACHE["keys"]
+    _PROVIDER_OVERRIDE_CACHE.update(at=now, keys=keys)
+    return keys
+
+
+_PROVIDER_ENV = {
+    "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+@router.get("/providers")
+async def list_providers_endpoint(request: Request) -> Response:
+    """Per-provider key status — never the key itself. source ∈ db|env|none."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app import crypto
+    from app.db import queries
+
+    stored = {c["provider"]: c for c in await queries.list_provider_credentials(pool)}
+    out = []
+    for provider, env_name in _PROVIDER_ENV.items():
+        if provider in stored:
+            out.append({"provider": provider, "source": "db",
+                        "last4": stored[provider]["last4"],
+                        "updated_at": stored[provider]["updated_at"]})
+        elif os.environ.get(env_name, "").strip():
+            out.append({"provider": provider, "source": "env",
+                        "last4": os.environ[env_name].strip()[-4:]})
+        else:
+            out.append({"provider": provider, "source": "none"})
+    return JSONResponse({"providers": out, "master_key_configured": crypto.master_key_configured()})
+
+
+@router.put("/providers/{provider}")
+async def set_provider_endpoint(provider: str, request: Request) -> Response:
+    """Store an encrypted provider key. Body: {"key": "..."}."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app import crypto
+    from app.db import queries
+
+    if provider not in queries.VALID_PROVIDERS:
+        raise HTTPException(status_code=404, detail="unknown provider")
+    if not crypto.master_key_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="NAUTGATE_MASTER_KEY is not set — cannot store provider keys. "
+                   "Set it (and keep a backup) to enable in-app key management.",
+        )
+    body = await request.json()
+    key = (body or {}).get("key", "")
+    if not isinstance(key, str) or not key.strip():
+        raise HTTPException(status_code=422, detail="key required")
+    try:
+        meta = await queries.set_provider_credential(pool, provider=provider, plaintext=key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _invalidate_provider_overrides()
+    return JSONResponse({"provider": provider, "source": "db", **meta})
+
+
+@router.delete("/providers/{provider}")
+async def delete_provider_endpoint(provider: str, request: Request) -> Response:
+    """Remove a stored provider key (falls back to the env var, if any)."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.db import queries
+
+    ok = await queries.delete_provider_credential(pool, provider)
+    if not ok:
+        raise HTTPException(status_code=404, detail="no stored key for that provider")
+    _invalidate_provider_overrides()
+    return JSONResponse({"provider": provider, "deleted": True})
 
 
 @router.put("/config")

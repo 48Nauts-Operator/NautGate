@@ -1846,3 +1846,72 @@ async def revoke_api_key(pool: asyncpg.Pool, key_id: str) -> bool:
             key_id,
         )
     return res.endswith("1")
+
+
+# ── Provider credentials (NAUTGATE-8) ──────────────────────────────────────
+# Encrypted-at-rest provider API keys. Plaintext only ever exists transiently
+# (on set, and on the read path that forwards a request). Never logged, never
+# returned by a list/read endpoint.
+
+VALID_PROVIDERS = ("openrouter", "anthropic", "openai", "gemini")
+
+
+async def set_provider_credential(pool: asyncpg.Pool, *, provider: str, plaintext: str) -> dict:
+    """Encrypt a provider key and upsert it. Returns display metadata (no secret)."""
+    from app import crypto
+
+    if provider not in VALID_PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r}; expected one of {VALID_PROVIDERS}")
+    plaintext = plaintext.strip()
+    if not plaintext:
+        raise ValueError("empty key")
+    ciphertext, nonce = crypto.encrypt(plaintext)
+    row = await pool.fetchrow(
+        """
+        INSERT INTO nautgate.provider_credentials (provider, ciphertext, nonce, last4, updated_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (provider) DO UPDATE
+            SET ciphertext = EXCLUDED.ciphertext,
+                nonce      = EXCLUDED.nonce,
+                last4      = EXCLUDED.last4,
+                updated_at = NOW()
+        RETURNING provider, last4, updated_at
+        """,
+        provider, ciphertext, nonce, crypto.last4(plaintext),
+    )
+    d = dict(row)
+    d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else None
+    return d
+
+
+async def get_provider_credential(pool: asyncpg.Pool, provider: str) -> str | None:
+    """Return the decrypted key for a provider, or None if not stored."""
+    from app import crypto
+
+    row = await pool.fetchrow(
+        "SELECT ciphertext, nonce FROM nautgate.provider_credentials WHERE provider = $1",
+        provider,
+    )
+    if row is None:
+        return None
+    return crypto.decrypt(bytes(row["ciphertext"]), bytes(row["nonce"]))
+
+
+async def list_provider_credentials(pool: asyncpg.Pool) -> list[dict]:
+    """Metadata only — provider, last4, updated_at. Never the plaintext."""
+    rows = await pool.fetch(
+        "SELECT provider, last4, updated_at FROM nautgate.provider_credentials ORDER BY provider"
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else None
+        out.append(d)
+    return out
+
+
+async def delete_provider_credential(pool: asyncpg.Pool, provider: str) -> bool:
+    res = await pool.execute(
+        "DELETE FROM nautgate.provider_credentials WHERE provider = $1", provider
+    )
+    return res.endswith(" 1")
