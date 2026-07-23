@@ -5,7 +5,9 @@ import pytest
 async def test_health_always_ok(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "version" in body  # nav-chrome (NAUTGATE-13) surfaces the version here
 
 
 @pytest.mark.asyncio
