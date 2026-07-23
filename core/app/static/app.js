@@ -626,6 +626,7 @@
     const apply = (on) => {
       shell.classList.toggle("sidebar-collapsed", on);
       btn.title = on ? "Expand sidebar" : "Collapse sidebar";
+      btn.setAttribute("aria-expanded", String(!on));
     };
     try { apply(localStorage.getItem(KEY) === "1"); } catch (_e) {}
     btn.addEventListener("click", () => {
