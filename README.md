@@ -78,14 +78,19 @@ reporting trustworthy.
 
 ## Quickstart
 
-Requires Docker, Python 3.12+ and [uv](https://github.com/astral-sh/uv).
+Requires Docker. Pull the published stack — no clone, no build:
 
 ```bash
-git clone https://github.com/48Nauts-Operator/NautGate.git
-cd NautGate
-cp .env.example deploy/.env      # add the provider keys you want to use
-docker compose -f deploy/docker-compose.yml up -d
+curl -fsSL https://nautgate.dev/compose.yml -o docker-compose.yml
+docker compose up -d
+
+# NautGate mints a first-run API key on first boot — grab it from the log:
+docker compose logs nautgate | grep -A1 'first-run key'
 ```
+
+Provider keys are optional — set the ones you use (`OPENROUTER_API_KEY`,
+`ANTHROPIC_API_KEY`, …) in a `.env` next to the compose file. Prefer to build
+from source? See [Development](#development).
 
 Point a client at it:
 
