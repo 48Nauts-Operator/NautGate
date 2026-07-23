@@ -79,7 +79,7 @@ jobs:
             type=sha,prefix=
 
       # Required for reliable linux/arm64 cross-builds.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
 
       - name: Build and push ${{ matrix.name }}
