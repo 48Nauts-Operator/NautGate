@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # GitHub Actions used by our workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci"]
+
+  # Python core (uv / pyproject)
+  - package-ecosystem: "uv"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+
+  # NautRouter (TypeScript / npm)
+  - package-ecosystem: "npm"
+    directory: "/vendor/NautRouter"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+
+  # Base images in the Dockerfiles
+  - package-ecosystem: "docker"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
