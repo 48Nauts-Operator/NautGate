@@ -18,6 +18,7 @@ def _version() -> str:
         return env
     try:
         import tomllib
+
         pp = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"  # core/pyproject.toml
         return tomllib.loads(pp.read_text())["project"]["version"]
     except Exception:
