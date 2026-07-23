@@ -4091,3 +4091,115 @@ async def put_profile(request: Request) -> Response:
         notes=notes,
     )
     return JSONResponse(result)
+
+
+@router.post("/ingest")
+async def ingest(request: Request) -> JSONResponse:
+    """Record a captured turn observed by the nautproxy sidecar.
+
+    The sidecar (forward proxy + trusted CA) parses a provider request/response
+    it intercepted and POSTs the normalized turn here, so uncooperative clients
+    (Codex et al.) land in the same audit log as inline traffic. Reuses the
+    precapture + persist_outcome path, so attestation and capture policy apply
+    identically — the only difference is the bytes arrived over the proxy, not
+    the gateway. Auth: X-Ingest-Token must match NAUTGATE_INGEST_TOKEN; unset
+    disables the endpoint.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    token = getattr(settings, "nautgate_ingest_token", None) if settings else None
+    if not token:
+        raise HTTPException(status_code=404, detail="ingest_disabled")
+    if request.headers.get("x-ingest-token", "") != token:
+        raise HTTPException(status_code=401, detail="bad_ingest_token")
+
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    agent_id = str(body.get("agent_id") or "proxy")
+    inbound_format = str(body.get("inbound_format") or "proxy")
+    provider = str(body.get("provider") or "passthrough")
+    model = body.get("model")
+    messages = body.get("messages")
+    tools = body.get("tools")
+    response = body.get("response") if isinstance(body.get("response"), dict) else {}
+    served_model = body.get("served_model") or response.get("model") or model
+    status_code = int(body.get("status_code", 200))
+    duration_ms = int(body.get("duration_ms", 0))
+    source_ip = body.get("source_ip")
+
+    decision_id = uuid.uuid4()
+    payload = {"model": model, "messages": messages, "tools": tools}
+    # ponytail: proxy traffic is local/trusted — capture at sensitivity "none"
+    # (no PII classification), same as the Codex WS path did.
+    captured = capture_prompt(messages, "none") if messages else None
+    captured_tools = capture_tools(tools, "none") if tools else None
+
+    await queries.precapture(
+        pool,
+        decision_id=decision_id,
+        agent_id=agent_id,
+        inbound_format=inbound_format,
+        model_requested=str(model) if model else None,
+        classified_tier="passthrough",
+        classified_sensitivity="none",
+        classified_score=score(payload).aggregate,
+        decision_provider=provider,
+        decision_model=str(model) if model else "unknown",
+        decision_reason="nautproxy:ingest",
+        prompt_body=captured.body if captured else None,
+        prompt_body_truncated_at_byte=captured.truncated_at_byte if captured else None,
+        tools_body=captured_tools.body if captured_tools else None,
+        tools_body_truncated_at_byte=captured_tools.truncated_at_byte if captured_tools else None,
+        source_ip=source_ip,
+        messages_count=len(messages) if isinstance(messages, list) else None,
+        tools_count=len(tools) if isinstance(tools, list) else None,
+        stream_flag=bool(body.get("stream")),
+    )
+
+    # Usage: prefer the proxy's pre-parsed counts, else normalize response.usage.
+    u = body.get("usage")
+    if isinstance(u, dict):
+        prompt_tokens = u.get("prompt_tokens")
+        completion_tokens = u.get("completion_tokens")
+        reasoning_tokens = u.get("reasoning_tokens")
+        cache_read_tokens = u.get("cache_read_tokens")
+        cache_write_tokens = u.get("cache_write_tokens")
+    else:
+        nu = normalize_usage(response.get("usage") or {}, provider_hint="openai")
+        prompt_tokens = nu.prompt_tokens
+        completion_tokens = nu.completion_tokens
+        reasoning_tokens = nu.reasoning_tokens
+        cache_read_tokens = nu.cache_read_tokens
+        cache_write_tokens = nu.cache_write_tokens
+
+    resp_json = json.dumps(response)
+    response_captured = capture_response(resp_json, "none")
+    spool = getattr(request.app.state, "outcome_spool", None)
+    await persist_outcome(
+        pool,
+        spool,
+        decision_id=decision_id,
+        status_code=status_code,
+        duration_ms=duration_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        prefix_hash=cache_prefix_hash(payload),
+        response_body=response_captured.body,
+        response_body_truncated_at_byte=response_captured.truncated_at_byte,
+        response_size_bytes=len(resp_json.encode("utf-8")),
+        actual_provider=provider,
+        actual_model=served_model,
+    )
+
+    return JSONResponse({"ok": True, "decision_id": str(decision_id)})
