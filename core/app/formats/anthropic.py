@@ -118,18 +118,25 @@ def _translate_message(role: str, content: list) -> list[dict]:
     # User turn carrying tool results → one OpenAI tool message per result.
     if role == "user" and tool_results:
         for tr in tool_results:
-            out.append({
-                "role": "tool",
-                "tool_call_id": tr.get("tool_use_id") or "",
-                "content": _tool_result_text(tr.get("content")),
-            })
+            out.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tr.get("tool_use_id") or "",
+                    "content": _tool_result_text(tr.get("content")),
+                }
+            )
         # Any accompanying text/image blocks become a normal user message.
         if other:
             blocks = _normalize_content_blocks(other)
             if blocks:
-                out.append({"role": "user",
-                            "content": blocks[0]["text"] if len(blocks) == 1
-                            and blocks[0].get("type") == "text" else blocks})
+                out.append(
+                    {
+                        "role": "user",
+                        "content": blocks[0]["text"]
+                        if len(blocks) == 1 and blocks[0].get("type") == "text"
+                        else blocks,
+                    }
+                )
         return out
 
     # Plain text/image message (no tool blocks).
@@ -203,15 +210,19 @@ def request_to_openai_chat(payload: dict) -> dict:
                 continue
             # Anthropic-shaped: rebuild as OpenAI function tool.
             if "name" in t:
-                translated_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": t.get("name"),
-                        "description": t.get("description", ""),
-                        # Anthropic uses input_schema; OpenAI uses parameters.
-                        "parameters": t.get("input_schema") or t.get("parameters") or {"type": "object"},
-                    },
-                })
+                translated_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name"),
+                            "description": t.get("description", ""),
+                            # Anthropic uses input_schema; OpenAI uses parameters.
+                            "parameters": t.get("input_schema")
+                            or t.get("parameters")
+                            or {"type": "object"},
+                        },
+                    }
+                )
         if translated_tools:
             out["tools"] = translated_tools
 
@@ -244,12 +255,14 @@ def response_to_anthropic(openai_resp: dict, model: str | None = None) -> dict:
             parsed = json.loads(args) if isinstance(args, str) else (args or {})
         except (ValueError, TypeError):
             parsed = {}
-        blocks.append({
-            "type": "tool_use",
-            "id": tc.get("id") or f"toolu_{uuid.uuid4().hex[:20]}",
-            "name": fn.get("name", ""),
-            "input": parsed,
-        })
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": tc.get("id") or f"toolu_{uuid.uuid4().hex[:20]}",
+                "name": fn.get("name", ""),
+                "input": parsed,
+            }
+        )
 
     return {
         "id": openai_resp.get("id") or f"msg_{uuid.uuid4().hex[:24]}",
@@ -295,7 +308,9 @@ class AnthropicStreamTranslator:
         # Tool-use content blocks. OpenAI streams tool_calls with their own
         # `index` (per call), but Anthropic content_block indices are global
         # within the message — we map openai_tool_index → anthropic_block_index.
-        self._tool_blocks: dict[int, dict] = {}  # openai_idx → {block_index, started, stopped, name, id}
+        self._tool_blocks: dict[
+            int, dict
+        ] = {}  # openai_idx → {block_index, started, stopped, name, id}
         self._next_block_index = 0
         self._message_stopped = False
         self._input_tokens: int | None = None
@@ -542,21 +557,25 @@ class AnthropicStreamTranslator:
                 args_partial = fn.get("arguments")
                 # First chunk for this call (has id and/or name) → open block.
                 if openai_idx not in self._tool_blocks and (call_id or name):
-                    out.append(self._start_tool_block(
-                        openai_idx,
-                        tool_id=call_id or f"call_{uuid.uuid4().hex[:24]}",
-                        name=name or "",
-                    ))
+                    out.append(
+                        self._start_tool_block(
+                            openai_idx,
+                            tool_id=call_id or f"call_{uuid.uuid4().hex[:24]}",
+                            name=name or "",
+                        )
+                    )
                 # Argument deltas come as already-stringified JSON fragments.
                 if isinstance(args_partial, str) and args_partial:
                     if openai_idx not in self._tool_blocks:
                         # Defensive: open a block even without id/name so we
                         # never drop a partial.
-                        out.append(self._start_tool_block(
-                            openai_idx,
-                            tool_id=f"call_{uuid.uuid4().hex[:24]}",
-                            name="",
-                        ))
+                        out.append(
+                            self._start_tool_block(
+                                openai_idx,
+                                tool_id=f"call_{uuid.uuid4().hex[:24]}",
+                                name="",
+                            )
+                        )
                     out.append(self._delta_tool_input(openai_idx, args_partial))
 
         if ch.get("finish_reason"):

@@ -96,8 +96,9 @@ def test_anthropic_via_openrouter_passthrough():
 
 def test_openrouter_no_cache_model():
     # Open models (Llama/Kimi/Qwen) on OR don't bill caching → no cache fields.
-    n = normalize_usage({"prompt_tokens": 3000, "completion_tokens": 200},
-                        provider_hint="openrouter")
+    n = normalize_usage(
+        {"prompt_tokens": 3000, "completion_tokens": 200}, provider_hint="openrouter"
+    )
     assert n.prompt_tokens == 3000
     assert n.cache_read_tokens is None
     assert n.cache_write_tokens is None
@@ -117,10 +118,16 @@ def test_bool_is_not_counted_as_int():
 
 
 def test_prefix_hash_stable_for_identical_prefix():
-    a = {"system": "You are a helpful analyst.", "tools": [{"name": "read"}],
-         "messages": [{"role": "user", "content": "hi"}]}
-    b = {"system": "You are a helpful analyst.", "tools": [{"name": "read"}],
-         "messages": [{"role": "user", "content": "totally different question"}]}
+    a = {
+        "system": "You are a helpful analyst.",
+        "tools": [{"name": "read"}],
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    b = {
+        "system": "You are a helpful analyst.",
+        "tools": [{"name": "read"}],
+        "messages": [{"role": "user", "content": "totally different question"}],
+    }
     # Same system+tools, different user turn → same prefix hash.
     assert cache_prefix_hash(a) == cache_prefix_hash(b)
     assert cache_prefix_hash(a) is not None
@@ -128,20 +135,26 @@ def test_prefix_hash_stable_for_identical_prefix():
 
 def test_prefix_hash_changes_when_timestamp_injected():
     base = {"system": "You are a helpful analyst.", "tools": [{"name": "read"}]}
-    leaky = {"system": "You are a helpful analyst. Current time: 2026-06-12T14:23:11Z",
-             "tools": [{"name": "read"}]}
+    leaky = {
+        "system": "You are a helpful analyst. Current time: 2026-06-12T14:23:11Z",
+        "tools": [{"name": "read"}],
+    }
     assert cache_prefix_hash(base) != cache_prefix_hash(leaky)
 
 
 def test_prefix_hash_openai_leading_system_messages():
-    a = {"messages": [
-        {"role": "system", "content": "stable prompt"},
-        {"role": "user", "content": "q1"},
-    ]}
-    b = {"messages": [
-        {"role": "system", "content": "stable prompt"},
-        {"role": "user", "content": "q2"},
-    ]}
+    a = {
+        "messages": [
+            {"role": "system", "content": "stable prompt"},
+            {"role": "user", "content": "q1"},
+        ]
+    }
+    b = {
+        "messages": [
+            {"role": "system", "content": "stable prompt"},
+            {"role": "user", "content": "q2"},
+        ]
+    }
     assert cache_prefix_hash(a) == cache_prefix_hash(b)
 
 

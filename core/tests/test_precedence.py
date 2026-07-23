@@ -25,11 +25,20 @@ def _routing_table():
     return {
         "fast": {
             "primary": {"provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash"},
-            "fallback": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2-thinking"},
+            "fallback": {
+                "provider": "openrouter",
+                "model": "openrouter/moonshotai/kimi-k2-thinking",
+            },
         },
-        "balanced": {"primary": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2-thinking"}},
-        "deep": {"primary": {"provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-pro"}},
-        "expert": {"primary": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2.6"}},
+        "balanced": {
+            "primary": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2-thinking"}
+        },
+        "deep": {
+            "primary": {"provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-pro"}
+        },
+        "expert": {
+            "primary": {"provider": "openrouter", "model": "openrouter/moonshotai/kimi-k2.6"}
+        },
     }
 
 

@@ -136,9 +136,7 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
                 if not isinstance(tc, dict):
                     continue
                 idx = tc.get("index", 0)
-                slot = tool_calls_acc.setdefault(
-                    idx, {"id": None, "name": None, "arguments": ""}
-                )
+                slot = tool_calls_acc.setdefault(idx, {"id": None, "name": None, "arguments": ""})
                 if tc.get("id"):
                     slot["id"] = tc["id"]
                 fn = tc.get("function") or {}
@@ -167,7 +165,9 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
                     pt = usage.get("prompt_tokens")
                 prompt_tokens = pt
             completion_tokens = usage.get("completion_tokens", completion_tokens)
-            details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+            details = (
+                usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+            )
             if isinstance(details, dict):
                 reasoning_tokens = details.get("reasoning_tokens", reasoning_tokens)
 
@@ -231,11 +231,7 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     # text content NOR tool calls. A tool_use-only response is a real,
     # successful response — flagging it as empty caused the brain layer to
     # silently demote models that were actually doing their job correctly.
-    was_empty = bool(
-        (completion_tokens or 0) > 0
-        and not assembled
-        and not tool_calls
-    )
+    was_empty = bool((completion_tokens or 0) > 0 and not assembled and not tool_calls)
 
     return {
         "prompt_tokens": prompt_tokens,

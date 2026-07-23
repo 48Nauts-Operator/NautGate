@@ -101,7 +101,9 @@ def normalize_usage(usage: dict | None, *, provider_hint: str | None = None) -> 
 
     # --- Gemini shape ------------------------------------------------------
     if "usage_metadata" in usage or "cached_content_token_count" in usage:
-        meta = usage.get("usage_metadata") if isinstance(usage.get("usage_metadata"), dict) else usage
+        meta = (
+            usage.get("usage_metadata") if isinstance(usage.get("usage_metadata"), dict) else usage
+        )
         total = _as_int(meta.get("prompt_token_count"))
         cached = _as_int(meta.get("cached_content_token_count"))
         fresh = total

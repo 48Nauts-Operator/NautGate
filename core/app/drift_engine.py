@@ -73,7 +73,8 @@ async def process_drift(
              ORDER BY ts DESC
              LIMIT 1
             """,
-            row["session_id"], str(decision_id),
+            row["session_id"],
+            str(decision_id),
         )
         if prev is not None and prev["messages_count"] is not None:
             messages_count_delta = row["messages_count"] - prev["messages_count"]
@@ -82,15 +83,19 @@ async def process_drift(
                 # the event is the signal, not the z-score.
                 await _write_anomaly(
                     pool,
-                    provider=provider, model=model,
+                    provider=provider,
+                    model=model,
                     metric_name="messages_count_delta",
-                    z_score=-99.0,                         # sentinel: forced flag
+                    z_score=-99.0,  # sentinel: forced flag
                     observed=float(messages_count_delta),
-                    baseline_mean=0.0, baseline_stddev=0.0,
+                    baseline_mean=0.0,
+                    baseline_stddev=0.0,
                     decision_id=decision_id,
                 )
                 await _maybe_raise_alert(
-                    pool, provider=provider, model=model,
+                    pool,
+                    provider=provider,
+                    model=model,
                     metric_name="messages_count_delta",
                     observed=float(messages_count_delta),
                     baseline_mean=0.0,
@@ -113,15 +118,22 @@ async def process_drift(
             continue
         await _update_baseline_and_check(
             pool,
-            provider=provider, model=model,
-            metric_name=metric_name, observed=observed,
+            provider=provider,
+            model=model,
+            metric_name=metric_name,
+            observed=observed,
             decision_id=decision_id,
         )
 
 
 async def _update_baseline_and_check(
-    pool: asyncpg.Pool, *,
-    provider: str, model: str, metric_name: str, observed: float, decision_id,
+    pool: asyncpg.Pool,
+    *,
+    provider: str,
+    model: str,
+    metric_name: str,
+    observed: float,
+    decision_id,
 ) -> None:
     async with pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
@@ -131,12 +143,16 @@ async def _update_baseline_and_check(
              WHERE provider = $1 AND model = $2 AND metric_name = $3
              FOR UPDATE
             """,
-            provider, model, metric_name,
+            provider,
+            model,
+            metric_name,
         )
 
         if row is None:
             update = update_ewma(
-                prev_mean=0.0, prev_variance=0.0, prev_sample_count=0,
+                prev_mean=0.0,
+                prev_variance=0.0,
+                prev_sample_count=0,
                 observation=observed,
             )
             await conn.execute(
@@ -147,9 +163,14 @@ async def _update_baseline_and_check(
                      consecutive_anomalies, last_observed, last_z_score, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, now())
                 """,
-                provider, model, metric_name,
-                update.new_mean, update.new_variance, update.new_sample_count,
-                observed, update.z_score,
+                provider,
+                model,
+                metric_name,
+                update.new_mean,
+                update.new_variance,
+                update.new_sample_count,
+                observed,
+                update.z_score,
             )
             return
 
@@ -160,9 +181,7 @@ async def _update_baseline_and_check(
             observation=observed,
         )
 
-        new_consecutive = (
-            row["consecutive_anomalies"] + 1 if update.is_anomaly else 0
-        )
+        new_consecutive = row["consecutive_anomalies"] + 1 if update.is_anomaly else 0
         await conn.execute(
             """
             UPDATE nautgate.model_baselines
@@ -172,16 +191,24 @@ async def _update_baseline_and_check(
                    updated_at = now()
              WHERE provider = $1 AND model = $2 AND metric_name = $3
             """,
-            provider, model, metric_name,
-            update.new_mean, update.new_variance, update.new_sample_count,
-            new_consecutive, observed, update.z_score,
+            provider,
+            model,
+            metric_name,
+            update.new_mean,
+            update.new_variance,
+            update.new_sample_count,
+            new_consecutive,
+            observed,
+            update.z_score,
         )
 
     if update.is_anomaly:
-        stddev = update.new_variance ** 0.5
+        stddev = update.new_variance**0.5
         await _write_anomaly(
             pool,
-            provider=provider, model=model, metric_name=metric_name,
+            provider=provider,
+            model=model,
+            metric_name=metric_name,
             z_score=update.z_score or 0.0,
             observed=observed,
             baseline_mean=update.new_mean,
@@ -192,23 +219,35 @@ async def _update_baseline_and_check(
     # Cluster gate: only escalate after N consecutive anomalies.
     if new_consecutive >= ANOMALY_CLUSTER_THRESHOLD:
         await _maybe_raise_alert(
-            pool, provider=provider, model=model, metric_name=metric_name,
-            observed=observed, baseline_mean=update.new_mean,
+            pool,
+            provider=provider,
+            model=model,
+            metric_name=metric_name,
+            observed=observed,
+            baseline_mean=update.new_mean,
             z_score=update.z_score or 0.0,
         )
 
     if not update.is_anomaly:
         # Normal sample — nudge open alerts toward resolution.
         await _maybe_resolve_alert(
-            pool, provider=provider, model=model, metric_name=metric_name,
+            pool,
+            provider=provider,
+            model=model,
+            metric_name=metric_name,
         )
 
 
 async def _write_anomaly(
-    pool: asyncpg.Pool, *,
-    provider: str, model: str, metric_name: str,
-    z_score: float, observed: float,
-    baseline_mean: float, baseline_stddev: float,
+    pool: asyncpg.Pool,
+    *,
+    provider: str,
+    model: str,
+    metric_name: str,
+    z_score: float,
+    observed: float,
+    baseline_mean: float,
+    baseline_stddev: float,
     decision_id,
 ) -> None:
     await pool.execute(
@@ -218,16 +257,26 @@ async def _write_anomaly(
              baseline_mean, baseline_stddev, decision_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """,
-        provider, model, metric_name,
-        z_score, observed, baseline_mean, baseline_stddev,
+        provider,
+        model,
+        metric_name,
+        z_score,
+        observed,
+        baseline_mean,
+        baseline_stddev,
         decision_id,
     )
 
 
 async def _maybe_raise_alert(
-    pool: asyncpg.Pool, *,
-    provider: str, model: str, metric_name: str,
-    observed: float, baseline_mean: float, z_score: float,
+    pool: asyncpg.Pool,
+    *,
+    provider: str,
+    model: str,
+    metric_name: str,
+    observed: float,
+    baseline_mean: float,
+    z_score: float,
 ) -> None:
     """Open a drift_alerts row if there's no open one for this triple, or
     update the peak if there is."""
@@ -239,7 +288,9 @@ async def _maybe_raise_alert(
          WHERE provider = $1 AND model = $2 AND metric_name = $3
            AND resolved_at IS NULL
         """,
-        provider, model, metric_name,
+        provider,
+        model,
+        metric_name,
     )
     if open_alert is None:
         new_alert_id = await pool.fetchval(
@@ -250,22 +301,35 @@ async def _maybe_raise_alert(
             VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
             RETURNING id
             """,
-            provider, model, metric_name, direction,
-            z_score, observed, baseline_mean,
+            provider,
+            model,
+            metric_name,
+            direction,
+            z_score,
+            observed,
+            baseline_mean,
         )
         log.warning(
             "drift_alert_opened",
-            provider=provider, model=model, metric=metric_name,
-            direction=direction, z=round(z_score, 2),
-            observed=observed, baseline=round(baseline_mean, 4),
+            provider=provider,
+            model=model,
+            metric=metric_name,
+            direction=direction,
+            z=round(z_score, 2),
+            observed=observed,
+            baseline=round(baseline_mean, 4),
         )
         # Fire-and-forget: investigator decides whether to actually run
         # based on cooldown + daily budget + enabled flag.
         try:
             from app.drift_investigator import maybe_auto_investigate
+
             await maybe_auto_investigate(
-                pool, alert_id=new_alert_id,
-                provider=provider, model=model, metric_name=metric_name,
+                pool,
+                alert_id=new_alert_id,
+                provider=provider,
+                model=model,
+                metric_name=metric_name,
             )
         except Exception as exc:
             log.warning("drift_invest_dispatch_failed", error=str(exc))
@@ -278,7 +342,9 @@ async def _maybe_raise_alert(
                    SET peak_z_score = $2, peak_observed = $3, sample_count = sample_count + 1
                  WHERE id = $1
                 """,
-                open_alert["id"], z_score, observed,
+                open_alert["id"],
+                z_score,
+                observed,
             )
         else:
             await pool.execute(
@@ -288,8 +354,11 @@ async def _maybe_raise_alert(
 
 
 async def _maybe_resolve_alert(
-    pool: asyncpg.Pool, *,
-    provider: str, model: str, metric_name: str,
+    pool: asyncpg.Pool,
+    *,
+    provider: str,
+    model: str,
+    metric_name: str,
 ) -> None:
     """If there's an open alert and we've now seen enough normal samples in
     a row (consecutive_anomalies has been 0 for ALERT_RESOLUTION_SAMPLES
@@ -307,7 +376,9 @@ async def _maybe_resolve_alert(
            AND resolved_at IS NULL
            AND started_at < now() - INTERVAL '1 second' * $4
         """,
-        provider, model, metric_name,
+        provider,
+        model,
+        metric_name,
         ALERT_RESOLUTION_SAMPLES * 5,  # rough: 5s per sample assumed for cooldown
     )
 
@@ -364,7 +435,9 @@ async def get_drift_overview(pool: asyncpg.Pool) -> dict:
                 "stddev": float(b["ewma_variance"]) ** 0.5,
                 "sample_count": b["sample_count"],
                 "consecutive_anomalies": b["consecutive_anomalies"],
-                "last_observed": float(b["last_observed"]) if b["last_observed"] is not None else None,
+                "last_observed": float(b["last_observed"])
+                if b["last_observed"] is not None
+                else None,
                 "last_z_score": float(b["last_z_score"]) if b["last_z_score"] is not None else None,
                 "updated_at": b["updated_at"].isoformat() if b["updated_at"] else None,
             }
@@ -374,8 +447,11 @@ async def get_drift_overview(pool: asyncpg.Pool) -> dict:
 
 
 async def get_recent_anomalies(
-    pool: asyncpg.Pool, *,
-    provider: str, model: str, metric_name: str,
+    pool: asyncpg.Pool,
+    *,
+    provider: str,
+    model: str,
+    metric_name: str,
     limit: int = 50,
 ) -> list[dict]:
     rows = await pool.fetch(
@@ -387,7 +463,10 @@ async def get_recent_anomalies(
          ORDER BY ts DESC
          LIMIT $4
         """,
-        provider, model, metric_name, limit,
+        provider,
+        model,
+        metric_name,
+        limit,
     )
     return [
         {
