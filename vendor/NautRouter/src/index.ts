@@ -549,30 +549,40 @@ function resolveModel(modelKey: string): ModelDef | undefined {
   return undefined;
 }
 
-async function forwardToProvider(modelKey: string, body: any, stream: boolean): Promise<Response> {
+// Per-request provider keys sent by core (NAUTGATE-8): decrypted db-stored keys
+// that override this process's env for that provider. Plaintext over loopback,
+// used transiently, never stored here.
+type ProviderKeys = Record<string, string>;
+
+async function forwardToProvider(
+  modelKey: string,
+  body: any,
+  stream: boolean,
+  overrides: ProviderKeys = {},
+): Promise<Response> {
   const modelDef = resolveModel(modelKey);
   if (!modelDef) throw new Error(`Unknown model: ${modelKey}`);
 
   if (modelDef.provider === "anthropic") {
-    return forwardAnthropic(modelDef, body, stream);
+    return forwardAnthropic(modelDef, body, stream, overrides);
   } else if (modelDef.provider === "gemini") {
-    return forwardGemini(modelDef, body, stream);
+    return forwardGemini(modelDef, body, stream, overrides);
   } else if (modelDef.provider === "openrouter") {
-    return forwardOpenRouter(modelDef, body, stream);
+    return forwardOpenRouter(modelDef, body, stream, overrides);
   } else if (modelDef.provider === "openai") {
-    return forwardOpenAI(modelDef, body, stream);
+    return forwardOpenAI(modelDef, body, stream, overrides);
   } else {
     return forwardLMStudio(modelDef, body, stream);
   }
 }
 
-async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean, overrides: ProviderKeys = {}): Promise<Response> {
   // OpenRouter speaks OpenAI Chat Completions natively. Pass through with key.
   return fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${overrides.openrouter || OPENROUTER_API_KEY}`,
       "HTTP-Referer": "https://github.com/48Nauts-Operator/NautGate",
       "X-Title": "NautGate",
     },
@@ -580,7 +590,7 @@ async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean)
   });
 }
 
-async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean, overrides: ProviderKeys = {}): Promise<Response> {
   const out: any = { ...body, model: modelDef.id, stream };
   // The gpt-5 / o-series reasoning models reject `max_tokens` and require
   // `max_completion_tokens`; translate so callers (e.g. Fusion) don't 400.
@@ -592,7 +602,7 @@ async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean): Pr
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${overrides.openai || OPENAI_API_KEY}`,
     },
     body: JSON.stringify(out),
   });
@@ -615,7 +625,7 @@ async function forwardLMStudio(modelDef: ModelDef, body: any, stream: boolean): 
   });
 }
 
-async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, overrides: ProviderKeys = {}): Promise<Response> {
   // Convert OpenAI format → Anthropic Messages API
   const messages = body.messages ?? [];
   let system: string | undefined;
@@ -693,7 +703,7 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
+      "x-api-key": overrides.anthropic || ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(anthropicBody),
@@ -843,14 +853,14 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean):
   return new Response(readable, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" } });
 }
 
-async function forwardGemini(modelDef: ModelDef, body: any, stream: boolean): Promise<Response> {
+async function forwardGemini(modelDef: ModelDef, body: any, stream: boolean, overrides: ProviderKeys = {}): Promise<Response> {
   // Use Gemini's OpenAI-compatible endpoint
   const url = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
   return fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${GEMINI_API_KEY}`,
+      Authorization: `Bearer ${overrides.gemini || GEMINI_API_KEY}`,
     },
     body: JSON.stringify({ ...body, model: modelDef.id, stream }),
   });
@@ -1072,6 +1082,13 @@ app.post("/v1/chat/completions", async (req, res) => {
     const body = req.body;
     const requestedModel: string = body.model ?? "naut/auto";
     const agentId = req.headers["x-agent-id"] as string ?? "unknown";
+    // Per-request provider keys from core (NAUTGATE-8) — decrypted db-stored
+    // keys that override this process's env for that provider.
+    let providerKeys: ProviderKeys = {};
+    const pkHeader = req.headers["x-ng-provider-keys"] as string | undefined;
+    if (pkHeader) {
+      try { providerKeys = JSON.parse(pkHeader); } catch { /* ignore malformed */ }
+    }
     const stream = body.stream === true;
 
     let profile: Profile = currentProfile;
@@ -1143,7 +1160,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     for (const modelKey of modelsToTry) {
       try {
-        response = await forwardToProvider(modelKey, body, stream);
+        response = await forwardToProvider(modelKey, body, stream, providerKeys);
         if (response.ok || response.status < 500) {
           usedModel = modelKey;
           break;
