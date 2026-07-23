@@ -1,0 +1,95 @@
+# NautGate — published stack. This is the file served at nautgate.dev/compose.yml.
+#
+#   curl -fsSL https://nautgate.dev/compose.yml -o docker-compose.yml
+#   docker compose up -d
+#
+# Everything starts by default (no profiles), pulling prebuilt images from GHCR —
+# no clone, no build. First-run mints an API key and prints it to the core log:
+#   docker compose logs nautgate | grep -A1 'first-run key'
+#
+# Provider keys are optional. Set the ones you use in a .env file next to this
+# compose (or export them), then `docker compose up -d`:
+#   OPENROUTER_API_KEY=...    # enables the default auto-tier routing
+#   ANTHROPIC_API_KEY=...  OPENAI_API_KEY=...  GEMINI_API_KEY=...
+
+services:
+  nautgate-db:
+    image: postgres:16
+    container_name: nautgate-db
+    environment:
+      POSTGRES_USER: nautgate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nautgate}
+      POSTGRES_DB: nautgate
+    volumes:
+      - nautgate-db-data:/var/lib/postgresql/data
+    # Not published — only the core container needs to reach it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nautgate -d nautgate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  nautrouter:
+    image: ghcr.io/48nauts-operator/nautrouter:latest
+    # To build locally instead of pulling, comment out `image` and uncomment:
+    # build:
+    #   context: ..
+    #   dockerfile: vendor/NautRouter/Dockerfile
+    container_name: nautrouter
+    environment:
+      NAUT_PORT: "8404"
+      NAUT_WS_PORT: "8403"
+      NAUT_PROFILE: ${NAUTGATE_PROFILE:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LMSTUDIO_URL: ${LMSTUDIO_BASE_URL:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8404/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  nautgate:
+    image: ghcr.io/48nauts-operator/nautgate:latest
+    # To build locally instead of pulling, comment out `image` and uncomment:
+    # build:
+    #   context: ..
+    #   dockerfile: core/Dockerfile
+    container_name: nautgate
+    depends_on:
+      nautgate-db:
+        condition: service_healthy
+      nautrouter:
+        condition: service_healthy
+    environment:
+      # Defaults to the bundled Postgres; point at your own by setting
+      # NAUTGATE_DB_URL in the environment.
+      NAUTGATE_DB_URL: ${NAUTGATE_DB_URL:-postgres://nautgate:${POSTGRES_PASSWORD:-nautgate}@nautgate-db:5432/nautgate}
+      NAUTGATE_LISTEN_HOST: 0.0.0.0
+      NAUTGATE_LISTEN_PORT: "8090"
+      NAUTGATE_LOG_LEVEL: ${NAUTGATE_LOG_LEVEL:-INFO}
+      NAUTGATE_PROFILE: ${NAUTGATE_PROFILE:-auto}
+      NAUTROUTER_BASE_URL: http://nautrouter:8404
+      # Provider keys also reach core — quality-eval, shadow and the drift
+      # investigator call models from here, not through the router.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      # Backups persist across restarts.
+      - nautgate-backups:/root/.nautgate/backups
+      # Uncomment to override the bundled routing/pricing tables with your own:
+      # - ./config:/app/config:ro
+    ports:
+      - "127.0.0.1:8090:8090"
+    restart: unless-stopped
+
+volumes:
+  nautgate-db-data:
+  nautgate-backups:

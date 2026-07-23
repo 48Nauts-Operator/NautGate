@@ -1,12 +1,18 @@
-# NautGate tier → provider/model routing table.
+# NautGate tier → provider/model routing table. This is the DEFAULT that ships
+# in the image; edit it (or bind-mount your own config/) to suit your providers.
 #
-# POLICY: NautGate's `auto` tier MUST NOT route to Anthropic or OpenAI
-# models — the operator holds Max-plan + ChatGPT subscriptions, so any
-# Claude/GPT spend through OpenRouter would be paying twice. Explicit
-# `claude-*` / `gpt-*` requests from Claude Code / Codex still flow through
-# their OAuth passthroughs (see app/oauth_forwarder.py + the snapshot
-# normaliser) — those use the subscription, not per-token billing. Only
-# the auto tier is restricted.
+# The default sends every `auto`-tier request to OpenRouter, because OpenRouter
+# is the "one key, every model" provider — set a single OPENROUTER_API_KEY and
+# auto-routing works out of the box. If you route through a different provider,
+# change the models below.
+#
+# Note: the `auto` tier is deliberately kept off Anthropic/OpenAI models by a
+# code-level guard (scoring.py `is_subscription_owned`) so that anyone holding a
+# Claude Max or ChatGPT subscription doesn't pay per-token for the same models
+# via OpenRouter — explicit `claude-*` / `gpt-*` requests still flow through the
+# OAuth passthrough lanes and use the subscription. If you have no such
+# subscription and want auto to reach Claude/GPT directly, that guard is the
+# thing to relax (tracked separately).
 #
 # Cost reference (per million tokens, in/out):
 #   deepseek-v4-flash   $0.14 / $0.28   (1M ctx)
