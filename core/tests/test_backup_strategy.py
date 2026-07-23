@@ -1,13 +1,16 @@
 """backup.py picks the DSN command form when pg_dump/psql are on PATH, and
 falls back to docker-exec otherwise (NAUTGATE-7)."""
+
 from unittest import mock
 
 import app.backup as backup
 
 
 def test_dump_prefers_dsn_when_pg_tools_present():
-    with mock.patch("shutil.which", return_value="/usr/bin/pg_dump"), \
-         mock.patch.object(backup, "_dsn", return_value="postgres://u:p@h:5432/d"):
+    with (
+        mock.patch("shutil.which", return_value="/usr/bin/pg_dump"),
+        mock.patch.object(backup, "_dsn", return_value="postgres://u:p@h:5432/d"),
+    ):
         cmd = backup._dump_cmd()
         assert cmd[0] == "pg_dump"
         assert cmd[1] == "postgres://u:p@h:5432/d"
