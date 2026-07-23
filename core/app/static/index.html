@@ -619,6 +619,7 @@
         <a href="#settings" data-subtab="profile" class="active">Profile</a>
         <a href="#settings" data-subtab="engram">Engram-OSS</a>
         <a href="#settings" data-subtab="quality">Quality</a>
+        <a href="#settings" data-subtab="providers">Providers</a>
         <a href="#settings" data-subtab="backups">Backups</a>
         <a href="#settings" data-subtab="keys">Keys</a>
       </div>
@@ -720,6 +721,13 @@
           <button id="qe-save">Save</button>
           <span id="qe-state" class="hint"></span>
         </div>
+      </div>
+
+      <!-- Providers sub-pane (NAUTGATE-8) -->
+      <div class="settings-pane" data-pane="providers" hidden>
+        <h2>Provider keys</h2>
+        <p class="hint" style="max-width:920px">API keys for your model providers, stored <b>encrypted at rest</b>. An in-app key overrides the matching <code>*_API_KEY</code> environment variable; clear it to fall back to the env. <span id="providers-masterkey"></span></p>
+        <div id="providers-list" class="providers-list hint">loading…</div>
       </div>
 
       <!-- Backups sub-pane -->
