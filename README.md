@@ -85,7 +85,7 @@ curl -fsSL https://nautgate.dev/compose.yml -o docker-compose.yml
 docker compose up -d
 
 # NautGate mints a first-run API key on first boot — grab it from the log:
-docker compose logs nautgate | grep -A1 'first-run key'
+docker compose logs nautgate | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+' | head -1
 ```
 
 Provider keys are optional — set the ones you use (`OPENROUTER_API_KEY`,
