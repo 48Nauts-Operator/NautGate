@@ -49,8 +49,15 @@ CHATGPT_PATH = "/backend-api/codex/responses"
 
 # Hop-by-hop headers per RFC — never forwarded between client and upstream.
 _HOP_BY_HOP = {
-    "host", "connection", "keep-alive", "proxy-authenticate",
-    "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
     "content-length",  # httpx recomputes this
     "content-encoding",  # let httpx pick / strip
 }
@@ -151,16 +158,19 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
     started_at_ns = None
     if pool is not None:
         import time as _time
+
         started_at_ns = _time.monotonic_ns()
         # Capture metadata before forwarding so a hang upstream still leaves
         # an audit trail (same pattern as the main path).
         from app.scoring import score
+
         score_vector = score(payload or {})
         messages = (payload or {}).get("messages") if isinstance(payload, dict) else None
         captured_body = capture_prompt(messages, "none") if messages else None
         captured_tools = (
             capture_tools(payload.get("tools"), "none")
-            if isinstance(payload, dict) and payload.get("tools") else None
+            if isinstance(payload, dict) and payload.get("tools")
+            else None
         )
         try:
             await queries.precapture(
@@ -173,12 +183,18 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                 classified_score=score_vector.aggregate,
                 classified_sensitivity="none",
                 decision_provider="chatgpt-oauth",
-                decision_model=(payload or {}).get("model") if isinstance(payload, dict) else "codex-default",
+                decision_model=(payload or {}).get("model")
+                if isinstance(payload, dict)
+                else "codex-default",
                 decision_reason="chatgpt-oauth:passthrough",
                 prompt_body=captured_body.body if captured_body else None,
-                prompt_body_truncated_at_byte=captured_body.truncated_at_byte if captured_body else None,
+                prompt_body_truncated_at_byte=captured_body.truncated_at_byte
+                if captured_body
+                else None,
                 tools_body=captured_tools.body if captured_tools else None,
-                tools_body_truncated_at_byte=captured_tools.truncated_at_byte if captured_tools else None,
+                tools_body_truncated_at_byte=captured_tools.truncated_at_byte
+                if captured_tools
+                else None,
                 source_ip=request.client.host if request.client else None,
                 source_hostname=request.headers.get("x-forwarded-host"),
                 messages_count=len(messages) if isinstance(messages, list) else None,
@@ -205,8 +221,10 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
         for _attempt in range(_MAX_OVERLOAD_RETRIES + 1):
             upstream = await client.send(
                 client.build_request(
-                    method=request.method, url=url,
-                    headers=fwd_headers, content=raw_body,
+                    method=request.method,
+                    url=url,
+                    headers=fwd_headers,
+                    content=raw_body,
                 ),
                 stream=True,
             )
@@ -216,10 +234,17 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
             if upstream.status_code == 529:
                 overload_retries += 1
             await upstream.aclose()
-            delay = retry_after if retry_after is not None else min(
-                _RETRY_CAP_S, _RETRY_BASE_S * (2 ** _attempt)) + 0.05 * _attempt
-            log.info("chatgpt_oauth_retry", status=upstream.status_code,
-                     attempt=_attempt + 1, delay_s=round(delay, 2))
+            delay = (
+                retry_after
+                if retry_after is not None
+                else min(_RETRY_CAP_S, _RETRY_BASE_S * (2**_attempt)) + 0.05 * _attempt
+            )
+            log.info(
+                "chatgpt_oauth_retry",
+                status=upstream.status_code,
+                attempt=_attempt + 1,
+                delay_s=round(delay, 2),
+            )
             await asyncio.sleep(delay)
     except httpx.HTTPError as exc:
         await client.aclose()
@@ -227,10 +252,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
         raise HTTPException(status_code=502, detail=f"chatgpt_unreachable: {exc}") from None
 
     # Strip hop-by-hop headers from the response on the way back.
-    response_headers = {
-        k: v for k, v in upstream.headers.items()
-        if k.lower() not in _HOP_BY_HOP
-    }
+    response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
     response_headers["X-Nautgate-Decision-Id"] = str(decision_id)
     response_headers["X-Nautgate-OAuth-Passthrough"] = "true"
 
@@ -241,6 +263,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
             async for chunk in upstream.aiter_raw():
                 if first_byte_ns is None and chunk:
                     import time as _time
+
                     first_byte_ns = _time.monotonic_ns()
                 body_buf.extend(chunk)
                 yield chunk
@@ -253,13 +276,14 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
             # Write outcome (fire-and-forget — don't break the response if it fails).
             if pool is not None:
                 import time as _time
+
                 duration_ms = (
-                    int((_time.monotonic_ns() - started_at_ns) / 1_000_000)
-                    if started_at_ns else 0
+                    int((_time.monotonic_ns() - started_at_ns) / 1_000_000) if started_at_ns else 0
                 )
                 first_byte_ms = (
                     int((first_byte_ns - started_at_ns) / 1_000_000)
-                    if first_byte_ns is not None and started_at_ns else None
+                    if first_byte_ns is not None and started_at_ns
+                    else None
                 )
                 try:
                     # Best-effort body capture for the audit detail. SSE chunks
@@ -268,9 +292,11 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                     response_captured = capture_response(response_text, "none")
                     cu = _extract_codex_usage(bytes(body_buf))
                     from app.outcome import persist_outcome
+
                     spool = getattr(request.app.state, "outcome_spool", None)
                     await persist_outcome(
-                        pool, spool,
+                        pool,
+                        spool,
                         decision_id=decision_id,
                         status_code=upstream.status_code,
                         duration_ms=duration_ms,
@@ -294,14 +320,19 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         from app.quality_eval import (
                             process_quality as _process_quality,
                         )
+
                         await _process_quality(
                             pool,
                             decision_id=decision_id,
                             judge_client=getattr(
-                                request.app.state, "quality_judge", None,
+                                request.app.state,
+                                "quality_judge",
+                                None,
                             ),
                             pricing=getattr(
-                                request.app.state, "pricing", None,
+                                request.app.state,
+                                "pricing",
+                                None,
                             ),
                         )
                     except Exception as exc:
@@ -311,6 +342,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                     # notional; real cost accounting untouched.
                     try:
                         from app.scorecard import process_brain as _process_brain
+
                         await _process_brain(
                             pool,
                             getattr(request.app.state, "pricing", None),
@@ -331,6 +363,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                     # writes actually happen. When false, this is a no-op.
                     try:
                         from app.sb_memory import ingest_outcome as _sb_ingest
+
                         sb_session_id = "proxy"
                         if isinstance(payload, dict):
                             sid = payload.get("_session_id")
@@ -341,10 +374,9 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                             agent_id="codex",
                             session_id=sb_session_id,
                             model=(payload or {}).get("model")
-                                if isinstance(payload, dict) else None,
-                            prompt_body=(
-                                captured_body.body if captured_body else None
-                            ),
+                            if isinstance(payload, dict)
+                            else None,
+                            prompt_body=(captured_body.body if captured_body else None),
                             response_body=response_captured.body,
                         )
                     except Exception as exc:

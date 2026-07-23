@@ -516,6 +516,7 @@
 
   function activateTab(name) {
     activeTab = name;
+    window.__helpPane?.setPathname("/" + name);   // keep the help pane page-aware
     document.querySelectorAll(".sidebar a[data-tab]").forEach((a) =>
       a.classList.toggle("active", a.dataset.tab === name)
     );
@@ -616,6 +617,25 @@
     const saved = localStorage.getItem(SETTINGS_SUBTAB_KEY);
     if (saved) showSettingsSubtab(saved);
   } catch (_e) {}
+
+  // Collapsible sidebar (NAUTGATE-11) — collapse to an icons-only rail; persist.
+  (function collapsibleSidebar() {
+    const KEY = "nautgate-sidebar-collapsed";
+    const shell = document.querySelector(".app-shell");
+    const btn = document.getElementById("sidebar-collapse");
+    if (!shell || !btn) return;
+    const apply = (on) => {
+      shell.classList.toggle("sidebar-collapsed", on);
+      btn.title = on ? "Expand sidebar" : "Collapse sidebar";
+      btn.setAttribute("aria-expanded", String(!on));
+    };
+    try { apply(localStorage.getItem(KEY) === "1"); } catch (_e) {}
+    btn.addEventListener("click", () => {
+      const on = !shell.classList.contains("sidebar-collapsed");
+      apply(on);
+      try { localStorage.setItem(KEY, on ? "1" : "0"); } catch (_e) {}
+    });
+  })();
 
   // --- Overview -----------------------------------------------------------
 
@@ -6210,26 +6230,79 @@
     }
   });
 
-  // Help & Ask — slide-in panel is wired in Phase 4. For now the entry
-  // points are live but the panel is a no-op placeholder.
-  function openHelp() {
-    // Phase 4: the @48nauts/help-module is React; wiring it into this vanilla
-    // dashboard is deferred. Give visible feedback so the click isn't silent.
-    searchInput?.blur();
-    let toast = document.getElementById("ng-help-toast");
-    if (!toast) {
-      toast = document.createElement("div");
-      toast.id = "ng-help-toast";
-      toast.className = "ng-toast";
-      document.body.appendChild(toast);
+  // Help & Ask — the vendored vanilla help pane (@48nauts/help-module) plus a
+  // bot wired to a NautGate-routed model. Route-aware content lives in
+  // help-content.js; the assistant streams from /v1/chat/completions.
+  (function initHelpPane() {
+    if (typeof HelpModule === "undefined" || !window.NAUTGATE_HELP) return;
+    const T = getComputedStyle(document.documentElement);
+    const v = (n, f) => (T.getPropertyValue(n).trim() || f);
+
+    async function chatHandler({ messages, context, signal, onChunk, onDone, onError }) {
+      const sys = [
+        "You are Naut, the in-app help assistant for the NautGate dashboard.",
+        "Answer concisely (2-4 sentences) about the page the user is on. Prefer the facts in the hints; don't invent features.",
+        context?.help?.title ? `Current page: ${context.help.title}. ${context.help.summary || ""}` : "",
+        ...(context?.help?.hints || []),
+      ].filter(Boolean).join("\n");
+      try {
+        const res = await fetch("/v1/chat/completions", {
+          method: "POST", signal,
+          headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "auto", stream: true,
+            messages: [{ role: "system", content: sys }, ...messages] }),
+        });
+        if (!res.ok || !res.body) { onError(new Error("chat request failed (" + res.status + ")")); return; }
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop();
+          for (const line of lines) {
+            const t = line.trim();
+            if (!t.startsWith("data:")) continue;
+            const data = t.slice(5).trim();
+            if (data === "[DONE]") { reader.cancel(); onDone(); return; }
+            try {
+              const delta = JSON.parse(data).choices?.[0]?.delta?.content;
+              if (delta) onChunk(delta);
+            } catch (_e) { /* keepalive / partial line */ }
+          }
+        }
+        buf += dec.decode();   // flush any bytes held in the decoder
+        onDone();
+      } catch (e) {
+        if (e.name === "AbortError") { onDone(); return; }
+        onError(e);
+      }
     }
-    toast.textContent = "Help & Ask — coming soon (chat assistant).";
-    toast.classList.add("show");
-    clearTimeout(openHelp._t);
-    openHelp._t = setTimeout(() => toast.classList.remove("show"), 2600);
-  }
-  document.getElementById("nav-help")?.addEventListener("click", (ev) => { ev.preventDefault(); openHelp(); });
-  document.getElementById("header-help-btn")?.addEventListener("click", (ev) => { ev.preventDefault(); openHelp(); });
+
+    const pane = HelpModule.mount(document.body, {
+      pathname: "/" + (activeTab || "overview"),
+      contentRegistry: window.NAUTGATE_HELP,
+      chatHandler,
+      persona: { name: "Naut", initial: "N", tagline: "your guide" },
+      labels: { headerLabel: "Help & Ask", collapsedLabel: "Help & Ask" },
+      theme: {
+        surface: v("--bg", "#0A0D12"), surfaceCard: v("--bg-card", "#12161F"),
+        surfaceElevated: v("--bg-raised", "#1A2029"), surfaceHover: "rgba(255,255,255,.05)",
+        textPrimary: v("--text", "#E6EBF2"), textSecondary: v("--text-dim", "#8893A4"),
+        textMuted: v("--text-dim", "#8893A4"), textInverse: "#0A0B00",
+        borderSubtle: v("--border", "#232B36"),
+        accent: v("--accent", "#808000"), accentSoft: "rgba(128,128,0,.12)", accentBorder: "rgba(128,128,0,.4)",
+        danger: "#E5484D", dangerSoft: "rgba(229,72,77,.1)", dangerBorder: "rgba(229,72,77,.4)",
+        avatarFrom: v("--accent", "#808000"), avatarTo: v("--accent-bright", "#C3CE1F"),
+      },
+    });
+    window.__helpPane = pane;
+    const openPane = (ev) => { ev.preventDefault(); pane.setOpen(true); };
+    document.getElementById("nav-help")?.addEventListener("click", openPane);
+    document.getElementById("header-help-btn")?.addEventListener("click", openPane);
+  })();
   if (importedLabel) {
     // Tiny toast: 4s pinned banner on the Overview Sessions section.
     const banner = document.createElement("div");

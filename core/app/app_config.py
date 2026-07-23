@@ -71,8 +71,11 @@ QUALITY_PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "lmstudio": {
         # Match what's already used by NautRouter for LMStudio. Strip a
         # trailing /v1 if present; quality_eval._call_judge re-appends.
-        "base_url": (os.environ.get("LMSTUDIO_BASE_URL", "http://host.docker.internal:1234")
-                     .rstrip("/").removesuffix("/v1")),
+        "base_url": (
+            os.environ.get("LMSTUDIO_BASE_URL", "http://host.docker.internal:1234")
+            .rstrip("/")
+            .removesuffix("/v1")
+        ),
         "api_key_env": "",  # LMStudio doesn't need a key
     },
 }

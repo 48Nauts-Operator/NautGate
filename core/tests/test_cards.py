@@ -31,8 +31,13 @@ def test_cards_with_separators():
 
 # --- the false positives this whole change exists to kill -------------------
 def test_packed_timestamps_are_not_cards():
-    for ts in ("20240531005850", "20240531041527", "20230629103718",
-               "20230326225437", "20230705003749"):
+    for ts in (
+        "20240531005850",
+        "20240531041527",
+        "20230629103718",
+        "20230326225437",
+        "20230705003749",
+    ):
         assert card_network(ts) is None
         assert not is_valid_card_number(ts)
 
@@ -43,9 +48,9 @@ def test_luhn_fail_rejected():
 
 
 def test_wrong_length_or_prefix_rejected():
-    assert not is_valid_card_number("1234567890123")     # no network prefix
+    assert not is_valid_card_number("1234567890123")  # no network prefix
     assert not is_valid_card_number("9999999999999999")  # 9 prefix unused
-    assert not is_valid_card_number("12345678901")       # too short
+    assert not is_valid_card_number("12345678901")  # too short
 
 
 # --- end-to-end through the classifier --------------------------------------

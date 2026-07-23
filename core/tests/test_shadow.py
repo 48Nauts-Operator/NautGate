@@ -8,12 +8,17 @@ from app.shadow import flatten_messages, shadow_verdict
 
 
 def test_flatten_plain_and_blocks():
-    body = json.dumps([
-        {"role": "system", "content": "be brief"},
-        {"role": "user", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]},
-        {"role": "assistant", "content": "prev"},
-        {"role": "user", "content": "again"},
-    ])
+    body = json.dumps(
+        [
+            {"role": "system", "content": "be brief"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+            },
+            {"role": "assistant", "content": "prev"},
+            {"role": "user", "content": "again"},
+        ]
+    )
     out = flatten_messages(body)
     assert [m["role"] for m in out] == ["system", "user", "assistant", "user"]
     assert out[1]["content"] == "a\nb"
@@ -75,8 +80,8 @@ def test_prune_keeps_system_and_tail():
 
 
 def test_prune_noop_and_unknown():
-    assert prune_messages(_msgs(4), "history-6") is None      # nothing to remove
-    assert prune_messages(_msgs(20), "nope") is None          # unknown strategy
+    assert prune_messages(_msgs(4), "history-6") is None  # nothing to remove
+    assert prune_messages(_msgs(20), "nope") is None  # unknown strategy
     assert prune_messages("bad", "history-6") is None
 
 
@@ -101,22 +106,27 @@ from app.shadow import replace_last_user  # noqa: E402
 
 
 def test_replace_last_user():
-    msgs = [{"role": "system", "content": "s"},
-            {"role": "user", "content": "old q"},
-            {"role": "assistant", "content": "a"},
-            {"role": "user", "content": "final q"}]
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "old q"},
+        {"role": "assistant", "content": "a"},
+        {"role": "user", "content": "final q"},
+    ]
     out = replace_last_user(msgs, "better q")
     assert out[3]["content"] == "better q"
-    assert out[1]["content"] == "old q"          # earlier user turn untouched
-    assert msgs[3]["content"] == "final q"        # input not mutated
+    assert out[1]["content"] == "old q"  # earlier user turn untouched
+    assert msgs[3]["content"] == "final q"  # input not mutated
     assert replace_last_user([{"role": "assistant", "content": "a"}], "x") is None
     assert replace_last_user(msgs, "") is None
 
 
 def test_openrouter_claude_id():
     from app.shadow import openrouter_claude_id
+
     assert openrouter_claude_id("claude-opus-4-8") == "openrouter/anthropic/claude-opus-4.8"
-    assert openrouter_claude_id("claude-haiku-4-5-20251001") == "openrouter/anthropic/claude-haiku-4.5"
+    assert (
+        openrouter_claude_id("claude-haiku-4-5-20251001") == "openrouter/anthropic/claude-haiku-4.5"
+    )
     assert openrouter_claude_id("claude-fable-5") == "openrouter/anthropic/claude-fable-5"
     assert openrouter_claude_id("claude-sonnet-4-6") == "openrouter/anthropic/claude-sonnet-4.6"
     assert openrouter_claude_id("claude-opus-4") == "openrouter/anthropic/claude-opus-4"

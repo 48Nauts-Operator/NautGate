@@ -49,7 +49,12 @@ async def app_with_cost(monkeypatch):
         }
 
     async def fake_timeseries(pool, *, agent_id, bucket, hours, project_id=None):
-        captured["timeseries"] = {"agent_id": agent_id, "bucket": bucket, "hours": hours, "project_id": project_id}
+        captured["timeseries"] = {
+            "agent_id": agent_id,
+            "bucket": bucket,
+            "hours": hours,
+            "project_id": project_id,
+        }
         return {
             "agent_id": agent_id,
             "bucket": bucket,

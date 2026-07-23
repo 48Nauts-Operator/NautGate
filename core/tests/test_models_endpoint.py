@@ -155,14 +155,21 @@ async def test_models_includes_lmstudio_local(monkeypatch):
         return "anonymous"
 
     monkeypatch.setattr("app.routes.v1.authenticate", fake_authenticate)
-    monkeypatch.setattr("app.routes.v1._lmstudio_models", AsyncMock(return_value=[{
-        "id": "lmstudio/qwen/qwen3.6-35b-a3b",
-        "object": "model",
-        "owned_by": "lmstudio",
-        "nautgate_provider": "lmstudio",
-        "nautgate_tiers": [],
-        "nautgate_local": True,
-    }]))
+    monkeypatch.setattr(
+        "app.routes.v1._lmstudio_models",
+        AsyncMock(
+            return_value=[
+                {
+                    "id": "lmstudio/qwen/qwen3.6-35b-a3b",
+                    "object": "model",
+                    "owned_by": "lmstudio",
+                    "nautgate_provider": "lmstudio",
+                    "nautgate_tiers": [],
+                    "nautgate_local": True,
+                }
+            ]
+        ),
+    )
 
     from app.main import create_app
 
@@ -176,7 +183,7 @@ async def test_models_includes_lmstudio_local(monkeypatch):
             resp = await c.get("/v1/models", headers={"Authorization": "Bearer ng_test"})
         data = resp.json()["data"]
 
-    assert data[0]["id"] == "auto"          # auto stays first
+    assert data[0]["id"] == "auto"  # auto stays first
     local = next(m for m in data if m.get("nautgate_local"))
     assert local["id"] == "lmstudio/qwen/qwen3.6-35b-a3b"
 
@@ -196,12 +203,14 @@ async def test_lmstudio_models_prefixes_and_filters(monkeypatch):
 
         @staticmethod
         def json():
-            return {"data": [
-                {"id": "qwen/qwen3.6-35b-a3b"},
-                {"id": "gemma-3-27b-it-qat"},
-                {"id": "text-embedding-nomic-embed-text-v1.5"},
-                {"id": "bge-reranker-v2-m3"},
-            ]}
+            return {
+                "data": [
+                    {"id": "qwen/qwen3.6-35b-a3b"},
+                    {"id": "gemma-3-27b-it-qat"},
+                    {"id": "text-embedding-nomic-embed-text-v1.5"},
+                    {"id": "bge-reranker-v2-m3"},
+                ]
+            }
 
     class _Client:
         async def __aenter__(self):

@@ -2297,3 +2297,28 @@ html, body { height: 100%; }
 }
 .app-version:hover { opacity: 1; color: var(--text); background: var(--bg-raised); }
 .app-version[hidden] { display: none; }
+/* ─── Collapsible sidebar (NAUTGATE-11) ─────────────────────────────────── */
+.sidebar { transition: width 0.16s ease; }
+.sidebar-collapse { background: transparent; border: 0; width: 100%; font: inherit; text-align: left; cursor: pointer; }
+.sidebar-collapse svg { transition: transform 0.16s ease; }
+
+/* collapsed: icons-only rail. Desktop only — below 820px the sidebar is an
+   off-canvas drawer, and the persisted collapsed class must not shrink it. */
+@media (min-width: 821px) {
+  .app-shell.sidebar-collapsed .sidebar { width: 60px; }
+  .app-shell.sidebar-collapsed .sidebar nav,
+  .app-shell.sidebar-collapsed .sidebar-footer { padding-left: 0; padding-right: 0; }
+  .app-shell.sidebar-collapsed .nav-label,
+  .app-shell.sidebar-collapsed .nav-group-label,
+  .app-shell.sidebar-collapsed .nav-chip,
+  .app-shell.sidebar-collapsed .brand-name,
+  .app-shell.sidebar-collapsed .brand-sub { display: none; }
+  .app-shell.sidebar-collapsed .sidebar nav a.nav-item,
+  .app-shell.sidebar-collapsed .sidebar-footer .nav-item { justify-content: center; padding-left: 0; padding-right: 0; }
+  .app-shell.sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+  .app-shell.sidebar-collapsed .nav-count,
+  .app-shell.sidebar-collapsed .nav-dot { display: none; }
+  .app-shell.sidebar-collapsed .sidebar-collapse svg { transform: rotate(180deg); }
+  /* keep the active-tab accent visible when collapsed */
+  .app-shell.sidebar-collapsed .sidebar nav a.nav-item.active { background: var(--bg-raised); }
+}

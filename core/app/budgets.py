@@ -36,22 +36,22 @@ log = structlog.get_logger()
 # Patterns are matched against the *lowercased* model id.
 
 _FAMILY_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("claude-opus",   re.compile(r"claude[-_]opus")),
+    ("claude-opus", re.compile(r"claude[-_]opus")),
     ("claude-sonnet", re.compile(r"claude[-_]sonnet|claude-3-7-sonnet|claude-3-5-sonnet")),
-    ("claude-haiku",  re.compile(r"claude[-_]haiku|claude-3-haiku|claude-3-5-haiku")),
-    ("gpt-5",         re.compile(r"\bgpt[-_]?5\b")),
-    ("gpt-4",         re.compile(r"\bgpt[-_]?4\b")),
-    ("gpt-3.5",       re.compile(r"\bgpt[-_]?3\.?5\b")),
-    ("o1",            re.compile(r"\bo1[-_]?")),
-    ("o3",            re.compile(r"\bo3[-_]?")),
-    ("gemini-pro",    re.compile(r"gemini[-_].*pro")),
-    ("gemini-flash",  re.compile(r"gemini[-_].*flash")),
-    ("gemini",        re.compile(r"gemini")),
-    ("deepseek",      re.compile(r"deepseek")),
-    ("kimi",          re.compile(r"kimi|moonshot")),
-    ("qwen",          re.compile(r"qwen")),
-    ("llama",         re.compile(r"llama")),
-    ("mistral",       re.compile(r"mistral|mixtral")),
+    ("claude-haiku", re.compile(r"claude[-_]haiku|claude-3-haiku|claude-3-5-haiku")),
+    ("gpt-5", re.compile(r"\bgpt[-_]?5\b")),
+    ("gpt-4", re.compile(r"\bgpt[-_]?4\b")),
+    ("gpt-3.5", re.compile(r"\bgpt[-_]?3\.?5\b")),
+    ("o1", re.compile(r"\bo1[-_]?")),
+    ("o3", re.compile(r"\bo3[-_]?")),
+    ("gemini-pro", re.compile(r"gemini[-_].*pro")),
+    ("gemini-flash", re.compile(r"gemini[-_].*flash")),
+    ("gemini", re.compile(r"gemini")),
+    ("deepseek", re.compile(r"deepseek")),
+    ("kimi", re.compile(r"kimi|moonshot")),
+    ("qwen", re.compile(r"qwen")),
+    ("llama", re.compile(r"llama")),
+    ("mistral", re.compile(r"mistral|mixtral")),
 ]
 
 
@@ -84,7 +84,7 @@ def spend_cache_clear() -> None:
 
 
 _PERIOD_SQL = {
-    "daily":   "ts >= (date_trunc('day', NOW() AT TIME ZONE 'Europe/Berlin')) AT TIME ZONE 'Europe/Berlin'",
+    "daily": "ts >= (date_trunc('day', NOW() AT TIME ZONE 'Europe/Berlin')) AT TIME ZONE 'Europe/Berlin'",
     "monthly": "ts >= (date_trunc('month', NOW() AT TIME ZONE 'Europe/Berlin')) AT TIME ZONE 'Europe/Berlin'",
 }
 
@@ -92,14 +92,17 @@ _PERIOD_SQL = {
 _SCOPE_WHERE = {
     # The model_family case scans by LIKE pattern; the resolver runs in Python
     # before the DB hit so we know which model_family substring to look for.
-    "project":      "d.project_id = $1",
-    "agent":        "d.agent_id = $1",
+    "project": "d.project_id = $1",
+    "agent": "d.agent_id = $1",
 }
 
 
 async def _compute_spend_db(
-    pool: asyncpg.Pool, *,
-    scope_type: str, scope_id: str, period: str,
+    pool: asyncpg.Pool,
+    *,
+    scope_type: str,
+    scope_id: str,
+    period: str,
 ) -> float:
     if period not in _PERIOD_SQL:
         return 0.0
@@ -112,7 +115,7 @@ async def _compute_spend_db(
             SELECT COALESCE(SUM(o.cost_usd), 0)::FLOAT AS s
               FROM nautgate.route_decisions d
               JOIN nautgate.route_outcomes o ON o.decision_id = d.id
-             WHERE d.{period_clause.split('ts')[0].strip()}ts >= (date_trunc('{period.replace('ly','')}', NOW() AT TIME ZONE 'Europe/Berlin')) AT TIME ZONE 'Europe/Berlin'
+             WHERE d.{period_clause.split("ts")[0].strip()}ts >= (date_trunc('{period.replace("ly", "")}', NOW() AT TIME ZONE 'Europe/Berlin')) AT TIME ZONE 'Europe/Berlin'
                AND LOWER(d.decision_model) ~ $1
         """
         # Build the family regex from the scope_id directly. scope_id is a
@@ -144,14 +147,18 @@ async def _compute_spend_db(
             row = await conn.fetchrow(sql, param)
         return float((row or {}).get("s") or 0.0)
     except Exception as exc:
-        log.warning("budget_spend_query_failed",
-                    scope_type=scope_type, scope_id=scope_id, error=str(exc))
+        log.warning(
+            "budget_spend_query_failed", scope_type=scope_type, scope_id=scope_id, error=str(exc)
+        )
         return 0.0
 
 
 async def get_spend(
-    pool: asyncpg.Pool, *,
-    scope_type: str, scope_id: str, period: str,
+    pool: asyncpg.Pool,
+    *,
+    scope_type: str,
+    scope_id: str,
+    period: str,
 ) -> float:
     key = (scope_type, scope_id, period)
     now = time.monotonic()
@@ -159,7 +166,10 @@ async def get_spend(
     if cached is not None and (now - cached[0]) < _SPEND_TTL_SEC:
         return cached[1]
     value = await _compute_spend_db(
-        pool, scope_type=scope_type, scope_id=scope_id, period=period,
+        pool,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        period=period,
     )
     _spend_cache[key] = (now, value)
     return value
@@ -198,6 +208,7 @@ def record_spend_increment(
 
 # ── Budget rows ────────────────────────────────────────────────────────────
 
+
 @dataclass
 class BudgetRow:
     scope_type: str
@@ -217,18 +228,27 @@ async def list_budgets(pool: asyncpg.Pool) -> list[BudgetRow]:
         )
     return [
         BudgetRow(
-            scope_type=r["scope_type"], scope_id=r["scope_id"], period=r["period"],
-            cap_usd=float(r["cap_usd"]), warn_at_pct=float(r["warn_at_pct"]),
-            enabled=bool(r["enabled"]), note=r["note"],
+            scope_type=r["scope_type"],
+            scope_id=r["scope_id"],
+            period=r["period"],
+            cap_usd=float(r["cap_usd"]),
+            warn_at_pct=float(r["warn_at_pct"]),
+            enabled=bool(r["enabled"]),
+            note=r["note"],
         )
         for r in rows
     ]
 
 
 async def upsert_budget(
-    pool: asyncpg.Pool, *,
-    scope_type: str, scope_id: str, period: str,
-    cap_usd: float, warn_at_pct: float = 80.0, enabled: bool = True,
+    pool: asyncpg.Pool,
+    *,
+    scope_type: str,
+    scope_id: str,
+    period: str,
+    cap_usd: float,
+    warn_at_pct: float = 80.0,
+    enabled: bool = True,
     note: str | None = None,
 ) -> BudgetRow:
     if scope_type not in ("project", "agent", "model_family"):
@@ -248,21 +268,31 @@ async def upsert_budget(
                   note        = EXCLUDED.note,
                   updated_at  = now()
             """,
-            scope_type, scope_id, period, cap_usd, warn_at_pct, enabled, note,
+            scope_type,
+            scope_id,
+            period,
+            cap_usd,
+            warn_at_pct,
+            enabled,
+            note,
         )
     spend_cache_clear()  # cap change may flip warn/exceed state immediately
     return BudgetRow(scope_type, scope_id, period, cap_usd, warn_at_pct, enabled, note)
 
 
 async def delete_budget(
-    pool: asyncpg.Pool, *,
-    scope_type: str, scope_id: str, period: str,
+    pool: asyncpg.Pool,
+    *,
+    scope_type: str,
+    scope_id: str,
+    period: str,
 ) -> bool:
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "DELETE FROM nautgate.budgets "
-            "WHERE scope_type = $1 AND scope_id = $2 AND period = $3",
-            scope_type, scope_id, period,
+            "DELETE FROM nautgate.budgets WHERE scope_type = $1 AND scope_id = $2 AND period = $3",
+            scope_type,
+            scope_id,
+            period,
         )
     spend_cache_clear()
     return result.endswith("1")
@@ -270,23 +300,31 @@ async def delete_budget(
 
 # ── Enforcement ────────────────────────────────────────────────────────────
 
+
 @dataclass
 class BudgetEvaluation:
     """The outcome of evaluating every applicable budget for one request."""
-    blocked: bool                # any budget at or over 100% → True
-    block_reason: str | None     # 'scope:scope_id:cap=X spent=Y' or None
-    warnings: list[str]          # 'scope:scope_id:80%-100%' for each over warn
+
+    blocked: bool  # any budget at or over 100% → True
+    block_reason: str | None  # 'scope:scope_id:cap=X spent=Y' or None
+    warnings: list[str]  # 'scope:scope_id:80%-100%' for each over warn
     spends: dict[tuple[str, str, str], tuple[float, float, float]]
     # spends[(scope, id, period)] = (cap, spent, pct)
 
 
 _NO_BUDGETS = BudgetEvaluation(
-    blocked=False, block_reason=None, warnings=[], spends={},
+    blocked=False,
+    block_reason=None,
+    warnings=[],
+    spends={},
 )
 
 
 def _candidate_scopes(
-    *, agent_id: str | None, project_id: str | None, decision_model: str | None,
+    *,
+    agent_id: str | None,
+    project_id: str | None,
+    decision_model: str | None,
 ) -> list[tuple[str, str]]:
     """Which (scope_type, scope_id) keys could possibly match a budget row?"""
     out: list[tuple[str, str]] = []
@@ -301,7 +339,8 @@ def _candidate_scopes(
 
 
 async def evaluate(
-    pool: asyncpg.Pool, *,
+    pool: asyncpg.Pool,
+    *,
     agent_id: str | None,
     project_id: str | None,
     decision_model: str | None,
@@ -314,7 +353,9 @@ async def evaluate(
     if pool is None:
         return _NO_BUDGETS
     candidates = _candidate_scopes(
-        agent_id=agent_id, project_id=project_id, decision_model=decision_model,
+        agent_id=agent_id,
+        project_id=project_id,
+        decision_model=decision_model,
     )
     if not candidates:
         return _NO_BUDGETS
@@ -342,7 +383,8 @@ async def evaluate(
                     rs = await conn.fetch(
                         "SELECT scope_type, scope_id, period, cap_usd, warn_at_pct, enabled "
                         "FROM nautgate.budgets WHERE scope_type = $1 AND scope_id = $2",
-                        st, sid,
+                        st,
+                        sid,
                     )
                     rows.extend(rs)
         except Exception as exc2:
@@ -362,13 +404,17 @@ async def evaluate(
             continue
         spent = await get_spend(
             pool,
-            scope_type=r["scope_type"], scope_id=r["scope_id"], period=r["period"],
+            scope_type=r["scope_type"],
+            scope_id=r["scope_id"],
+            period=r["period"],
         )
         pct = (spent / cap * 100.0) if cap > 0 else 0.0
         key = (r["scope_type"], r["scope_id"], r["period"])
         spends[key] = (cap, spent, pct)
         if pct >= 100.0 and r["enabled"]:
-            reason = f"{r['scope_type']}:{r['scope_id']}:{r['period']}:cap=${cap:.2f}:spent=${spent:.2f}"
+            reason = (
+                f"{r['scope_type']}:{r['scope_id']}:{r['period']}:cap=${cap:.2f}:spent=${spent:.2f}"
+            )
             # Take the first blocker, but keep looking so the response lists
             # all warnings/over-caps as well.
             if block_reason is None:

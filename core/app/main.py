@@ -7,6 +7,7 @@ from pathlib import Path
 # (where you typically launch uvicorn from) then repo root.
 try:
     from dotenv import load_dotenv
+
     _here = Path(__file__).resolve().parent.parent  # → core/
     # Search core/.env, repo-root .env, deploy/.env — apply ALL that exist
     # (no break), with later ones not overriding earlier so the explicit
@@ -110,6 +111,7 @@ async def lifespan(app: FastAPI):
     # NautRouter so judge calls never get re-routed, never appear in our
     # own routing analytics, and don't create a feedback loop.
     import httpx as _httpx
+
     app.state.quality_judge = _httpx.AsyncClient(
         timeout=_httpx.Timeout(15.0, connect=2.0),
         limits=_httpx.Limits(max_keepalive_connections=4, max_connections=8),
@@ -128,34 +130,48 @@ async def lifespan(app: FastAPI):
     # so on an isolated box they produce a steady outbound beacon to providers
     # that aren't being used. Serving local models needs neither.
     import os as _os
-    app.state.offline = _os.environ.get("NAUTGATE_OFFLINE", "").strip().lower() in ("1", "true", "yes")
+
+    app.state.offline = _os.environ.get("NAUTGATE_OFFLINE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     if app.state.db is not None:
         import asyncio as _asyncio
 
         # Backup is local-only (writes to disk) — it runs in offline mode too.
         from app.backup import run_scheduler as _backup_scheduler
+
         app.state.backup_task = _asyncio.create_task(_backup_scheduler(app.state.db))
 
         # Both schedulers check app_config.is_offline() each tick and stand
         # down while offline, so the Settings toggle takes effect live — no
         # restart, which is what makes it demonstrable in front of an audience.
         if app.state.offline:
-            log.info("offline_mode_forced_by_env",
-                     hint="NAUTGATE_OFFLINE=1 — no outbound provider calls on a timer")
+            log.info(
+                "offline_mode_forced_by_env",
+                hint="NAUTGATE_OFFLINE=1 — no outbound provider calls on a timer",
+            )
 
         # LLM-Probing scheduler — disabled by default in config, so this idles
         # until the operator enables it + sets targets on the dashboard.
         from app.llm_probe_scheduler import run_scheduler as _probe_scheduler
+
         app.state.llm_probe_task = _asyncio.create_task(
-            _probe_scheduler(app.state.db, pricing=app.state.pricing,
-                             judge_client=app.state.quality_judge))
+            _probe_scheduler(
+                app.state.db, pricing=app.state.pricing, judge_client=app.state.quality_judge
+            )
+        )
 
         # Active provider-status heartbeat (60s) → app.state.provider_status.
         from app.provider_heartbeat import run_scheduler as _heartbeat_scheduler
+
         app.state.heartbeat_task = _asyncio.create_task(
-            _heartbeat_scheduler(app.state.db, pricing=app.state.pricing,
-                                 state=app.state.provider_status))
+            _heartbeat_scheduler(
+                app.state.db, pricing=app.state.pricing, state=app.state.provider_status
+            )
+        )
 
     try:
         yield
@@ -172,6 +188,7 @@ async def lifespan(app: FastAPI):
             await app.state.plugins.aclose()
         try:
             from app.sb_memory import close_pool as _sb_close_pool
+
             await _sb_close_pool()
         except Exception:
             pass
@@ -207,6 +224,7 @@ def create_app() -> FastAPI:
     # Isolated Pi-only OpenAI Responses passthrough (POST /pi/v1/responses).
     # Additive; touches no existing route. See app/pi_responses.py.
     from app import pi_responses
+
     app.include_router(pi_responses.router)
 
     static_dir = Path(__file__).resolve().parent / "static"
@@ -245,15 +263,19 @@ def create_app() -> FastAPI:
             except OSError:
                 css_v = js_v = kit_v = 0
             index_html = _read_index()
-            html = index_html.replace(
-                'href="/static/style.css"',
-                f'href="/static/style.css?v={css_v}"',
-            ).replace(
-                'src="/static/app.js"',
-                f'src="/static/app.js?v={js_v}"',
-            ).replace(
-                'src="/static/kit.js"',
-                f'src="/static/kit.js?v={kit_v}"',
+            html = (
+                index_html.replace(
+                    'href="/static/style.css"',
+                    f'href="/static/style.css?v={css_v}"',
+                )
+                .replace(
+                    'src="/static/app.js"',
+                    f'src="/static/app.js?v={js_v}"',
+                )
+                .replace(
+                    'src="/static/kit.js"',
+                    f'src="/static/kit.js?v={kit_v}"',
+                )
             )
             # If a local admin token is configured, inject it into a <meta> tag
             # so the JS skips manual entry. Token is server-rendered into the

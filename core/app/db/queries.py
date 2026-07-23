@@ -319,7 +319,11 @@ async def get_cost_summary(
         # New: per-agent breakdown only useful on the "all" view.
         by_agent = await _by("d.agent_id") if is_all else []
         # Per-project breakdown — only meaningful when not already filtered.
-        by_project = await _by("COALESCE(d.project_id, '(none)')") if not project_id or project_id == "*" else []
+        by_project = (
+            await _by("COALESCE(d.project_id, '(none)')")
+            if not project_id or project_id == "*"
+            else []
+        )
 
     return {
         "agent_id": "*" if is_all else agent_id,
@@ -468,34 +472,45 @@ async def get_prefix_reuse(
         writes = int(r["writes"] or 0)
         p50 = float(r["ttft_p50"]) if r["ttft_p50"] is not None else None
         p90 = float(r["ttft_p90"]) if r["ttft_p90"] is not None else None
-        items.append({
-            "prefix_hash": r["prefix_hash"],
-            "model": r["model"],
-            "calls": int(r["calls"] or 0),
-            "reads": reads,
-            "writes": writes,
-            "reuse_ratio": (reads / writes) if writes else None,
-            "ttft_n": int(r["ttft_n"] or 0),
-            "ttft_p50_ms": round(p50) if p50 is not None else None,
-            "ttft_spread_ms": (round(p90 - p50) if p50 is not None and p90 is not None else None),
-            "ttft_min_ms": r["ttft_min"],
-            "ttft_max_ms": r["ttft_max"],
-            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
-        })
+        items.append(
+            {
+                "prefix_hash": r["prefix_hash"],
+                "model": r["model"],
+                "calls": int(r["calls"] or 0),
+                "reads": reads,
+                "writes": writes,
+                "reuse_ratio": (reads / writes) if writes else None,
+                "ttft_n": int(r["ttft_n"] or 0),
+                "ttft_p50_ms": round(p50) if p50 is not None else None,
+                "ttft_spread_ms": (
+                    round(p90 - p50) if p50 is not None and p90 is not None else None
+                ),
+                "ttft_min_ms": r["ttft_min"],
+                "ttft_max_ms": r["ttft_max"],
+                "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+            }
+        )
 
     top_reused = sorted(items, key=lambda x: x["reads"], reverse=True)[:limit]
     # Leaky: wrote to cache but got little back. Needs ≥2 calls (a one-off write
     # that never recurs isn't a leak) and a poor reuse ratio.
     leaky = sorted(
-        [x for x in items if x["writes"] > 0 and x["calls"] >= 2
-         and (x["reuse_ratio"] is None or x["reuse_ratio"] < 1.0)],
-        key=lambda x: x["writes"], reverse=True,
+        [
+            x
+            for x in items
+            if x["writes"] > 0
+            and x["calls"] >= 2
+            and (x["reuse_ratio"] is None or x["reuse_ratio"] < 1.0)
+        ],
+        key=lambda x: x["writes"],
+        reverse=True,
     )[:limit]
     # Latency: needs ≥2 timed calls on the same prefix. Sorted by spread desc so
     # the coldest/thrashing caches surface first (works for local + cloud).
     latency = sorted(
         [x for x in items if x["ttft_n"] >= 2 and x["ttft_spread_ms"] is not None],
-        key=lambda x: x["ttft_spread_ms"], reverse=True,
+        key=lambda x: x["ttft_spread_ms"],
+        reverse=True,
     )[:limit]
 
     return {"window_hours": hours, "top_reused": top_reused, "leaky": leaky, "latency": latency}
@@ -597,7 +612,9 @@ async def get_projects_with_stats(pool: asyncpg.Pool) -> list[dict]:
             "agent_count": int(r["agent_count"]),
             "agents": list(r["agents"] or []),
             "call_count_30d": int(r["call_count_30d"] or 0),
-            "total_cost_usd_30d": float(r["total_cost_usd_30d"] or 0) if r["total_cost_usd_30d"] else 0.0,
+            "total_cost_usd_30d": float(r["total_cost_usd_30d"] or 0)
+            if r["total_cost_usd_30d"]
+            else 0.0,
             "last_call": r["last_call"].isoformat() if r["last_call"] else None,
         }
         for r in rows
@@ -765,8 +782,13 @@ async def get_decision_detail(
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
     # JSONB fields come back as strings from asyncpg without a codec — try to parse.
-    for k in ("classified_signals", "brain_hints", "tool_calls_made",
-              "fallback_chain", "bloat_findings"):
+    for k in (
+        "classified_signals",
+        "brain_hints",
+        "tool_calls_made",
+        "fallback_chain",
+        "bloat_findings",
+    ):
         v = d.get(k)
         if isinstance(v, str):
             try:
@@ -778,7 +800,9 @@ async def get_decision_detail(
     if d.get("estimated_waste_usd") is not None:
         d["estimated_waste_usd"] = float(d["estimated_waste_usd"])
     # Token breakdown computed on read from prompt_body when body was captured.
-    d["token_estimate"] = _token_breakdown_from_body(d.get("prompt_body"), _content_text, _estimate_tokens)
+    d["token_estimate"] = _token_breakdown_from_body(
+        d.get("prompt_body"), _content_text, _estimate_tokens
+    )
     # Full payload anatomy — bytes/tokens per section + the raw content of each.
     # This is what answers "when I type 4 words, what *actually* ships upstream?"
     d["payload_anatomy"] = _payload_anatomy(
@@ -896,10 +920,16 @@ def _payload_anatomy(
     user_section = _section(user_items)
 
     total_bytes = (
-        sys_section["bytes"] + tools_section["bytes"] + history_section["bytes"] + user_section["bytes"]
+        sys_section["bytes"]
+        + tools_section["bytes"]
+        + history_section["bytes"]
+        + user_section["bytes"]
     )
     total_tokens = (
-        sys_section["tokens"] + tools_section["tokens"] + history_section["tokens"] + user_section["tokens"]
+        sys_section["tokens"]
+        + tools_section["tokens"]
+        + history_section["tokens"]
+        + user_section["tokens"]
     )
 
     return {
@@ -926,7 +956,9 @@ def _token_breakdown_from_body(body: str | None, content_fn, est_fn) -> dict | N
     except (ValueError, TypeError):
         return None
     # Body may be just messages list (the shape capture_prompt stores) — handle both.
-    messages = data if isinstance(data, list) else data.get("messages") if isinstance(data, dict) else None
+    messages = (
+        data if isinstance(data, list) else data.get("messages") if isinstance(data, dict) else None
+    )
     if not isinstance(messages, list):
         return None
     last_user = -1
@@ -1138,6 +1170,7 @@ async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
 # Backs the Quality tab and the Coach accordion in the Audit drawer. Inserts
 # are fire-and-forget from the post-outcome hook; reads serve the dashboard.
 
+
 async def insert_quality_eval(
     pool: asyncpg.Pool,
     *,
@@ -1177,8 +1210,17 @@ async def insert_quality_eval(
                 trigger = EXCLUDED.trigger,
                 anti_pattern = EXCLUDED.anti_pattern
             """,
-            did, judge_provider, judge_model, judge_cost_usd, judge_latency_ms,
-            rubric_json, tags, suggested_prompt, coach_notes, trigger, anti_pattern,
+            did,
+            judge_provider,
+            judge_model,
+            judge_cost_usd,
+            judge_latency_ms,
+            rubric_json,
+            tags,
+            suggested_prompt,
+            coach_notes,
+            trigger,
+            anti_pattern,
         )
 
 
@@ -1227,13 +1269,20 @@ async def get_daily_judge_spend(pool: asyncpg.Pool) -> float:
 # table layout stays stable; new tags emitted by the judge that aren't in
 # this list still get stored, they just don't get their own column.
 QUALITY_FAILURE_TAGS = [
-    "over_thinking", "off_task", "looped", "hallucination",
-    "partial_answer", "refusal", "tool_misuse",
+    "over_thinking",
+    "off_task",
+    "looped",
+    "hallucination",
+    "partial_answer",
+    "refusal",
+    "tool_misuse",
 ]
 
 
 async def get_behavior_per_model(
-    pool: asyncpg.Pool, *, hours: int = 168,
+    pool: asyncpg.Pool,
+    *,
+    hours: int = 168,
 ) -> list[dict]:
     """Per-model behavioral analytics for the Behavior tab.
 
@@ -1278,10 +1327,15 @@ async def get_behavior_per_model(
     for r in rows:
         d = dict(r)
         for k in (
-            "avg_action_compliance", "avg_task_completion",
-            "avg_reasoning_efficiency", "avg_reasoning_tokens",
-            "avg_duration_ms", "skipped_doc_rate", "edit_without_read_rate",
-            "premature_action_rate", "retry_loop_rate",
+            "avg_action_compliance",
+            "avg_task_completion",
+            "avg_reasoning_efficiency",
+            "avg_reasoning_tokens",
+            "avg_duration_ms",
+            "skipped_doc_rate",
+            "edit_without_read_rate",
+            "premature_action_rate",
+            "retry_loop_rate",
         ):
             if d.get(k) is not None:
                 d[k] = float(d[k])
@@ -1290,7 +1344,9 @@ async def get_behavior_per_model(
 
 
 async def get_behavior_trace(
-    pool: asyncpg.Pool, *, decision_id: str | UUID,
+    pool: asyncpg.Pool,
+    *,
+    decision_id: str | UUID,
 ) -> dict | None:
     """Full prompt-action trace for a single decision.
 
@@ -1347,7 +1403,10 @@ async def get_behavior_trace(
 
 
 async def get_quality_summary(
-    pool: asyncpg.Pool, *, hours: int, model_filter: str | None = None,
+    pool: asyncpg.Pool,
+    *,
+    hours: int,
+    model_filter: str | None = None,
 ) -> dict:
     """Aggregate quality_evals for the Quality tab.
 
@@ -1462,7 +1521,12 @@ async def get_quality_summary(
     for r in heatmap_rows:
         m = r["model"]
         slot = heatmap_by_model.setdefault(
-            m, {"model": m, "buckets": {b: None for b in bucket_labels}, "counts": {b: 0 for b in bucket_labels}}
+            m,
+            {
+                "model": m,
+                "buckets": {b: None for b in bucket_labels},
+                "counts": {b: 0 for b in bucket_labels},
+            },
         )
         # width_bucket(value, 0, 10, 5) returns 1..5 for in-range, 0 for <0, 6 for >=10
         idx = max(1, min(5, int(r["bucket_idx"] or 1)))
@@ -1482,7 +1546,9 @@ async def get_quality_summary(
             {
                 "model": r["model"],
                 "evaluations": int(r["evaluations"]),
-                "avg_completion": float(r["avg_completion"]) if r["avg_completion"] is not None else None,
+                "avg_completion": float(r["avg_completion"])
+                if r["avg_completion"] is not None
+                else None,
                 "failure_rate": float(r["failure_rate"]) if r["failure_rate"] is not None else None,
             }
             for r in by_model_rows
@@ -1540,8 +1606,13 @@ async def get_probe_config(pool: asyncpg.Pool) -> dict:
              FROM nautgate.llm_probe_config WHERE id = 1"""
     )
     if row is None:
-        return {"enabled": False, "interval_hours": 6, "targets": [],
-                "last_run_at": None, "next_run_at": None}
+        return {
+            "enabled": False,
+            "interval_hours": 6,
+            "targets": [],
+            "last_run_at": None,
+            "next_run_at": None,
+        }
     d = dict(row)
     d["targets"] = list(d.get("targets") or [])
     for k in ("last_run_at", "next_run_at", "updated_at"):
@@ -1597,12 +1668,25 @@ async def insert_probe_run(pool: asyncpg.Pool, **f) -> None:
              status_code, quality_score, refused, cost_usd, error)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
         """,
-        f["cycle_id"], f["probe_name"], f["provider"], f["model"], f["via"],
-        f.get("observed_model"), f.get("prompt_bytes"), f.get("prompt_tokens"),
-        f.get("completion_tokens"), f.get("tokens_per_byte"), f.get("response_sha"),
-        f.get("response_text"), f.get("first_byte_ms"), f.get("duration_ms"),
-        f.get("status_code"), f.get("quality_score"), bool(f.get("refused", False)),
-        f.get("cost_usd"), f.get("error"),
+        f["cycle_id"],
+        f["probe_name"],
+        f["provider"],
+        f["model"],
+        f["via"],
+        f.get("observed_model"),
+        f.get("prompt_bytes"),
+        f.get("prompt_tokens"),
+        f.get("completion_tokens"),
+        f.get("tokens_per_byte"),
+        f.get("response_sha"),
+        f.get("response_text"),
+        f.get("first_byte_ms"),
+        f.get("duration_ms"),
+        f.get("status_code"),
+        f.get("quality_score"),
+        bool(f.get("refused", False)),
+        f.get("cost_usd"),
+        f.get("error"),
     )
 
 
@@ -1613,8 +1697,12 @@ async def insert_probe_alert(pool: asyncpg.Pool, **f) -> None:
             (cycle_id, provider, model, alert_type, severity, detail)
         VALUES ($1,$2,$3,$4,$5,$6::jsonb)
         """,
-        f.get("cycle_id"), f["provider"], f["model"], f["alert_type"],
-        f.get("severity", "warning"), json.dumps(f.get("detail") or {}),
+        f.get("cycle_id"),
+        f["provider"],
+        f["model"],
+        f["alert_type"],
+        f.get("severity", "warning"),
+        json.dumps(f.get("detail") or {}),
     )
 
 
@@ -1640,14 +1728,28 @@ async def get_probe_baseline(pool, *, provider, via, model, metric) -> dict | No
         """SELECT ewma_mean, ewma_variance, sample_count, consecutive_anomalies
              FROM nautgate.llm_probe_baselines
             WHERE provider=$1 AND via=$2 AND model=$3 AND metric=$4""",
-        provider, via, model, metric,
+        provider,
+        via,
+        model,
+        metric,
     )
     return dict(row) if row else None
 
 
-async def upsert_probe_baseline(pool, *, provider, via, model, metric,
-                                ewma_mean, ewma_variance, sample_count,
-                                consecutive_anomalies, last_observed, last_z_score) -> None:
+async def upsert_probe_baseline(
+    pool,
+    *,
+    provider,
+    via,
+    model,
+    metric,
+    ewma_mean,
+    ewma_variance,
+    sample_count,
+    consecutive_anomalies,
+    last_observed,
+    last_z_score,
+) -> None:
     await pool.execute(
         """
         INSERT INTO nautgate.llm_probe_baselines
@@ -1658,15 +1760,25 @@ async def upsert_probe_baseline(pool, *, provider, via, model, metric,
             ewma_mean=$5, ewma_variance=$6, sample_count=$7,
             consecutive_anomalies=$8, last_observed=$9, last_z_score=$10, updated_at=now()
         """,
-        provider, via, model, metric, ewma_mean, ewma_variance, sample_count,
-        consecutive_anomalies, last_observed, last_z_score,
+        provider,
+        via,
+        model,
+        metric,
+        ewma_mean,
+        ewma_variance,
+        sample_count,
+        consecutive_anomalies,
+        last_observed,
+        last_z_score,
     )
 
 
 async def get_probe_summary(pool: asyncpg.Pool, *, hours: int = 168) -> dict:
     """Latest cycle's runs per (provider, model), split by transport leg, so the
     dashboard can show subscription vs metered side-by-side + provenance."""
-    latest = await pool.fetchval("SELECT cycle_id FROM nautgate.llm_probe_runs ORDER BY ts DESC LIMIT 1")
+    latest = await pool.fetchval(
+        "SELECT cycle_id FROM nautgate.llm_probe_runs ORDER BY ts DESC LIMIT 1"
+    )
     targets: dict = {}
     if latest is not None:
         rows = await pool.fetch(
@@ -1677,12 +1789,22 @@ async def get_probe_summary(pool: asyncpg.Pool, *, hours: int = 168) -> dict:
         )
         for r in rows:
             key = f"{r['provider']}/{r['model']}"
-            t = targets.setdefault(key, {"provider": r["provider"], "model": r["model"], "legs": {}})
-            leg = t["legs"].setdefault(r["via"], {
-                "via": r["via"], "observed_model": None, "tokens_per_byte": None,
-                "first_byte_ms": None, "quality_score": None, "refused": False,
-                "status_code": r["status_code"], "error": None,
-            })
+            t = targets.setdefault(
+                key, {"provider": r["provider"], "model": r["model"], "legs": {}}
+            )
+            leg = t["legs"].setdefault(
+                r["via"],
+                {
+                    "via": r["via"],
+                    "observed_model": None,
+                    "tokens_per_byte": None,
+                    "first_byte_ms": None,
+                    "quality_score": None,
+                    "refused": False,
+                    "status_code": r["status_code"],
+                    "error": None,
+                },
+            )
             # Pull each fingerprint from its dedicated probe, not whichever row
             # sorted first (provenance_ping's tiny prompt has a different ratio).
             if leg["observed_model"] is None and r["observed_model"]:
@@ -1711,13 +1833,16 @@ async def get_probe_history(pool: asyncpg.Pool, *, model: str, hours: int = 720)
              FROM nautgate.llm_probe_runs
             WHERE model = $1 AND ts > NOW() - make_interval(hours => $2)
             ORDER BY ts DESC LIMIT 500""",
-        model, hours,
+        model,
+        hours,
     )
     out = []
     for r in rows:
         d = dict(r)
         d["ts"] = d["ts"].isoformat() if d["ts"] else None
-        d["tokens_per_byte"] = float(d["tokens_per_byte"]) if d["tokens_per_byte"] is not None else None
+        d["tokens_per_byte"] = (
+            float(d["tokens_per_byte"]) if d["tokens_per_byte"] is not None else None
+        )
         d["quality_score"] = float(d["quality_score"]) if d["quality_score"] is not None else None
         out.append(d)
     return out
@@ -1772,9 +1897,14 @@ async def get_provider_status(pool: asyncpg.Pool, *, minutes: int = 10) -> dict:
         else:
             status = "up"
         out[r["provider"]] = {
-            "status": status, "total": total, "success": ok,
-            "overloaded": overloaded, "rate_limited": rl, "errors": errors,
-            "retries_absorbed": retries, "overload_pct": round(overload_pct, 4),
+            "status": status,
+            "total": total,
+            "success": ok,
+            "overloaded": overloaded,
+            "rate_limited": rl,
+            "errors": errors,
+            "retries_absorbed": retries,
+            "overload_pct": round(overload_pct, 4),
             "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
         }
     return out
@@ -1782,8 +1912,13 @@ async def get_provider_status(pool: asyncpg.Pool, *, minutes: int = 10) -> dict:
 
 # --- API key management (Settings → Keys: name + TTL + revoke) ----------
 async def create_api_key(
-    pool: asyncpg.Pool, *, name: str, agent_id: str, ttl_days: int | None,
-    profile: str = "auto", override_model: str | None = None
+    pool: asyncpg.Pool,
+    *,
+    name: str,
+    agent_id: str,
+    ttl_days: int | None,
+    profile: str = "auto",
+    override_model: str | None = None,
 ) -> dict:
     """Mint a key with a name + optional TTL. Returns metadata + the plaintext
     token (shown once, never stored). ``override_model`` pins the key to one
@@ -1800,7 +1935,13 @@ async def create_api_key(
                     CASE WHEN $7::int IS NULL THEN NULL ELSE NOW() + make_interval(days => $7) END)
             RETURNING id::text, name, agent_id, default_profile, override_model, created_at, expires_at
             """,
-            key_id, key_hash, agent_id, name, profile, override_model or None, ttl_days,
+            key_id,
+            key_hash,
+            agent_id,
+            name,
+            profile,
+            override_model or None,
+            ttl_days,
         )
     d = dict(row)
     for k in ("created_at", "expires_at"):
