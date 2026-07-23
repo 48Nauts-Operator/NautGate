@@ -36,6 +36,9 @@ jobs:
           - name: nautrouter
             context: vendor/NautRouter
             dockerfile: vendor/NautRouter/Dockerfile
+          - name: nautproxy
+            context: .
+            dockerfile: deploy/nautproxy.Dockerfile
     steps:
       - uses: actions/checkout@v4
 
