@@ -692,6 +692,23 @@
     if (saved) showSettingsSubtab(saved);
   } catch (_e) {}
 
+  // Orca settings surface (NAUTGATE-12): back link + nav search.
+  document.querySelector(".settings-back")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    activateTab("overview");
+  });
+  const settingsSearch = document.getElementById("settings-search-input");
+  settingsSearch?.addEventListener("input", () => {
+    const q = settingsSearch.value.trim().toLowerCase();
+    document.querySelectorAll(".settings-nav a[data-subtab]").forEach((a) => {
+      a.hidden = !!q && !a.textContent.trim().toLowerCase().includes(q);
+    });
+    document.querySelectorAll(".settings-nav-group").forEach((g) => {
+      const any = [...g.querySelectorAll("a[data-subtab]")].some((a) => !a.hidden);
+      g.style.display = any ? "" : "none";
+    });
+  });
+
   // --- Overview -----------------------------------------------------------
 
   let overviewWindow = { hours: 24, bucket: "hour" };
