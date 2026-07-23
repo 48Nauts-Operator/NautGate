@@ -6197,6 +6197,12 @@
   }
   renderAuth();
   renderSessions();
+
+  // Version chip, bottom-right (NAUTGATE-13) — from /health.
+  fetch("/health").then((r) => r.json()).then((d) => {
+    const el = document.getElementById("app-version");
+    if (el && d.version) { el.textContent = "v" + d.version; el.hidden = false; }
+  }).catch(() => {});
   // Auto-discover OAuth-derived agents (claude-oauth-…, codex-…) and merge
   // them into the session picker so they show up without manual setup.
   // Runs once on load + every 60s thereafter so new logins appear within
