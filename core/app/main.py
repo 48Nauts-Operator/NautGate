@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import crypto
 from app.db import queries
 from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
@@ -114,6 +115,9 @@ async def lifespan(app: FastAPI):
     pricing_path = Path(settings.nautgate_pricing_config_path or DEFAULT_PRICING_CONFIG)
     app.state.pricing = PricingTable.from_yaml(pricing_path)
     log.info("pricing_table_loaded", path=str(pricing_path), models=app.state.pricing.size)
+
+    # Guarantee a master key so in-app provider keys work with zero config (no .env).
+    crypto.ensure_master_key()
 
     if settings.nautgate_db_url:
         try:

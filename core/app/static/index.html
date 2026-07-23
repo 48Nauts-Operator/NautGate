@@ -860,7 +860,7 @@
       <h2 id="firstrun-title">Welcome to NautGate</h2>
       <p>The gateway is running. Activate this dashboard with your first-run API key.</p>
       <p class="firstrun-hint">NautGate printed one to the container log when it first started:</p>
-      <code class="firstrun-cmd">docker compose logs nautgate | grep -A1 first-run</code>
+      <code class="firstrun-cmd">docker compose logs nautgate | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+'</code>
       <label class="firstrun-field" for="firstrun-token">Paste your key</label>
       <input id="firstrun-token" type="password" autocomplete="off" spellcheck="false" placeholder="ng_…" />
       <div class="firstrun-err" id="firstrun-err" role="alert"></div>
