@@ -79,7 +79,18 @@ def _psql_cmd(extra: list[str]) -> list[str]:
     """psql argv for restore. DSN form when available, else docker exec."""
     if _use_dsn():
         return ["psql", _dsn(), *extra]
-    return ["docker", "exec", "-i", _db_container(), "psql", "-U", "nautgate", "-d", "nautgate", *extra]
+    return [
+        "docker",
+        "exec",
+        "-i",
+        _db_container(),
+        "psql",
+        "-U",
+        "nautgate",
+        "-d",
+        "nautgate",
+        *extra,
+    ]
 
 
 def _backup_filename(now: datetime, via: str) -> str:
