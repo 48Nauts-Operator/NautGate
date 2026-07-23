@@ -37,12 +37,13 @@ class NautRouterClient:
         except Exception:
             return False
 
-    async def chat_completions(self, payload: dict) -> dict:
+    async def chat_completions(self, payload: dict, *, headers: dict | None = None) -> dict:
         """Non-streaming POST to NautRouter. Returns the parsed JSON body.
 
         The caller has already verified `payload.get("stream") is not True`.
+        `headers` carries per-request extras like the provider-key overrides.
         """
-        resp = await self._client.post("/v1/chat/completions", json=payload)
+        resp = await self._client.post("/v1/chat/completions", json=payload, headers=headers)
         if resp.status_code >= 400:
             log.warning(
                 "nautrouter_upstream_error",
@@ -52,12 +53,15 @@ class NautRouterClient:
             resp.raise_for_status()
         return resp.json()
 
-    async def chat_completions_stream(self, payload: dict) -> AsyncIterator[bytes]:
+    async def chat_completions_stream(
+        self, payload: dict, *, headers: dict | None = None
+    ) -> AsyncIterator[bytes]:
         """Yield raw SSE bytes. Caller is responsible for the tee + accumulator (Day 3)."""
         async with self._client.stream(
             "POST",
             "/v1/chat/completions",
             json={**payload, "stream": True},
+            headers=headers,
         ) as resp:
             resp.raise_for_status()
             async for chunk in resp.aiter_raw():

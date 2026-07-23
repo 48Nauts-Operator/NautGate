@@ -606,7 +606,82 @@
     document.querySelectorAll("#tab-settings .settings-pane").forEach((p) => {
       p.hidden = p.dataset.pane !== name;
     });
+    if (name === "providers") renderProviders();
     try { localStorage.setItem(SETTINGS_SUBTAB_KEY, name); } catch (_e) {}
+  }
+
+  // --- Providers (NAUTGATE-8): in-app provider keys, encrypted server-side ---
+  async function renderProviders() {
+    const list = document.getElementById("providers-list");
+    const mk = document.getElementById("providers-masterkey");
+    if (!list) return;
+    list.textContent = "loading…";
+    try {
+      const res = await fetch("/v1/providers", { headers: { Authorization: "Bearer " + getToken() } });
+      if (!res.ok) { list.textContent = "failed to load (" + res.status + ")"; return; }
+      const data = await res.json();
+      if (mk) {
+        mk.innerHTML = data.master_key_configured
+          ? '<span style="color:var(--accent-bright)">Master key configured.</span>'
+          : '<span style="color:#E5484D">NAUTGATE_MASTER_KEY is not set — set it (and back it up) to store keys here.</span>';
+      }
+      list.innerHTML = "";
+      for (const p of data.providers) {
+        const status = p.source === "db" ? `stored · …${p.last4}`
+          : p.source === "env" ? `from env · …${p.last4}`
+          : "not set";
+        const row = document.createElement("div");
+        row.className = "provider-row";
+        row.innerHTML =
+          `<span class="provider-name">${p.provider}</span>` +
+          `<span class="provider-status source-${p.source}">${status}</span>` +
+          `<input type="password" class="provider-input" data-provider="${p.provider}" placeholder="paste key…" autocomplete="off" spellcheck="false" />` +
+          `<button class="provider-save" data-provider="${p.provider}">Save</button>` +
+          (p.source === "db" ? `<button class="provider-clear" data-provider="${p.provider}">Clear</button>` : "");
+        list.appendChild(row);
+      }
+    } catch (e) { list.textContent = "error: " + e.message; }
+  }
+  document.getElementById("providers-list")?.addEventListener("click", async (e) => {
+    const save = e.target.closest(".provider-save");
+    const clear = e.target.closest(".provider-clear");
+    if (save) {
+      const provider = save.dataset.provider;
+      const input = document.querySelector(`.provider-input[data-provider="${provider}"]`);
+      const key = (input?.value || "").trim();
+      if (!key) { input?.focus(); return; }
+      save.textContent = "saving…"; save.disabled = true;
+      try {
+        const res = await fetch(`/v1/providers/${provider}`, {
+          method: "PUT",
+          headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+          body: JSON.stringify({ key }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          save.textContent = "Save"; save.disabled = false;
+          const st = document.querySelector(`.provider-status`);
+          if (st) { save.title = d.detail || ("failed " + res.status); }
+          alertProvider(provider, d.detail || ("failed " + res.status));
+          return;
+        }
+      } finally { save.disabled = false; }
+      renderProviders();
+    }
+    if (clear) {
+      const provider = clear.dataset.provider;
+      await fetch(`/v1/providers/${provider}`, {
+        method: "DELETE", headers: { Authorization: "Bearer " + getToken() },
+      });
+      renderProviders();
+    }
+  });
+  function alertProvider(provider, msg) {
+    const list = document.getElementById("providers-list");
+    if (!list) return;
+    let m = document.getElementById("providers-msg");
+    if (!m) { m = document.createElement("div"); m.id = "providers-msg"; m.className = "provider-msg"; list.prepend(m); }
+    m.textContent = `${provider}: ${msg}`;
   }
   document.querySelectorAll("#settings-subnav a").forEach((a) => {
     a.addEventListener("click", (ev) => {
@@ -620,6 +695,22 @@
     if (saved) showSettingsSubtab(saved);
   } catch (_e) {}
 
+  // Orca settings surface (NAUTGATE-12): back link + nav search.
+  document.querySelector(".settings-back")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    activateTab("overview");
+  });
+  const settingsSearch = document.getElementById("settings-search-input");
+  settingsSearch?.addEventListener("input", () => {
+    const q = settingsSearch.value.trim().toLowerCase();
+    document.querySelectorAll(".settings-nav a[data-subtab]").forEach((a) => {
+      a.hidden = !!q && !a.textContent.trim().toLowerCase().includes(q);
+    });
+    document.querySelectorAll(".settings-nav-group").forEach((g) => {
+      const any = [...g.querySelectorAll("a[data-subtab]")].some((a) => !a.hidden);
+      g.style.display = any ? "" : "none";
+    });
+  });
   // Collapsible sidebar (NAUTGATE-11) — collapse to an icons-only rail; persist.
   (function collapsibleSidebar() {
     const KEY = "nautgate-sidebar-collapsed";
@@ -6236,6 +6327,11 @@
     show();
   })();
 
+  // Version chip, bottom-right (NAUTGATE-13) — from /health.
+  fetch("/health").then((r) => r.json()).then((d) => {
+    const el = document.getElementById("app-version");
+    if (el && d.version) { el.textContent = "v" + d.version; el.hidden = false; }
+  }).catch(() => {});
   // Auto-discover OAuth-derived agents (claude-oauth-…, codex-…) and merge
   // them into the session picker so they show up without manual setup.
   // Runs once on load + every 60s thereafter so new logins appear within
