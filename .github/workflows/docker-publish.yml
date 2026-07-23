@@ -1,0 +1,95 @@
+name: Build & Publish Docker Images
+
+# Publishes the two NautGate images to GHCR (canonical) and, if the Docker Hub
+# secrets are set, mirrors them there too (Docker Hub is the only registry that
+# exposes a public pull count). Adapted from the vynl pipeline.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs-site/**"
+      - "website/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+  # Docker Hub mirror is opt-in: only pushes there if both DOCKERHUB_USERNAME
+  # and DOCKERHUB_TOKEN repo secrets exist. GHCR hides pull counts; Docker Hub
+  # shows them — the mirror exists for that number only.
+  DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME && format('{0}', secrets.DOCKERHUB_USERNAME) || '' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: nautgate
+            context: .
+            dockerfile: core/Dockerfile
+          - name: nautrouter
+            context: vendor/NautRouter
+            dockerfile: vendor/NautRouter/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from core/pyproject.toml, not a git tag — the release flow
+      # pushes to main and tags afterward, so type=semver alone never fires.
+      - name: Read version
+        id: ver
+        run: echo "version=$(grep -m1 '^version' core/pyproject.toml | sed -E 's/.*\"([^\"]+)\".*/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub signs the auth header case-sensitively; a capitalised
+      # username trips "malformed HTTP Authorization header". Lowercase it first.
+      - name: Normalise Docker Hub username
+        if: ${{ env.DOCKERHUB_NS != '' }}
+        run: echo "DH_USER_LC=$(echo '${{ secrets.DOCKERHUB_USERNAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_NS != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DH_USER_LC }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Emits tags for both registries when DOCKERHUB_NS is set, GHCR only otherwise.
+          images: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.name }}
+            ${{ env.DOCKERHUB_NS != '' && format('{0}/{1}', env.DOCKERHUB_NS, matrix.name) || '' }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=v${{ steps.ver.outputs.version }}
+            type=sha,prefix=
+
+      # Required for reliable linux/arm64 cross-builds.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          platforms: linux/amd64,linux/arm64

@@ -1,0 +1,32 @@
+# Build context is the repo root (so the core image can ship config/), but the
+# core image only needs core/ + config/. Exclude everything else so the context
+# stays small — docs-site alone is 550 MB.
+.git
+.github
+.forgejo
+logs
+website
+docs-site
+deploy
+scripts
+docs
+assets
+extensions
+vendor
+gitvm-extension
+
+# Python / build cruft
+**/__pycache__
+**/*.pyc
+**/.venv
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Local data + secrets that must never land in an image layer
+*.db
+*.db-*
+**/.env
+**/.env.*
+core/tests
+**/.DS_Store

@@ -47,6 +47,39 @@ DEFAULT_ROUTING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "routi
 DEFAULT_PRICING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "pricing.yaml"
 
 
+async def _bootstrap_first_run_key(pool) -> None:
+    """On an empty database, mint one API key and print it to the log.
+
+    A fresh `docker compose up` has no key, and POST /v1/keys requires an
+    existing one — there is no bootstrap endpoint. So on first run (zero keys)
+    we mint one and print it prominently. The secret only ever touches the
+    container log, whose access boundary is "you own this deployment". Once any
+    key exists this is a no-op. Never fatal.
+    """
+    log = structlog.get_logger()
+    try:
+        async with pool.acquire() as conn:
+            count = await conn.fetchval("SELECT COUNT(*) FROM nautgate.api_keys")
+        if count:
+            return
+        key = await queries.create_api_key(
+            pool, name="first-run", agent_id="first-run", ttl_days=None
+        )
+        token = key["token"]
+        banner = (
+            "\n"
+            "  ┌─────────────────────────────────────────────────────────────┐\n"
+            "  │  NautGate first-run API key (shown once, store it now):       │\n"
+            f"  │  {token:<59}│\n"
+            "  │  Mint more, or revoke this, in Settings → Keys.               │\n"
+            "  └─────────────────────────────────────────────────────────────┘\n"
+        )
+        print(banner, flush=True)
+        log.warning("first_run_key_minted", agent_id="first-run")
+    except Exception as exc:  # never block startup on this
+        log.warning("first_run_key_bootstrap_failed", error=str(exc))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -86,6 +119,7 @@ async def lifespan(app: FastAPI):
             await apply_migrations(pool, MIGRATIONS_DIR)
             app.state.db = pool
             log.info("db_pool_ready", url_host=_redacted_host(settings.nautgate_db_url))
+            await _bootstrap_first_run_key(pool)
             try:
                 result = await app.state.outcome_spool.drain(queries.write_outcome, pool)
                 if result.drained or result.pending or result.skipped_bad:

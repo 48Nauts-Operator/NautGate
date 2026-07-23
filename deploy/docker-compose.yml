@@ -47,7 +47,10 @@ services:
 
   nautgate-core:
     build:
-      context: ../core
+      # Context is the repo root so the image can ship config/ (routing +
+      # pricing tables live outside core/). Dockerfile path is relative to it.
+      context: ..
+      dockerfile: core/Dockerfile
     container_name: nautgate-core
     depends_on:
       nautgate-db:
