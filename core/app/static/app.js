@@ -6241,13 +6241,14 @@
             const t = line.trim();
             if (!t.startsWith("data:")) continue;
             const data = t.slice(5).trim();
-            if (data === "[DONE]") { onDone(); return; }
+            if (data === "[DONE]") { reader.cancel(); onDone(); return; }
             try {
               const delta = JSON.parse(data).choices?.[0]?.delta?.content;
               if (delta) onChunk(delta);
             } catch (_e) { /* keepalive / partial line */ }
           }
         }
+        buf += dec.decode();   // flush any bytes held in the decoder
         onDone();
       } catch (e) {
         if (e.name === "AbortError") { onDone(); return; }
