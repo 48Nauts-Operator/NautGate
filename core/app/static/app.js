@@ -617,6 +617,24 @@
     if (saved) showSettingsSubtab(saved);
   } catch (_e) {}
 
+  // Collapsible sidebar (NAUTGATE-11) — collapse to an icons-only rail; persist.
+  (function collapsibleSidebar() {
+    const KEY = "nautgate-sidebar-collapsed";
+    const shell = document.querySelector(".app-shell");
+    const btn = document.getElementById("sidebar-collapse");
+    if (!shell || !btn) return;
+    const apply = (on) => {
+      shell.classList.toggle("sidebar-collapsed", on);
+      btn.title = on ? "Expand sidebar" : "Collapse sidebar";
+    };
+    try { apply(localStorage.getItem(KEY) === "1"); } catch (_e) {}
+    btn.addEventListener("click", () => {
+      const on = !shell.classList.contains("sidebar-collapsed");
+      apply(on);
+      try { localStorage.setItem(KEY, on ? "1" : "0"); } catch (_e) {}
+    });
+  })();
+
   // --- Overview -----------------------------------------------------------
 
   let overviewWindow = { hours: 24, bucket: "hour" };
