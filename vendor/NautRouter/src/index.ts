@@ -582,7 +582,7 @@ async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean,
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${overrides.openrouter ?? OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${overrides.openrouter || OPENROUTER_API_KEY}`,
       "HTTP-Referer": "https://github.com/48Nauts-Operator/NautGate",
       "X-Title": "NautGate",
     },
@@ -602,7 +602,7 @@ async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean, ove
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${overrides.openai ?? OPENAI_API_KEY}`,
+      Authorization: `Bearer ${overrides.openai || OPENAI_API_KEY}`,
     },
     body: JSON.stringify(out),
   });
@@ -703,7 +703,7 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": overrides.anthropic ?? ANTHROPIC_API_KEY,
+      "x-api-key": overrides.anthropic || ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(anthropicBody),
@@ -860,7 +860,7 @@ async function forwardGemini(modelDef: ModelDef, body: any, stream: boolean, ove
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${overrides.gemini ?? GEMINI_API_KEY}`,
+      Authorization: `Bearer ${overrides.gemini || GEMINI_API_KEY}`,
     },
     body: JSON.stringify({ ...body, model: modelDef.id, stream }),
   });
