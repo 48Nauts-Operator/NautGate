@@ -1,9 +1,17 @@
 """Backup + restore for the nautgate Postgres schema.
 
-Uses ``docker exec`` to invoke pg_dump / psql inside the nautgate-db
-container, so we don't depend on host-side Postgres tooling. Files land
-under NAUTGATE_BACKUP_DIR (default ~/.nautgate/backups/) as gzipped SQL,
-named ``nautgate-<YYYYMMDD-HHMMSS>-<via>.sql.gz``.
+Invokes pg_dump / psql. Two strategies, picked automatically (NAUTGATE-7):
+
+- **DSN** (default) — connect straight to the database with ``NAUTGATE_DB_URL``.
+  Works both inside the published container (pg_dump ships in the image, reaches
+  the db service over the network) and on any host that has pg_dump installed.
+- **docker exec** (fallback) — exec pg_dump inside the db container. Used only
+  when the client binaries aren't on PATH. This is what dev-on-the-host used, but
+  it cannot work from *inside* a container (no docker CLI/socket), which is why
+  the DSN path is now the default.
+
+Files land under NAUTGATE_BACKUP_DIR (default ~/.nautgate/backups/) as gzipped
+SQL, named ``nautgate-<YYYYMMDD-HHMMSS>-<via>.sql.gz``.
 
 Scheduling: ``run_scheduler(pool)`` is a long-running asyncio task started
 in the FastAPI lifespan. It checks ``backup_config`` every minute and
@@ -18,6 +26,7 @@ import asyncio
 import gzip
 import json
 import os
+import shutil
 import subprocess
 import uuid
 from datetime import UTC, datetime
@@ -26,10 +35,12 @@ from pathlib import Path
 import asyncpg
 import structlog
 
+from app.settings import get_settings
+
 log = structlog.get_logger()
 
-# Container name to exec into. Override with NAUTGATE_DB_CONTAINER if you
-# named the service differently in docker-compose.
+# Container name to exec into (docker-exec fallback only). Override with
+# NAUTGATE_DB_CONTAINER if you named the service differently in docker-compose.
 DEFAULT_DB_CONTAINER = "nautgate-db"
 DEFAULT_BACKUP_DIR = Path.home() / ".nautgate" / "backups"
 
@@ -42,6 +53,44 @@ def _backup_dir() -> Path:
 
 def _db_container() -> str:
     return os.environ.get("NAUTGATE_DB_CONTAINER") or DEFAULT_DB_CONTAINER
+
+
+def _use_dsn() -> bool:
+    """Prefer a direct connection whenever pg_dump/psql are on PATH."""
+    return bool(shutil.which("pg_dump") and shutil.which("psql"))
+
+
+def _dsn() -> str:
+    dsn = get_settings().nautgate_db_url
+    if not dsn:
+        raise RuntimeError("NAUTGATE_DB_URL is not set — cannot run a backup")
+    return dsn
+
+
+def _dump_cmd() -> list[str]:
+    """pg_dump argv. DSN form when the client is available, else docker exec."""
+    args = ["--schema=nautgate", "--no-owner", "--no-privileges"]
+    if _use_dsn():
+        return ["pg_dump", _dsn(), *args]
+    return ["docker", "exec", _db_container(), "pg_dump", "-U", "nautgate", "-d", "nautgate", *args]
+
+
+def _psql_cmd(extra: list[str]) -> list[str]:
+    """psql argv for restore. DSN form when available, else docker exec."""
+    if _use_dsn():
+        return ["psql", _dsn(), *extra]
+    return [
+        "docker",
+        "exec",
+        "-i",
+        _db_container(),
+        "psql",
+        "-U",
+        "nautgate",
+        "-d",
+        "nautgate",
+        *extra,
+    ]
 
 
 def _backup_filename(now: datetime, via: str) -> str:
@@ -81,21 +130,9 @@ async def create_backup(pool: asyncpg.Pool, *, via: str = "manual") -> dict:
         )
 
     try:
-        # docker exec pg_dump → stdout, we gzip into the target file.
-        # --no-owner --no-privileges keeps the dump portable across users.
-        cmd = [
-            "docker",
-            "exec",
-            _db_container(),
-            "pg_dump",
-            "-U",
-            "nautgate",
-            "-d",
-            "nautgate",
-            "--schema=nautgate",
-            "--no-owner",
-            "--no-privileges",
-        ]
+        # pg_dump → stdout, we gzip into the target file. --no-owner
+        # --no-privileges keeps the dump portable across users.
+        cmd = _dump_cmd()
 
         # Run in a thread so we don't block the event loop on big dumps.
         def _run():
@@ -166,34 +203,29 @@ async def restore_backup(pool: asyncpg.Pool, backup_id: uuid.UUID) -> None:
         raise FileNotFoundError(f"backup file missing on disk: {file_path}")
 
     def _run():
-        # Pipe gunzip'd SQL into psql inside the container.
-        with gzip.open(file_path, "rb") as f:
-            sql = f.read()
         # First drop the schema (CASCADE wipes everything), then load.
         drop = subprocess.run(
-            [
-                "docker",
-                "exec",
-                _db_container(),
-                "psql",
-                "-U",
-                "nautgate",
-                "-d",
-                "nautgate",
-                "-c",
-                "DROP SCHEMA IF EXISTS nautgate CASCADE;",
-            ],
+            _psql_cmd(["-c", "DROP SCHEMA IF EXISTS nautgate CASCADE;"]),
             capture_output=True,
         )
         if drop.returncode != 0:
             raise RuntimeError(f"DROP SCHEMA failed: {drop.stderr.decode()[:500]}")
-        load = subprocess.run(
-            ["docker", "exec", "-i", _db_container(), "psql", "-U", "nautgate", "-d", "nautgate"],
-            input=sql,
-            capture_output=True,
-        )
-        if load.returncode != 0:
-            raise RuntimeError(f"psql restore failed: {load.stderr.decode()[:500]}")
+        # Stream the decompressed dump into psql in chunks rather than reading
+        # the whole SQL into memory — a large DB's dump can be many GB.
+        proc = subprocess.Popen(_psql_cmd([]), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            with gzip.open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(1 << 20)  # 1 MiB
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # psql died early — its stderr/returncode below explains why
+        stderr = proc.stderr.read()
+        if proc.wait() != 0:
+            raise RuntimeError(f"psql restore failed: {stderr.decode()[:500]}")
 
     await asyncio.to_thread(_run)
     log.warning("backup_restored", backup_id=str(backup_id), file=str(file_path))
