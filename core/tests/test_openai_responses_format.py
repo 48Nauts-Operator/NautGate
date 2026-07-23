@@ -240,7 +240,7 @@ async def test_responses_streaming_emits_responses_event_set(responses_app):
         b"data: [DONE]\n\n",
     ]
 
-    async def stream(_payload):
+    async def stream(_payload, **_kwargs):
         for ch in upstream_chunks:
             yield ch
 
@@ -288,7 +288,7 @@ async def test_responses_streaming_handles_empty_stream(responses_app):
     """Empty upstream stream still emits well-formed terminators."""
     app, calls = responses_app
 
-    async def stream(_payload):
+    async def stream(_payload, **_kwargs):
         return
         yield  # pragma: no cover
 

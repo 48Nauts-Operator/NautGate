@@ -324,7 +324,7 @@ async def test_messages_streaming_emits_anthropic_sse(messages_app):
         b"data: [DONE]\n\n",
     ]
 
-    async def stream(_payload):
+    async def stream(_payload, **_kwargs):
         for ch in upstream_chunks:
             yield ch
 

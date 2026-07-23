@@ -214,7 +214,7 @@ async def streaming_app(monkeypatch):
 def _set_stream_chunks(mock, chunks: list[bytes]):
     """Replace mock.chat_completions_stream with an async generator yielding chunks."""
 
-    async def stream(_payload):
+    async def stream(_payload, **_kwargs):
         for c in chunks:
             yield c
 
