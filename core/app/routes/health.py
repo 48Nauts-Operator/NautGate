@@ -1,4 +1,7 @@
 import asyncio
+import os
+from functools import cache
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -6,9 +9,24 @@ from fastapi.responses import JSONResponse
 router = APIRouter(tags=["health"])
 
 
+@cache
+def _version() -> str:
+    """Single-sourced from pyproject.toml. NAUTGATE_VERSION overrides it (the
+    published image sets it at build time, since pyproject isn't in the image)."""
+    env = os.environ.get("NAUTGATE_VERSION", "").strip()
+    if env:
+        return env
+    try:
+        import tomllib
+        pp = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"  # core/pyproject.toml
+        return tomllib.loads(pp.read_text())["project"]["version"]
+    except Exception:
+        return "dev"
+
+
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "version": _version()}
 
 
 @router.get("/ready")
