@@ -192,9 +192,6 @@ async def restore_backup(pool: asyncpg.Pool, backup_id: uuid.UUID) -> None:
         raise FileNotFoundError(f"backup file missing on disk: {file_path}")
 
     def _run():
-        # Pipe gunzip'd SQL into psql.
-        with gzip.open(file_path, "rb") as f:
-            sql = f.read()
         # First drop the schema (CASCADE wipes everything), then load.
         drop = subprocess.run(
             _psql_cmd(["-c", "DROP SCHEMA IF EXISTS nautgate CASCADE;"]),
@@ -202,9 +199,22 @@ async def restore_backup(pool: asyncpg.Pool, backup_id: uuid.UUID) -> None:
         )
         if drop.returncode != 0:
             raise RuntimeError(f"DROP SCHEMA failed: {drop.stderr.decode()[:500]}")
-        load = subprocess.run(_psql_cmd([]), input=sql, capture_output=True)
-        if load.returncode != 0:
-            raise RuntimeError(f"psql restore failed: {load.stderr.decode()[:500]}")
+        # Stream the decompressed dump into psql in chunks rather than reading
+        # the whole SQL into memory — a large DB's dump can be many GB.
+        proc = subprocess.Popen(_psql_cmd([]), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            with gzip.open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(1 << 20)  # 1 MiB
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # psql died early — its stderr/returncode below explains why
+        stderr = proc.stderr.read()
+        if proc.wait() != 0:
+            raise RuntimeError(f"psql restore failed: {stderr.decode()[:500]}")
 
     await asyncio.to_thread(_run)
     log.warning("backup_restored", backup_id=str(backup_id), file=str(file_path))
