@@ -19,6 +19,11 @@ your app ────┘     │                ├─ OpenRouter
                    └──► Postgres (audit, outcomes, analytics)
 ```
 
+<p align="center">
+  <img src="assets/screenshots/overview.png" alt="NautGate dashboard Overview — live provider status, spend, subscription-saved, drift alerts, and 24h traffic" width="92%">
+  <br><sub>The Overview — live provider status, what you spent, what your subscription saved, and what the gateway learned from your traffic.</sub>
+</p>
+
 ## Why
 
 Ask a model which model it is and it tells you whatever its client's system
@@ -52,6 +57,19 @@ reporting trustworthy.
 - Tooling — what your MCP servers cost in carried schema vs what they save
 - Cache accounting, context-bloat detection, drift and behavioural control charts
 - Cost by project/agent/model, plus notional subscription savings
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/audit-log.png" alt="Audit log"><br><sub><b>Audit log</b> — every call, attested and policy-gated</sub></td>
+    <td width="50%"><img src="assets/screenshots/insights.png" alt="Insights"><br><sub><b>Insights</b> — what the gateway learned from your traffic</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/bench.png" alt="Head-to-head bench"><br><sub><b>Head-to-head</b> — models compared on the tasks you actually run</sub></td>
+    <td><img src="assets/screenshots/model-health.png" alt="Model health"><br><sub><b>Model health</b> — drift and behavioural control charts</sub></td>
+  </tr>
+</table>
 
 ## Quickstart
 
