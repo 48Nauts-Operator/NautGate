@@ -15,7 +15,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  OWNER: 48nauts-operator
+  OWNER: ${{ github.repository_owner }}
   # Docker Hub mirror is opt-in: only pushes there if both DOCKERHUB_USERNAME
   # and DOCKERHUB_TOKEN repo secrets exist. GHCR hides pull counts; Docker Hub
   # shows them — the mirror exists for that number only.
