@@ -319,8 +319,13 @@ def to_provider_model(tier: str, table: dict[str, dict]) -> tuple[str, str]:
 # id encodes provider/family (e.g. openrouter/anthropic/claude-sonnet,
 # openrouter/openai/gpt-4o-mini, gpt-4o, claude-opus-4-7).
 _SUBSCRIPTION_OWNED_TOKENS: tuple[str, ...] = (
-    "anthropic/", "claude-",
-    "openai/", "gpt-", "o1-", "o3-", "codex-",
+    "anthropic/",
+    "claude-",
+    "openai/",
+    "gpt-",
+    "o1-",
+    "o3-",
+    "codex-",
 )
 
 

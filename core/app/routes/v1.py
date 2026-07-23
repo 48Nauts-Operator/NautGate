@@ -71,6 +71,7 @@ def _normalize_tool_calls(raw: list, sensitivity: str) -> list[dict] | None:
         out.append(entry)
     return out or None
 
+
 router = APIRouter(prefix="/v1", tags=["v1"])
 log = structlog.get_logger()
 
@@ -108,6 +109,7 @@ def _normalize_anthropic_snapshot(model: str | None) -> str:
     m = model.lower()
     # Strip the trailing date suffix if present (e.g. "-20251201").
     import re as _re
+
     m_base = _re.sub(r"-\d{8}$", "", m)
     # Anthropic family detection.
     if m_base.startswith("claude-opus-4"):
@@ -145,7 +147,10 @@ def _resolve_pricing_provider(
     # (actual_provider is e.g. "Inceptron", the machine that ran the model), which
     # are not pricing keys either. Both fall through to the model heuristic below.
     _NOT_A_PRICING_PROVIDER = (
-        "passthrough", "chatgpt-oauth", "override", "openai-responses",
+        "passthrough",
+        "chatgpt-oauth",
+        "override",
+        "openai-responses",
     )
     if decision_provider and decision_provider not in _NOT_A_PRICING_PROVIDER:
         return decision_provider
@@ -218,14 +223,20 @@ async def _process_chat_request(
     diet_note: dict | None = None
     try:
         from app.shadow import diet_apply_map
+
         _diet_map = await diet_apply_map(pool)
         _strategy = _diet_map.get(agent_id) or _diet_map.get("*")
         if _strategy:
             from app.diet import apply_diet_to_payload
+
             diet_note = apply_diet_to_payload(payload, _strategy)
             if diet_note:
-                log.info("prompt_diet_applied", agent_id=agent_id,
-                         decision_id=str(decision_id), **diet_note)
+                log.info(
+                    "prompt_diet_applied",
+                    agent_id=agent_id,
+                    decision_id=str(decision_id),
+                    **diet_note,
+                )
     except Exception as exc:
         log.warning("prompt_diet_failed", error=str(exc))
 
@@ -312,8 +323,7 @@ async def _process_chat_request(
     if hard_override:
         decision_provider = "override"
         decision_model = hard_override
-        source = ("header" if header_override
-                  else "key" if key_override else "brain")
+        source = "header" if header_override else "key" if key_override else "brain"
         decision_reason = f"override:{source}->{hard_override}"
         payload["model"] = decision_model
     elif model_requested == AUTO_MODEL_TOKEN:
@@ -328,9 +338,13 @@ async def _process_chat_request(
         scorecard_demotion_note: str | None = None
         try:
             from app.scorecard import is_demoted as _scorecard_is_demoted
+
             primary_pick = resolve_healthy(tier, routing_table, lambda *_: False)
             primary_demoted, primary_score = await _scorecard_is_demoted(
-                pool, provider=primary_pick.provider, model=primary_pick.model, tier=tier,
+                pool,
+                provider=primary_pick.provider,
+                model=primary_pick.model,
+                tier=tier,
             )
             if primary_demoted:
                 scorecard_demoted.append(primary_pick.model)
@@ -341,9 +355,16 @@ async def _process_chat_request(
             log.warning("scorecard_lookup_failed", error=str(exc), tier=tier)
 
         # Banned: caller prefs + extension bans + brain demotions (level 6) + scorecard.
-        all_banned = list(dict.fromkeys([
-            *prefs["banned_models"], *plugin_banned, *plugin_demoted, *scorecard_demoted,
-        ]))
+        all_banned = list(
+            dict.fromkeys(
+                [
+                    *prefs["banned_models"],
+                    *plugin_banned,
+                    *plugin_demoted,
+                    *scorecard_demoted,
+                ]
+            )
+        )
         route_pick = resolve_healthy(tier, routing_table, is_unhealthy, banned_models=all_banned)
         decision_provider = route_pick.provider
         decision_model = route_pick.model
@@ -371,6 +392,7 @@ async def _process_chat_request(
 
     # Heuristic session id for drift detection (compaction events).
     from app.drift import compute_session_id
+
     session_id = compute_session_id(agent_id, messages)
 
     # PRECAPTURE
@@ -557,8 +579,10 @@ async def _process_chat_request(
         try:
             from app.drift_engine import process_drift
             from app.scorecard import process_brain
+
             await process_brain(
-                pool, pricing,
+                pool,
+                pricing,
                 decision_id=decision_id,
                 actual_provider=actual_provider,
                 actual_model=actual_model,
@@ -568,6 +592,7 @@ async def _process_chat_request(
             # Replaces the role FlowAI used to play — flow-proxy can retire
             # once this is enabled in production.
             from app.sb_memory import ingest_outcome as _sb_ingest
+
             await _sb_ingest(
                 app_pool=pool,
                 agent_id=agent_id,
@@ -579,6 +604,7 @@ async def _process_chat_request(
             # Quality eval — sampled + 100% on anomalies. Cheap judge model,
             # capped daily spend, never blocks the request.
             from app.quality_eval import process_quality as _process_quality
+
             await _process_quality(
                 pool,
                 decision_id=decision_id,
@@ -588,6 +614,7 @@ async def _process_chat_request(
             # Champion–challenger shadow trial — sampled, cost-capped,
             # never touches the response path.
             from app.shadow import process_shadow as _process_shadow
+
             await _process_shadow(
                 pool,
                 decision_id=decision_id,
@@ -771,8 +798,10 @@ def _streaming_response(
                     try:
                         from app.drift_engine import process_drift
                         from app.scorecard import process_brain
+
                         await process_brain(
-                            pool, stream_pricing,
+                            pool,
+                            stream_pricing,
                             decision_id=decision_id,
                             actual_provider=parsed.get("actual_provider"),
                             actual_model=parsed.get("actual_model"),
@@ -780,6 +809,7 @@ def _streaming_response(
                         await process_drift(pool, decision_id=decision_id)
                         # SecondBrain ingest (opt-in via NAUTGATE_SB_INGEST=true)
                         from app.sb_memory import ingest_outcome as _sb_ingest
+
                         await _sb_ingest(
                             app_pool=pool,
                             agent_id=agent_id or "anonymous",
@@ -790,6 +820,7 @@ def _streaming_response(
                         )
                         # Quality eval — same hook as non-streaming path.
                         from app.quality_eval import process_quality as _process_quality
+
                         await _process_quality(
                             pool,
                             decision_id=decision_id,
@@ -797,6 +828,7 @@ def _streaming_response(
                             pricing=stream_pricing,
                         )
                         from app.shadow import process_shadow as _process_shadow
+
                         await _process_shadow(
                             pool,
                             decision_id=decision_id,
@@ -804,7 +836,11 @@ def _streaming_response(
                             pricing=stream_pricing,
                         )
                     except Exception as exc:
-                        log.warning("brain_layer_failed_in_stream", error=str(exc), decision_id=str(decision_id))
+                        log.warning(
+                            "brain_layer_failed_in_stream",
+                            error=str(exc),
+                            decision_id=str(decision_id),
+                        )
             except Exception as exc:
                 log.error(
                     "outcome_write_failed_in_stream",
@@ -872,6 +908,7 @@ async def chat_completions(request: Request) -> Response:
     # ChatGPT-OAuth bypass — if Codex (or anyone) sends with chatgpt-account-id,
     # forward transparently to chatgpt.com. See app/oauth_forwarder.py.
     from app.oauth_forwarder import forward_to_chatgpt, is_chatgpt_oauth_request
+
     if is_chatgpt_oauth_request(request):
         return await forward_to_chatgpt(request)
 
@@ -882,6 +919,7 @@ async def chat_completions(request: Request) -> Response:
         forward_to_anthropic,
         is_anthropic_oauth_request,
     )
+
     if is_anthropic_oauth_request(request):
         return await forward_to_anthropic(request)
 
@@ -906,6 +944,7 @@ async def messages(request: Request) -> Response:
         forward_to_anthropic,
         is_anthropic_oauth_request,
     )
+
     if is_anthropic_oauth_request(request):
         return await forward_to_anthropic(request)
 
@@ -960,6 +999,7 @@ async def responses(request: Request) -> Response:
     # chatgpt.com directly, skipping ng_-token auth and NautRouter.
     # Audit row is still written (decision_provider=chatgpt-oauth).
     from app.oauth_forwarder import forward_to_chatgpt, is_chatgpt_oauth_request
+
     if is_chatgpt_oauth_request(request):
         return await forward_to_chatgpt(request)
     # Anthropic-OAuth handles claude-* requests landing on /v1/responses too.
@@ -967,6 +1007,7 @@ async def responses(request: Request) -> Response:
         forward_to_anthropic,
         is_anthropic_oauth_request,
     )
+
     if is_anthropic_oauth_request(request):
         return await forward_to_anthropic(request)
 
@@ -1023,6 +1064,7 @@ async def _lmstudio_models() -> list[dict]:
     inside its container (host.docker.internal).
     """
     import os as _os
+
     base = _os.environ.get("NAUTGATE_LMSTUDIO_URL", "http://localhost:1238").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=0.5)) as c:
@@ -1038,14 +1080,16 @@ async def _lmstudio_models() -> list[dict]:
         # Embedding / reranker models can't serve chat completions.
         if not mid or "embed" in mid or "rerank" in mid:
             continue
-        out.append({
-            "id": f"lmstudio/{mid}",
-            "object": "model",
-            "owned_by": "lmstudio",
-            "nautgate_provider": "lmstudio",
-            "nautgate_tiers": [],
-            "nautgate_local": True,
-        })
+        out.append(
+            {
+                "id": f"lmstudio/{mid}",
+                "object": "model",
+                "owned_by": "lmstudio",
+                "nautgate_provider": "lmstudio",
+                "nautgate_tiers": [],
+                "nautgate_local": True,
+            }
+        )
     return sorted(out, key=lambda m: m["id"])
 
 
@@ -1214,9 +1258,14 @@ async def cost_summary(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     project_scope = _resolve_project_scope(request)
-    return JSONResponse(await queries.get_cost_summary(
-        pool, agent_id=scope, hours=hours, project_id=project_scope,
-    ))
+    return JSONResponse(
+        await queries.get_cost_summary(
+            pool,
+            agent_id=scope,
+            hours=hours,
+            project_id=project_scope,
+        )
+    )
 
 
 @router.get("/cost/timeseries")
@@ -1248,7 +1297,11 @@ async def cost_timeseries(request: Request) -> Response:
     project_scope = _resolve_project_scope(request)
     return JSONResponse(
         await queries.get_cost_timeseries(
-            pool, agent_id=scope, bucket=bucket, hours=hours, project_id=project_scope,
+            pool,
+            agent_id=scope,
+            bucket=bucket,
+            hours=hours,
+            project_id=project_scope,
         )
     )
 
@@ -1268,8 +1321,9 @@ def _price_for_model(pricing, model: str | None):
     return None
 
 
-def _cache_costs(pricing, model: str | None, fresh_tk: int, read_tk: int,
-                 write_tk: int) -> dict | None:
+def _cache_costs(
+    pricing, model: str | None, fresh_tk: int, read_tk: int, write_tk: int
+) -> dict | None:
     """Cache-off vs cache-on input cost for this model's volume.
 
     off   = (fresh + read + write) × input_rate    [what it'd cost with no cache]
@@ -1284,9 +1338,7 @@ def _cache_costs(pricing, model: str | None, fresh_tk: int, read_tk: int,
     read_rate = price.cache_read if price.cache_read is not None else price.input
     write_rate = price.cache_write if price.cache_write is not None else price.input
     off = (fresh_tk + read_tk + write_tk) * price.input / 1_000_000
-    on = (
-        fresh_tk * price.input + read_tk * read_rate + write_tk * write_rate
-    ) / 1_000_000
+    on = (fresh_tk * price.input + read_tk * read_rate + write_tk * write_rate) / 1_000_000
     return {
         "cache_off_usd": round(off, 6),
         "cache_on_usd": round(on, 6),
@@ -1322,8 +1374,11 @@ async def cache_summary(request: Request) -> Response:
     have_any = False
     for row in summary["by_model"]:
         costs = _cache_costs(
-            pricing, row["model"], row["fresh_tokens"],
-            row["cache_read_tokens"], row["cache_write_tokens"],
+            pricing,
+            row["model"],
+            row["fresh_tokens"],
+            row["cache_read_tokens"],
+            row["cache_write_tokens"],
         )
         if costs is None:
             row["cache_off_usd"] = row["cache_on_usd"] = row["saved_usd"] = None
@@ -1406,24 +1461,31 @@ async def health_providers(request: Request) -> Response:
             status = hb_status
         else:
             status = "no-data"
-        providers.append({
-            "key": key,
-            "label": _PROVIDER_LABELS.get(key, key),
-            "status": status,
-            "overload_pct": (p or {}).get("overload_pct", 0.0),
-            "overloaded": (p or {}).get("overloaded", 0),
-            "retries_absorbed": (p or {}).get("retries_absorbed", 0),
-            "rate_limited": (p or {}).get("rate_limited", 0),
-            "success": (p or {}).get("success", 0),
-            "total": (p or {}).get("total", 0),
-            "heartbeat": hb,
-        })
+        providers.append(
+            {
+                "key": key,
+                "label": _PROVIDER_LABELS.get(key, key),
+                "status": status,
+                "overload_pct": (p or {}).get("overload_pct", 0.0),
+                "overloaded": (p or {}).get("overloaded", 0),
+                "retries_absorbed": (p or {}).get("retries_absorbed", 0),
+                "rate_limited": (p or {}).get("rate_limited", 0),
+                "success": (p or {}).get("success", 0),
+                "total": (p or {}).get("total", 0),
+                "heartbeat": hb,
+            }
+        )
     providers.sort(key=lambda x: (-_STATUS_RANK.get(x["status"], 1), x["label"]))
     # Overall reflects only providers that have a real signal — a missing Codex
     # credential shouldn't make the whole gateway look down.
-    live_ranks = [_STATUS_RANK.get(p["status"], 1) for p in providers
-                  if p["status"] in ("up", "ok", "degraded", "down")]
-    overall = {0: "up", 2: "degraded", 3: "down"}.get(max(live_ranks), "up") if live_ranks else "no-data"
+    live_ranks = [
+        _STATUS_RANK.get(p["status"], 1)
+        for p in providers
+        if p["status"] in ("up", "ok", "degraded", "down")
+    ]
+    overall = (
+        {0: "up", 2: "degraded", 3: "down"}.get(max(live_ranks), "up") if live_ranks else "no-data"
+    )
     return JSONResponse({"providers": providers, "overall": overall, "window_minutes": 10})
 
 
@@ -1464,10 +1526,16 @@ async def keys_create(request: Request) -> Response:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="ttl_days must be an integer") from None
         if ttl_days < 1 or ttl_days > _KEY_TTL_MAX_DAYS:
-            raise HTTPException(status_code=400, detail=f"ttl_days must be in 1..{_KEY_TTL_MAX_DAYS}")
+            raise HTTPException(
+                status_code=400, detail=f"ttl_days must be in 1..{_KEY_TTL_MAX_DAYS}"
+            )
     override_model = (body.get("override_model") or "").strip() or None
     created = await queries.create_api_key(
-        pool, name=name, agent_id=agent_id, ttl_days=ttl_days, profile=profile,
+        pool,
+        name=name,
+        agent_id=agent_id,
+        ttl_days=ttl_days,
+        profile=profile,
         override_model=override_model,
     )
     return JSONResponse(created)
@@ -1519,7 +1587,9 @@ async def probe_history(request: Request) -> Response:
         hours = int(request.query_params.get("hours", "720"))
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
-    return JSONResponse({"model": model, "runs": await queries.get_probe_history(pool, model=model, hours=hours)})
+    return JSONResponse(
+        {"model": model, "runs": await queries.get_probe_history(pool, model=model, hours=hours)}
+    )
 
 
 @router.get("/probe/config")
@@ -1567,11 +1637,14 @@ async def probe_run_now(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="no targets configured")
     from app.app_config import quality_eval_config
     from app.llm_probe import run_probe_cycle
+
     judge_config = await quality_eval_config(pool)
     cycle_id = await run_probe_cycle(
-        pool=pool, pricing=getattr(request.app.state, "pricing", None),
+        pool=pool,
+        pricing=getattr(request.app.state, "pricing", None),
         judge_client=getattr(request.app.state, "quality_judge", None),
-        judge_config=judge_config, targets=list(targets),
+        judge_config=judge_config,
+        targets=list(targets),
     )
     return JSONResponse({"cycle_id": str(cycle_id), "targets": list(targets)})
 
@@ -1667,11 +1740,21 @@ async def insights_headline(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app import insights
-    return JSONResponse(await insights.q_headline(
-        pool, getattr(request.app.state, "pricing", None)))
+
+    return JSONResponse(
+        await insights.q_headline(pool, getattr(request.app.state, "pricing", None))
+    )
 
 
-_INSIGHT_PANELS = ("simulator", "substitution", "spc", "efficiency", "dataflow", "overthinking", "tooling")
+_INSIGHT_PANELS = (
+    "simulator",
+    "substitution",
+    "spc",
+    "efficiency",
+    "dataflow",
+    "overthinking",
+    "tooling",
+)
 
 
 @router.get("/insights/{panel_name}")
@@ -1694,12 +1777,17 @@ async def insights_panel(panel_name: str, request: Request) -> Response:
     metric = request.query_params.get("metric", "completion_tokens")
     agent_id = request.query_params.get("agent_id", "").strip() or None
     from app import insights
+
     if metric not in insights.SPC_METRICS:
         raise HTTPException(status_code=400, detail="unknown metric")
     data = await insights.panel(
-        panel_name, pool,
+        panel_name,
+        pool,
         pricing=getattr(request.app.state, "pricing", None),
-        hours=hours, days=days, metric=metric, agent_id=agent_id,
+        hours=hours,
+        days=days,
+        metric=metric,
+        agent_id=agent_id,
     )
     return JSONResponse(data)
 
@@ -1717,8 +1805,10 @@ async def improvements_list(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="days must be an integer") from None
     agent_id = request.query_params.get("agent_id", "").strip() or None
     from app import insights
-    return JSONResponse(await insights.q_improvements(
-        pool, max(1, min(days, 365)), agent_id=agent_id))
+
+    return JSONResponse(
+        await insights.q_improvements(pool, max(1, min(days, 365)), agent_id=agent_id)
+    )
 
 
 @router.post("/improve/simulate/{decision_id}")
@@ -1734,10 +1824,13 @@ async def improve_simulate(decision_id: str, request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="bad decision_id") from None
     from app.shadow import simulate_improvement
+
     result = await simulate_improvement(
-        pool, decision_id=uuid.UUID(decision_id),
+        pool,
+        decision_id=uuid.UUID(decision_id),
         client=getattr(request.app.state, "quality_judge", None),
-        pricing=getattr(request.app.state, "pricing", None))
+        pricing=getattr(request.app.state, "pricing", None),
+    )
     status = 200 if "error" not in result else 422
     return JSONResponse(result, status_code=status)
 
@@ -1755,6 +1848,7 @@ async def reports_audit(request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="days must be an integer") from None
     from app import insights
+
     return JSONResponse(await insights.q_audit_report(pool, max(1, min(days, 365))))
 
 
@@ -1771,6 +1865,7 @@ STATUSPAGES = (
 
 async def _cached(key: str, fetch) -> object:
     import time as _t
+
     hit = _STATUS_CACHE.get(key)
     now = _t.monotonic()
     if hit and now - hit[0] < _STATUS_TTL:
@@ -1792,8 +1887,13 @@ async def health_statuspages(request: Request) -> Response:
     async def fetch():
         out = []
         for name, url, home in STATUSPAGES:
-            entry = {"provider": name, "url": home, "indicator": "unknown",
-                     "description": None, "degraded": []}
+            entry = {
+                "provider": name,
+                "url": home,
+                "indicator": "unknown",
+                "description": None,
+                "degraded": [],
+            }
             try:
                 r = await client.get(url, timeout=8.0)
                 d = r.json()
@@ -1802,7 +1902,8 @@ async def health_statuspages(request: Request) -> Response:
                 entry["degraded"] = [
                     {"name": c.get("name"), "status": c.get("status")}
                     for c in d.get("components", [])
-                    if c.get("status") not in (None, "operational")][:8]
+                    if c.get("status") not in (None, "operational")
+                ][:8]
             except Exception as exc:
                 entry["error"] = str(exc)[:120]
             out.append(entry)
@@ -1826,6 +1927,7 @@ async def health_openrouter_models(request: Request) -> Response:
     async def fetch():
         import asyncio as _aio
         import os as _os
+
         rows = await pool.fetch(
             """
             SELECT d.decision_model AS model, COUNT(*) AS n
@@ -1834,7 +1936,8 @@ async def health_openrouter_models(request: Request) -> Response:
                AND d.decision_model LIKE 'openrouter/%'
                AND d.decision_model != 'openrouter/auto'
              GROUP BY 1 ORDER BY 2 DESC LIMIT 8
-            """)
+            """
+        )
         slugs = [r["model"].removeprefix("openrouter/") for r in rows]
         for w in watch:
             if w not in slugs:
@@ -1845,14 +1948,22 @@ async def health_openrouter_models(request: Request) -> Response:
             try:
                 r = await client.get(
                     f"https://openrouter.ai/api/v1/models/{slug}/endpoints",
-                    headers=headers, timeout=8.0)
+                    headers=headers,
+                    timeout=8.0,
+                )
                 if r.status_code == 404:
                     return {"model": slug, "listed": False}
                 eps = (r.json().get("data") or {}).get("endpoints") or []
-                ups = [e.get("uptime_last_30m") for e in eps if e.get("uptime_last_30m") is not None]
-                return {"model": slug, "listed": True, "providers": len(eps),
-                        "best_uptime_30m": round(max(ups), 1) if ups else None,
-                        "deranked": sum(1 for e in eps if (e.get("status") or 0) < 0)}
+                ups = [
+                    e.get("uptime_last_30m") for e in eps if e.get("uptime_last_30m") is not None
+                ]
+                return {
+                    "model": slug,
+                    "listed": True,
+                    "providers": len(eps),
+                    "best_uptime_30m": round(max(ups), 1) if ups else None,
+                    "deranked": sum(1 for e in eps if (e.get("status") or 0) < 0),
+                }
             except Exception as exc:
                 return {"model": slug, "listed": None, "error": str(exc)[:120]}
 
@@ -1884,13 +1995,19 @@ async def bench_run(request: Request) -> Response:
     if tools is not None and not isinstance(tools, list):
         raise HTTPException(status_code=400, detail="tools must be a list")
     from app import bench
+
     if tools == "sample":
         tools = bench.SAMPLE_TOOLS
     run = await bench.run_bench(
-        pool, pricing=getattr(request.app.state, "pricing", None),
+        pool,
+        pricing=getattr(request.app.state, "pricing", None),
         client=getattr(request.app.state, "quality_judge", None),
-        agent_id=agent_id, prompt=prompt, models=[str(m) for m in models],
-        tools=tools, max_tokens=int(body.get("max_tokens") or 1000))
+        agent_id=agent_id,
+        prompt=prompt,
+        models=[str(m) for m in models],
+        tools=tools,
+        max_tokens=int(body.get("max_tokens") or 1000),
+    )
     return JSONResponse(run)
 
 
@@ -1907,14 +2024,19 @@ async def bench_list(request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
     from app import bench
-    return JSONResponse({
-        "runs": await bench.recent_runs(pool),
-        "working": await bench.working_compare(
-            pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id),
-        "sample_tools": bench.SAMPLE_TOOLS,
-        "available_models": await bench.available_models(
-            pool, getattr(request.app.state, "pricing", None)),
-    })
+
+    return JSONResponse(
+        {
+            "runs": await bench.recent_runs(pool),
+            "working": await bench.working_compare(
+                pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id
+            ),
+            "sample_tools": bench.SAMPLE_TOOLS,
+            "available_models": await bench.available_models(
+                pool, getattr(request.app.state, "pricing", None)
+            ),
+        }
+    )
 
 
 @router.get("/bench/head-to-head")
@@ -1930,8 +2052,10 @@ async def bench_head_to_head(request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="hours must be an integer") from None
     from app import bench
-    return JSONResponse(await bench.head_to_head(
-        pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id))
+
+    return JSONResponse(
+        await bench.head_to_head(pool, hours=max(1, min(hours, 24 * 30)), agent_id=agent_id)
+    )
 
 
 # ── Champion–challenger shadow testing ──────────────────────────────────────
@@ -1945,6 +2069,7 @@ async def shadow_summary(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app import shadow
+
     try:
         days = int(request.query_params.get("days", "30"))
     except ValueError:
@@ -1962,6 +2087,7 @@ async def shadow_trial(trial_id: str, request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app import shadow
+
     row = await shadow.trial_detail(pool, trial_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
@@ -1976,9 +2102,17 @@ async def shadow_config_update(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     body = await request.json()
-    allowed = {"enabled", "sample_rate", "challenger_provider", "challenger_model",
-               "daily_cost_cap_usd", "max_prompt_bytes",
-               "diet_enabled", "diet_strategy", "diet_apply"}
+    allowed = {
+        "enabled",
+        "sample_rate",
+        "challenger_provider",
+        "challenger_model",
+        "daily_cost_cap_usd",
+        "max_prompt_bytes",
+        "diet_enabled",
+        "diet_strategy",
+        "diet_apply",
+    }
     patch = {k: v for k, v in (body or {}).items() if k in allowed}
     if not patch:
         raise HTTPException(status_code=400, detail="no valid keys")
@@ -1988,10 +2122,12 @@ async def shadow_config_update(request: Request) -> Response:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="sample_rate must be a number") from None
     from app.app_config import get_settings, update_settings
+
     current = dict((await get_settings(pool)).get("shadow") or {})
     current.update(patch)
     await update_settings(pool, {"shadow": current})
     from app import shadow
+
     shadow.diet_cache_clear()
     return JSONResponse(await shadow.shadow_config(pool))
 
@@ -2010,6 +2146,7 @@ async def scorecard_view(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.scorecard import get_scorecard_with_incidents
+
     rows = await get_scorecard_with_incidents(pool, incidents_per_row=5)
     return JSONResponse({"items": rows})
 
@@ -2040,7 +2177,10 @@ async def scorecard_incidents(provider: str, model_path: str, request: Request) 
          ORDER BY ts DESC
          LIMIT $4
         """,
-        provider, model_path, tier, limit,
+        provider,
+        model_path,
+        tier,
+        limit,
     )
     items = [
         {
@@ -2065,6 +2205,7 @@ async def list_backups_endpoint(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.backup import list_backups
+
     try:
         limit = min(500, max(1, int(request.query_params.get("limit", "100"))))
     except ValueError:
@@ -2081,6 +2222,7 @@ async def create_backup_endpoint(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.backup import create_backup
+
     try:
         row = await create_backup(pool, via="manual")
     except Exception as exc:
@@ -2098,6 +2240,7 @@ async def get_backup_config_endpoint(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.backup import get_config
+
     return JSONResponse(await get_config(pool))
 
 
@@ -2112,6 +2255,7 @@ async def put_backup_config_endpoint(request: Request) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
     from app.backup import update_config
+
     try:
         cfg = await update_config(
             pool,
@@ -2135,6 +2279,7 @@ async def delete_backup_endpoint(backup_id: str, request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="bad backup_id") from None
     from app.backup import delete_backup
+
     ok = await delete_backup(pool, bid)
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
@@ -2162,6 +2307,7 @@ async def restore_backup_endpoint(backup_id: str, request: Request) -> Response:
     except ValueError:
         raise HTTPException(status_code=400, detail="bad backup_id") from None
     from app.backup import restore_backup
+
     try:
         await restore_backup(pool, bid)
     except FileNotFoundError as exc:
@@ -2179,6 +2325,7 @@ async def get_config_endpoint(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.app_config import get_settings
+
     s = await get_settings(pool)
     # Never expose secrets via GET — strip any password field we'd added by accident.
     if isinstance(s.get("sb_ingest"), dict):
@@ -2328,9 +2475,10 @@ async def put_config_endpoint(request: Request) -> Response:
     from app.app_config import update_settings
     from app.quality_eval import config_cache_clear as qe_cache_clear
     from app.sb_memory import config_cache_clear
+
     merged = await update_settings(pool, patch)
-    config_cache_clear()      # next sb_memory ingest re-reads from DB
-    qe_cache_clear()          # next quality_eval call re-reads from DB
+    config_cache_clear()  # next sb_memory ingest re-reads from DB
+    qe_cache_clear()  # next quality_eval call re-reads from DB
     if isinstance(merged.get("sb_ingest"), dict):
         merged["sb_ingest"].pop("password", None)
     if isinstance(merged.get("quality_eval"), dict):
@@ -2351,9 +2499,19 @@ async def test_sb_ingest_endpoint(request: Request) -> Response:
     await authenticate(pool, request)
     from app.app_config import sb_ingest_config
     from app.sb_memory import test_connection
+
     cfg = await sb_ingest_config(pool)
     ok, detail = await test_connection(cfg)
-    return JSONResponse({"ok": ok, "detail": detail, "host": cfg.get("host"), "port": cfg.get("port"), "database": cfg.get("database")}, status_code=200 if ok else 502)
+    return JSONResponse(
+        {
+            "ok": ok,
+            "detail": detail,
+            "host": cfg.get("host"),
+            "port": cfg.get("port"),
+            "database": cfg.get("database"),
+        },
+        status_code=200 if ok else 502,
+    )
 
 
 @router.get("/quality/models")
@@ -2375,6 +2533,7 @@ async def quality_models(request: Request) -> Response:
     await authenticate(pool, request)
 
     from app.app_config import QUALITY_PROVIDER_PRESETS, quality_eval_config
+
     cfg = await quality_eval_config(pool)
     # Allow ?provider= preview without saving — useful for the UI dropdown.
     preview_provider = request.query_params.get("provider")
@@ -2389,8 +2548,9 @@ async def quality_models(request: Request) -> Response:
 
     base_url = (cfg.get("judge_base_url") or "").rstrip("/")
     if not base_url:
-        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
-                             "error": "no_base_url"})
+        return JSONResponse(
+            {"provider": cfg.get("judge_provider"), "models": [], "error": "no_base_url"}
+        )
     # Tolerate base_url with or without a trailing /v1 (LMStudio's default
     # bundles /v1 in LMSTUDIO_BASE_URL).
     if base_url.endswith("/v1"):
@@ -2410,24 +2570,38 @@ async def quality_models(request: Request) -> Response:
     try:
         resp = await client.get(models_url, headers=headers, timeout=8.0)
     except Exception as exc:
-        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
-                             "error": f"fetch_failed: {type(exc).__name__}"},
-                            status_code=502)
+        return JSONResponse(
+            {
+                "provider": cfg.get("judge_provider"),
+                "models": [],
+                "error": f"fetch_failed: {type(exc).__name__}",
+            },
+            status_code=502,
+        )
     if resp.status_code >= 400:
-        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
-                             "error": f"http_{resp.status_code}",
-                             "detail": resp.text[:200]},
-                            status_code=502)
+        return JSONResponse(
+            {
+                "provider": cfg.get("judge_provider"),
+                "models": [],
+                "error": f"http_{resp.status_code}",
+                "detail": resp.text[:200],
+            },
+            status_code=502,
+        )
     try:
         payload = resp.json()
     except Exception:
-        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
-                             "error": "bad_json"}, status_code=502)
+        return JSONResponse(
+            {"provider": cfg.get("judge_provider"), "models": [], "error": "bad_json"},
+            status_code=502,
+        )
 
     raw = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(raw, list):
-        return JSONResponse({"provider": cfg.get("judge_provider"), "models": [],
-                             "error": "unexpected_shape"}, status_code=502)
+        return JSONResponse(
+            {"provider": cfg.get("judge_provider"), "models": [], "error": "unexpected_shape"},
+            status_code=502,
+        )
 
     out: list[dict] = []
     for m in raw:
@@ -2438,6 +2612,7 @@ async def quality_models(request: Request) -> Response:
             continue
         # OpenRouter returns prices as strings; OpenAI doesn't include pricing.
         pricing = m.get("pricing") or {}
+
         def _pm(v):
             # Convert USD-per-token → USD-per-million for display.
             # OpenRouter returns -1 for variable/auto-priced models — treat
@@ -2452,28 +2627,35 @@ async def quality_models(request: Request) -> Response:
                 return round(f * 1_000_000, 4)
             except (TypeError, ValueError):
                 return None
-        out.append({
-            "id": mid,
-            "name": m.get("name") or mid,
-            "context_length": m.get("context_length") or m.get("context_window"),
-            "prompt_price_per_m": _pm(pricing.get("prompt")),
-            "completion_price_per_m": _pm(pricing.get("completion")),
-            "supports_response_format": bool(
-                m.get("supported_parameters") or m.get("supported_features") or []
-            ),
-        })
+
+        out.append(
+            {
+                "id": mid,
+                "name": m.get("name") or mid,
+                "context_length": m.get("context_length") or m.get("context_window"),
+                "prompt_price_per_m": _pm(pricing.get("prompt")),
+                "completion_price_per_m": _pm(pricing.get("completion")),
+                "supports_response_format": bool(
+                    m.get("supported_parameters") or m.get("supported_features") or []
+                ),
+            }
+        )
+
     # Sort: priced models cheapest-first, then unpriced (OpenAI / LMStudio) alphabetically.
     def _sort_key(m):
         p = m.get("prompt_price_per_m")
         return (0 if p is not None else 1, p if p is not None else 0, m["id"])
+
     out.sort(key=_sort_key)
 
-    return JSONResponse({
-        "provider": cfg.get("judge_provider"),
-        "base_url": base_url,
-        "model_count": len(out),
-        "models": out,
-    })
+    return JSONResponse(
+        {
+            "provider": cfg.get("judge_provider"),
+            "base_url": base_url,
+            "model_count": len(out),
+            "models": out,
+        }
+    )
 
 
 @router.get("/quality/health")
@@ -2488,6 +2670,7 @@ async def quality_health(request: Request) -> Response:
     await authenticate(pool, request)
 
     from app.app_config import quality_eval_config
+
     cfg = await quality_eval_config(pool)
 
     async with pool.acquire() as conn:
@@ -2527,28 +2710,31 @@ async def quality_health(request: Request) -> Response:
     spend_today = float((spend_today_row or {}).get("s") or 0.0)
     cap = float(cfg.get("daily_cost_cap_usd") or 0.0)
 
-    return JSONResponse({
-        "enabled": bool(cfg.get("enabled", True)),
-        "judge_provider": cfg.get("judge_provider"),
-        "judge_model": cfg.get("judge_model"),
-        "judge_base_url": cfg.get("judge_base_url"),
-        "api_key_configured": bool(cfg.get("api_key")),
-        "sample_rate": float(cfg.get("sample_rate") or 0.0),
-        "daily_cost_cap_usd": cap,
-        "spend_today_usd": spend_today,
-        "spend_today_pct_of_cap": (spend_today / cap * 100.0) if cap > 0 else None,
-        "last_24h": {
-            "attempts": attempts,
-            "succeeded": succeeded,
-            "failed": attempts - succeeded,
-            "success_rate": success_rate,
-            "avg_latency_ms": (row24 or {}).get("avg_latency_ms"),
-            "last_eval_at": (row24 or {}).get("last_eval_at").isoformat()
-                if (row24 or {}).get("last_eval_at") else None,
-        },
-        "by_trigger_7d": [{"trigger": r["trigger"], "n": int(r["n"])} for r in by_trigger],
-        "total_evaluations_ever": int((total_evals_row or {}).get("n") or 0),
-    })
+    return JSONResponse(
+        {
+            "enabled": bool(cfg.get("enabled", True)),
+            "judge_provider": cfg.get("judge_provider"),
+            "judge_model": cfg.get("judge_model"),
+            "judge_base_url": cfg.get("judge_base_url"),
+            "api_key_configured": bool(cfg.get("api_key")),
+            "sample_rate": float(cfg.get("sample_rate") or 0.0),
+            "daily_cost_cap_usd": cap,
+            "spend_today_usd": spend_today,
+            "spend_today_pct_of_cap": (spend_today / cap * 100.0) if cap > 0 else None,
+            "last_24h": {
+                "attempts": attempts,
+                "succeeded": succeeded,
+                "failed": attempts - succeeded,
+                "success_rate": success_rate,
+                "avg_latency_ms": (row24 or {}).get("avg_latency_ms"),
+                "last_eval_at": (row24 or {}).get("last_eval_at").isoformat()
+                if (row24 or {}).get("last_eval_at")
+                else None,
+            },
+            "by_trigger_7d": [{"trigger": r["trigger"], "n": int(r["n"])} for r in by_trigger],
+            "total_evaluations_ever": int((total_evals_row or {}).get("n") or 0),
+        }
+    )
 
 
 # Rule-based clustering of raw anti_pattern strings into canonical buckets.
@@ -2564,48 +2750,90 @@ async def quality_health(request: Request) -> Response:
 _ANTI_PATTERN_CLUSTERS: list[tuple[str, list[str]]] = [
     (
         "Multi-task prompt — model executed part, dropped the rest",
-        ["multi_task", "multiple things", "asked for n ", "three things",
-         "two things", "first part but", "did one but", "partial execution"],
+        [
+            "multi_task",
+            "multiple things",
+            "asked for n ",
+            "three things",
+            "two things",
+            "first part but",
+            "did one but",
+            "partial execution",
+        ],
     ),
     (
         'Vague scope — said "check"/"review" without saying what to inspect',
-        ["vague request", "without specifics", "without specifying",
-         "without details", "no clear scope", "no specific scope",
-         "without explicit"],
+        [
+            "vague request",
+            "without specifics",
+            "without specifying",
+            "without details",
+            "no clear scope",
+            "no specific scope",
+            "without explicit",
+        ],
     ),
     (
         "No specific task or action requested — open-ended ask",
-        ["no specific task", "no specific action", "no clear task",
-         "no clear action", "unspecified task", "open-ended"],
+        [
+            "no specific task",
+            "no specific action",
+            "no clear task",
+            "no clear action",
+            "unspecified task",
+            "open-ended",
+        ],
     ),
     (
         "Prompt missing explicit requirements / success criteria",
-        ["misunderstood the task", "misunderstood the request",
-         "misunderstood the specific", "misinterpreted the task",
-         "misunderstood the focus", "misunderstood the requirements",
-         "misunderstood the update", "misunderstood the verification",
-         "missing requirements", "no success criteria"],
+        [
+            "misunderstood the task",
+            "misunderstood the request",
+            "misunderstood the specific",
+            "misinterpreted the task",
+            "misunderstood the focus",
+            "misunderstood the requirements",
+            "misunderstood the update",
+            "misunderstood the verification",
+            "missing requirements",
+            "no success criteria",
+        ],
     ),
     (
         "Off-topic response — model addressed a different subject",
-        ["unrelated information", "different topic", "wrong topic",
-         "off-topic", "off topic", "different subject",
-         "responded to a different", "addressed unrelated"],
+        [
+            "unrelated information",
+            "different topic",
+            "wrong topic",
+            "off-topic",
+            "off topic",
+            "different subject",
+            "responded to a different",
+            "addressed unrelated",
+        ],
     ),
     (
         "Verification request without acceptance criteria",
-        ["verification without", "verify without", "without defining",
-         "no acceptance criteria"],
+        ["verification without", "verify without", "without defining", "no acceptance criteria"],
     ),
     (
         "Build / implementation request without spec",
-        ["build without", "without specifying details", "without spec",
-         "asked for a build", "asked for implementation"],
+        [
+            "build without",
+            "without specifying details",
+            "without spec",
+            "asked for a build",
+            "asked for implementation",
+        ],
     ),
     (
         "News / summary request without specifying source",
-        ["news without", "summary without source", "without specifying source",
-         "current news without"],
+        [
+            "news without",
+            "summary without source",
+            "without specifying source",
+            "current news without",
+        ],
     ),
 ]
 
@@ -2625,10 +2853,20 @@ def _cluster_anti_pattern(raw: str | None) -> str:
 # When a prompt or response contains a tool_call with one of these names,
 # we treat it as evidence of a master → sub-agent edge for the graph.
 _DELEGATION_TOOL_NAMES = (
-    "coms_send", "comms_send", "Task", "task",
-    "dispatch", "delegate", "subagent", "sub_agent",
-    "agent_dispatch", "agent_call", "spawn_agent",
-    "Agent", "query_experts", "ask_user_question",
+    "coms_send",
+    "comms_send",
+    "Task",
+    "task",
+    "dispatch",
+    "delegate",
+    "subagent",
+    "sub_agent",
+    "agent_dispatch",
+    "agent_call",
+    "spawn_agent",
+    "Agent",
+    "query_experts",
+    "ask_user_question",
 )
 
 
@@ -2671,6 +2909,7 @@ def _extract_targets(tool_calls: list) -> list[str]:
     if not tool_calls:
         return []
     import json as _json
+
     out: list[str] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
@@ -2692,8 +2931,7 @@ def _extract_targets(tool_calls: list) -> list[str]:
 
         if args is not None:
             # Direct single-target keys.
-            for key in ("target", "subagent_type", "agent", "to",
-                        "agent_id", "recipient"):
+            for key in ("target", "subagent_type", "agent", "to", "agent_id", "recipient"):
                 v = args.get(key)
                 if isinstance(v, str) and v.strip():
                     out.append(v.strip()[:60])
@@ -2770,9 +3008,14 @@ async def quality_anti_patterns_by_agent(request: Request) -> Response:
     for r in rows:
         agent = r["agent_id"] or "(unknown)"
         cluster = _cluster_anti_pattern(r["anti_pattern"])
-        slot = per_agent.setdefault(agent, {
-            "patterns": {}, "completions": [], "total": 0,
-        })
+        slot = per_agent.setdefault(
+            agent,
+            {
+                "patterns": {},
+                "completions": [],
+                "total": 0,
+            },
+        )
         slot["total"] += 1
         slot["patterns"][cluster] = slot["patterns"].get(cluster, 0) + 1
         if r["completion"] is not None:
@@ -2781,14 +3024,15 @@ async def quality_anti_patterns_by_agent(request: Request) -> Response:
     items: list[dict] = []
     for agent, slot in per_agent.items():
         top = sorted(slot["patterns"].items(), key=lambda x: -x[1])[:5]
-        avg = (sum(slot["completions"]) / len(slot["completions"])
-               if slot["completions"] else None)
-        items.append({
-            "agent_id": agent,
-            "total_anti_patterns": slot["total"],
-            "avg_completion": avg,
-            "top_patterns": [{"pattern": p, "count": c} for (p, c) in top],
-        })
+        avg = sum(slot["completions"]) / len(slot["completions"]) if slot["completions"] else None
+        items.append(
+            {
+                "agent_id": agent,
+                "total_anti_patterns": slot["total"],
+                "avg_completion": avg,
+                "top_patterns": [{"pattern": p, "count": c} for (p, c) in top],
+            }
+        )
     items.sort(key=lambda x: -x["total_anti_patterns"])
 
     return JSONResponse({"window_days": days, "items": items[:30]})
@@ -2830,10 +3074,17 @@ async def quality_anti_patterns_by_session(request: Request) -> Response:
     per_session: dict[str, dict] = {}
     for r in rows:
         sid = r["session_id"]
-        slot = per_session.setdefault(sid, {
-            "patterns": {}, "completions": [], "models": set(),
-            "agent_id": r["agent_id"], "first_seen": r["ts"], "last_seen": r["ts"],
-        })
+        slot = per_session.setdefault(
+            sid,
+            {
+                "patterns": {},
+                "completions": [],
+                "models": set(),
+                "agent_id": r["agent_id"],
+                "first_seen": r["ts"],
+                "last_seen": r["ts"],
+            },
+        )
         cluster = _cluster_anti_pattern(r["anti_pattern"])
         slot["patterns"][cluster] = slot["patterns"].get(cluster, 0) + 1
         if r["completion"] is not None:
@@ -2851,25 +3102,28 @@ async def quality_anti_patterns_by_session(request: Request) -> Response:
         if total < min_calls:
             continue
         top = sorted(slot["patterns"].items(), key=lambda x: -x[1])[:3]
-        avg = (sum(slot["completions"]) / len(slot["completions"])
-               if slot["completions"] else None)
-        items.append({
-            "session_id": sid,
-            "agent_id": slot["agent_id"],
-            "anti_pattern_count": total,
-            "avg_completion": avg,
-            "first_seen": slot["first_seen"].isoformat() if slot["first_seen"] else None,
-            "last_seen": slot["last_seen"].isoformat() if slot["last_seen"] else None,
-            "models": list(slot["models"])[:3],
-            "top_patterns": [{"pattern": p, "count": c} for (p, c) in top],
-        })
+        avg = sum(slot["completions"]) / len(slot["completions"]) if slot["completions"] else None
+        items.append(
+            {
+                "session_id": sid,
+                "agent_id": slot["agent_id"],
+                "anti_pattern_count": total,
+                "avg_completion": avg,
+                "first_seen": slot["first_seen"].isoformat() if slot["first_seen"] else None,
+                "last_seen": slot["last_seen"].isoformat() if slot["last_seen"] else None,
+                "models": list(slot["models"])[:3],
+                "top_patterns": [{"pattern": p, "count": c} for (p, c) in top],
+            }
+        )
     items.sort(key=lambda x: -x["anti_pattern_count"])
 
-    return JSONResponse({
-        "window_days": days,
-        "min_calls_threshold": min_calls,
-        "items": items[:30],
-    })
+    return JSONResponse(
+        {
+            "window_days": days,
+            "min_calls_threshold": min_calls,
+            "items": items[:30],
+        }
+    )
 
 
 @router.get("/quality/delegation-edges")
@@ -2929,10 +3183,16 @@ async def quality_delegation_edges(request: Request) -> Response:
             continue
         for target in targets:
             key = (source, target)
-            slot = edges.setdefault(key, {
-                "count": 0, "completion_sum": 0.0, "completion_n": 0,
-                "low_score_count": 0, "anti_patterns": {},
-            })
+            slot = edges.setdefault(
+                key,
+                {
+                    "count": 0,
+                    "completion_sum": 0.0,
+                    "completion_n": 0,
+                    "low_score_count": 0,
+                    "anti_patterns": {},
+                },
+            )
             slot["count"] += 1
             if r["completion"] is not None:
                 slot["completion_sum"] += float(r["completion"])
@@ -2948,28 +3208,30 @@ async def quality_delegation_edges(request: Request) -> Response:
     for (source, target), slot in edges.items():
         nodes_seen.add(source)
         nodes_seen.add(target)
-        avg = (slot["completion_sum"] / slot["completion_n"]
-               if slot["completion_n"] > 0 else None)
-        failure_rate = (slot["low_score_count"] / slot["completion_n"]
-                        if slot["completion_n"] > 0 else None)
+        avg = slot["completion_sum"] / slot["completion_n"] if slot["completion_n"] > 0 else None
+        failure_rate = (
+            slot["low_score_count"] / slot["completion_n"] if slot["completion_n"] > 0 else None
+        )
         top_pat = sorted(slot["anti_patterns"].items(), key=lambda x: -x[1])[:2]
-        items.append({
-            "source": source,
-            "target": target,
-            "calls": slot["count"],
-            "avg_completion": avg,
-            "failure_rate": failure_rate,
-            "top_anti_patterns": [
-                {"pattern": p, "count": c} for (p, c) in top_pat
-            ],
-        })
+        items.append(
+            {
+                "source": source,
+                "target": target,
+                "calls": slot["count"],
+                "avg_completion": avg,
+                "failure_rate": failure_rate,
+                "top_anti_patterns": [{"pattern": p, "count": c} for (p, c) in top_pat],
+            }
+        )
     items.sort(key=lambda x: -x["calls"])
 
-    return JSONResponse({
-        "window_days": days,
-        "nodes": [{"id": n} for n in sorted(nodes_seen)],
-        "edges": items,
-    })
+    return JSONResponse(
+        {
+            "window_days": days,
+            "nodes": [{"id": n} for n in sorted(nodes_seen)],
+            "edges": items,
+        }
+    )
 
 
 @router.get("/quality/anti-patterns")
@@ -3042,38 +3304,47 @@ async def quality_anti_patterns(request: Request) -> Response:
         )
         examples = rs_sorted[:3]
         completions = [float(x["completion"]) for x in rs if x["completion"] is not None]
-        clarities  = [float(x["clarity"]) for x in rs if x["clarity"] is not None]
+        clarities = [float(x["clarity"]) for x in rs if x["clarity"] is not None]
         # Top 5 raw variants, sorted by frequency.
         raw_variants = sorted(
-            raw_variant_counts[canonical].items(), key=lambda x: -x[1],
+            raw_variant_counts[canonical].items(),
+            key=lambda x: -x[1],
         )[:5]
-        items.append({
-            "anti_pattern":    canonical,
-            "occurrences":     len(rs),
-            "avg_completion":  sum(completions) / len(completions) if completions else None,
-            "avg_clarity":     sum(clarities) / len(clarities) if clarities else None,
-            "distinct_models": len({x["decision_model"] for x in rs if x["decision_model"]}),
-            "sample_prompts":  [x["prompt_excerpt"] for x in examples if x["prompt_excerpt"]],
-            "sample_rewrites": [x["suggested_prompt"] for x in examples
-                                if x["suggested_prompt"]],
-            "sample_models":   list({x["decision_model"] for x in examples
-                                     if x["decision_model"]})[:3],
-            "sample_coach":    [x["coach_notes"] for x in examples if x["coach_notes"]],
-            "raw_variants":    [{"phrase": p, "count": c} for (p, c) in raw_variants],
-        })
+        items.append(
+            {
+                "anti_pattern": canonical,
+                "occurrences": len(rs),
+                "avg_completion": sum(completions) / len(completions) if completions else None,
+                "avg_clarity": sum(clarities) / len(clarities) if clarities else None,
+                "distinct_models": len({x["decision_model"] for x in rs if x["decision_model"]}),
+                "sample_prompts": [x["prompt_excerpt"] for x in examples if x["prompt_excerpt"]],
+                "sample_rewrites": [
+                    x["suggested_prompt"] for x in examples if x["suggested_prompt"]
+                ],
+                "sample_models": list(
+                    {x["decision_model"] for x in examples if x["decision_model"]}
+                )[:3],
+                "sample_coach": [x["coach_notes"] for x in examples if x["coach_notes"]],
+                "raw_variants": [{"phrase": p, "count": c} for (p, c) in raw_variants],
+            }
+        )
 
     # Sort by occurrences DESC, then worst completion first.
     items.sort(
-        key=lambda x: (-x["occurrences"],
-                       x["avg_completion"] if x["avg_completion"] is not None else 99),
+        key=lambda x: (
+            -x["occurrences"],
+            x["avg_completion"] if x["avg_completion"] is not None else 99,
+        ),
     )
     items = items[:25]
 
-    return JSONResponse({
-        "window_days": days,
-        "total_patterns": len(items),
-        "items": items,
-    })
+    return JSONResponse(
+        {
+            "window_days": days,
+            "total_patterns": len(items),
+            "items": items,
+        }
+    )
 
 
 @router.get("/quality/summary")
@@ -3140,6 +3411,7 @@ async def quality_evaluation_run(decision_id: str, request: Request) -> Response
     except Exception:
         pass
     from app.quality_eval import manual_evaluate
+
     row = await manual_evaluate(
         pool,
         decision_id=uuid.UUID(decision_id),
@@ -3196,6 +3468,7 @@ async def behavior_compare_run(request: Request) -> Response:
     poll GET /v1/behavior/compare/latest for results.
     """
     import os as _os
+
     pool = getattr(request.app.state, "db", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
@@ -3222,6 +3495,7 @@ async def behavior_compare_run(request: Request) -> Response:
         quality_eval_config_or_default,
         run_comparison,
     )
+
     judge_config = await quality_eval_config_or_default(pool)
     judge_client = getattr(request.app.state, "quality_judge", None)
     try:
@@ -3235,11 +3509,13 @@ async def behavior_compare_run(request: Request) -> Response:
     except Exception as exc:
         log.error("behavior_compare_failed", error=str(exc))
         raise HTTPException(status_code=502, detail=f"comparison_failed: {exc}") from None
-    return JSONResponse({
-        "comparison_id": str(comparison_id),
-        "models": models,
-        "status": "completed",
-    })
+    return JSONResponse(
+        {
+            "comparison_id": str(comparison_id),
+            "models": models,
+            "status": "completed",
+        }
+    )
 
 
 @router.get("/behavior/compare/latest")
@@ -3268,6 +3544,7 @@ async def behavior_compare_latest(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.behavioral_canary import get_latest_comparison
+
     payload = await get_latest_comparison(pool)
     return JSONResponse(payload)
 
@@ -3319,13 +3596,19 @@ async def whoami(request: Request) -> Response:
         """,
         agent_id,
     )
-    return JSONResponse({
-        "agent_id": agent_id,
-        "key_id": row["key_id"] if row else None,
-        "default_profile": row["default_profile"] if row else "auto",
-        "daily_budget_usd": float(row["daily_budget_usd"]) if row and row["daily_budget_usd"] is not None else None,
-        "last_used_at": row["last_used_at"].isoformat() if row and row["last_used_at"] else None,
-    })
+    return JSONResponse(
+        {
+            "agent_id": agent_id,
+            "key_id": row["key_id"] if row else None,
+            "default_profile": row["default_profile"] if row else "auto",
+            "daily_budget_usd": float(row["daily_budget_usd"])
+            if row and row["daily_budget_usd"] is not None
+            else None,
+            "last_used_at": row["last_used_at"].isoformat()
+            if row and row["last_used_at"]
+            else None,
+        }
+    )
 
 
 @router.get("/drift")
@@ -3338,6 +3621,7 @@ async def drift_overview(request: Request) -> Response:
         raise HTTPException(status_code=503, detail="db_unavailable")
     await authenticate(pool, request)
     from app.drift_engine import get_drift_overview
+
     return JSONResponse(await get_drift_overview(pool))
 
 
@@ -3358,8 +3642,13 @@ async def drift_anomalies(provider: str, model_path: str, request: Request) -> R
     except ValueError:
         limit = 50
     from app.drift_engine import get_recent_anomalies
+
     items = await get_recent_anomalies(
-        pool, provider=provider, model=model_path, metric_name=metric, limit=limit,
+        pool,
+        provider=provider,
+        model=model_path,
+        metric_name=metric,
+        limit=limit,
     )
     return JSONResponse({"items": items, "count": len(items)})
 
@@ -3398,9 +3687,15 @@ async def drift_investigate(request: Request) -> Response:
     metric = body.get("metric_name")
     suite = body.get("suite")
     from app.drift_investigator import run_investigation
+
     iid = await run_investigation(
-        pool, alert_id=alert_id, provider=provider, model=model,
-        metric_name=metric, suite=suite, triggered_by="manual",
+        pool,
+        alert_id=alert_id,
+        provider=provider,
+        model=model,
+        metric_name=metric,
+        suite=suite,
+        triggered_by="manual",
     )
     if iid is None:
         raise HTTPException(status_code=422, detail="investigation_skipped_or_unsupported")
@@ -3425,6 +3720,7 @@ async def drift_investigations_list(request: Request) -> Response:
         except ValueError:
             raise HTTPException(status_code=400, detail="bad alert_id") from None
     from app.drift_investigator import list_investigations
+
     items = await list_investigations(pool, limit=limit, alert_id=alert_id)
     return JSONResponse({"items": items, "count": len(items)})
 
@@ -3440,6 +3736,7 @@ async def drift_investigation_get(investigation_id: str, request: Request) -> Re
     except ValueError:
         raise HTTPException(status_code=400, detail="bad investigation_id") from None
     from app.drift_investigator import get_investigation
+
     row = await get_investigation(pool, iid)
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
@@ -3463,6 +3760,7 @@ async def drift_report_html(request: Request) -> Response:
     from fastapi.responses import HTMLResponse as _HTMLResponse
 
     from app.drift_investigator import generate_report
+
     out = await generate_report(pool)
     return _HTMLResponse(out["html"])
 
@@ -3498,8 +3796,11 @@ async def drift_report(request: Request) -> Response:
                 models_override.append((str(m["provider"]), str(m["model"])))
 
     from app.drift_investigator import generate_report
+
     out = await generate_report(
-        pool, force_rerun=force_rerun, models=models_override,
+        pool,
+        force_rerun=force_rerun,
+        models=models_override,
     )
     return JSONResponse(out)
 
@@ -3520,14 +3821,15 @@ async def openrouter_balance(request: Request) -> Response:
     await authenticate(pool, request)
 
     from app.app_config import is_offline
+
     if await is_offline(pool):
         return JSONResponse(
-            {"error": "Offline mode — the gateway makes no outbound calls.",
-             "offline": True},
+            {"error": "Offline mode — the gateway makes no outbound calls.", "offline": True},
             status_code=503,
         )
 
     import os as _os
+
     api_key = _os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         return JSONResponse(
@@ -3569,19 +3871,17 @@ async def openrouter_balance(request: Request) -> Response:
         )
     spend_7d = float((spend_row or {}).get("spend") or 0.0)
     daily_burn = spend_7d / 7.0 if spend_7d else None
-    days_left = (
-        remaining / daily_burn
-        if daily_burn and daily_burn > 0 and remaining > 0
-        else None
+    days_left = remaining / daily_burn if daily_burn and daily_burn > 0 and remaining > 0 else None
+    return JSONResponse(
+        {
+            "total_credits": total_credits,
+            "total_usage": total_usage,
+            "remaining_usd": remaining,
+            "spend_7d_usd": spend_7d,
+            "daily_burn_usd": daily_burn,
+            "days_left_at_current_burn": days_left,
+        }
     )
-    return JSONResponse({
-        "total_credits": total_credits,
-        "total_usage": total_usage,
-        "remaining_usd": remaining,
-        "spend_7d_usd": spend_7d,
-        "daily_burn_usd": daily_burn,
-        "days_left_at_current_burn": days_left,
-    })
 
 
 @router.get("/notifications")
@@ -3625,60 +3925,82 @@ async def notifications(request: Request) -> Response:
     real_drift = int((alerts_row or {}).get("real_drift") or 0)
     compactions = int((alerts_row or {}).get("compactions") or 0)
     if real_drift > 0:
-        items.append({
-            "level": "warning",
-            "text": (f"{real_drift} open drift alert{'s' if real_drift != 1 else ''} — "
-                     "click to investigate"),
-            "href": "#drift",
-        })
+        items.append(
+            {
+                "level": "warning",
+                "text": (
+                    f"{real_drift} open drift alert{'s' if real_drift != 1 else ''} — "
+                    "click to investigate"
+                ),
+                "href": "#drift",
+            }
+        )
     elif compactions > 0:
         # Routine but worth surfacing so the operator knows the detector
         # is actually running. Lower priority than real drift.
-        items.append({
-            "level": "info",
-            "text": (f"{compactions} active compaction event{'s' if compactions != 1 else ''} "
-                     "(routine — long sessions auto-compacting)"),
-            "href": "#drift",
-        })
+        items.append(
+            {
+                "level": "info",
+                "text": (
+                    f"{compactions} active compaction event{'s' if compactions != 1 else ''} "
+                    "(routine — long sessions auto-compacting)"
+                ),
+                "href": "#drift",
+            }
+        )
 
     metered = float((today_row or {}).get("metered") or 0.0)
     saved = float((today_row or {}).get("saved") or 0.0)
     if saved > 1.00:
-        items.append({
-            "level": "success",
-            "text": f"Subscription saved ${saved:.2f} today",
-            "href": "#cost",
-        })
+        items.append(
+            {
+                "level": "success",
+                "text": f"Subscription saved ${saved:.2f} today",
+                "href": "#cost",
+            }
+        )
     # Daily budget alert: hardcoded $50/day informational threshold for now.
     # Real per-scope budgets land when budgets.py is wired up.
     if metered > 50.0:
-        items.append({
-            "level": "warning",
-            "text": f"Today's metered spend is ${metered:.2f}",
-            "href": "#cost",
-        })
+        items.append(
+            {
+                "level": "warning",
+                "text": f"Today's metered spend is ${metered:.2f}",
+                "href": "#cost",
+            }
+        )
 
     rate_limited = int((today_row or {}).get("rate_limited") or 0)
     if rate_limited > 0:
-        items.append({
-            "level": "info",
-            "text": (f"{rate_limited} rate-limit (429) event{'s' if rate_limited != 1 else ''} "
-                     "today — subscription cap hit"),
-            "href": "#cost",
-        })
+        items.append(
+            {
+                "level": "info",
+                "text": (
+                    f"{rate_limited} rate-limit (429) event{'s' if rate_limited != 1 else ''} "
+                    "today — subscription cap hit"
+                ),
+                "href": "#cost",
+            }
+        )
 
     # Usage bursts — an agent running >4× its hourly baseline right now.
     # Catches runaway loops within the hour they start.
     try:
         from app.insights import q_bursts
+
         for b in await q_bursts(pool):
-            items.insert(0, {
-                "level": "warning",
-                "text": (f"Usage burst: {b['agent_id']} at {b['calls']} calls this hour "
-                         f"(baseline {b['med_calls']:.0f}/h)"
-                         + (f" · ${b['spend']:.2f}" if b["spend"] and b["spend"] > 0.5 else "")),
-                "href": "#audit",
-            })
+            items.insert(
+                0,
+                {
+                    "level": "warning",
+                    "text": (
+                        f"Usage burst: {b['agent_id']} at {b['calls']} calls this hour "
+                        f"(baseline {b['med_calls']:.0f}/h)"
+                        + (f" · ${b['spend']:.2f}" if b["spend"] and b["spend"] > 0.5 else "")
+                    ),
+                    "href": "#audit",
+                },
+            )
     except Exception as exc:
         log.warning("burst_check_failed", error=str(exc))
 

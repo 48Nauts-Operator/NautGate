@@ -13,8 +13,16 @@ from app.insights import (
 class FakePricing:
     """$1/M input, $2/M output for any (provider, model); None for 'unknown'."""
 
-    def compute_cost(self, provider, model, *, prompt_tokens, completion_tokens,
-                     cache_read_tokens=None, cache_write_tokens=None):
+    def compute_cost(
+        self,
+        provider,
+        model,
+        *,
+        prompt_tokens,
+        completion_tokens,
+        cache_read_tokens=None,
+        cache_write_tokens=None,
+    ):
         if model == "unknown":
             return None
         return (prompt_tokens or 0) * 1e-6 + (completion_tokens or 0) * 2e-6
@@ -33,8 +41,11 @@ def test_simulate_costs_reprices_and_counts():
 
 
 def test_simulate_costs_unpriced_target():
-    out = simulate_costs([{"actual_usd": 5.0, "prompt_tokens": 1, "completion_tokens": 1}],
-                         FakePricing(), ("p", "unknown"))
+    out = simulate_costs(
+        [{"actual_usd": 5.0, "prompt_tokens": 1, "completion_tokens": 1}],
+        FakePricing(),
+        ("p", "unknown"),
+    )
     assert out["unpriced_calls"] == 1 and out["simulated_usd"] == 0.0
 
 
@@ -55,8 +66,9 @@ def test_substitution_impact_detects_drop():
 
 
 def test_substitution_impact_p_value_with_variance():
-    rows = ([{"asked": "a", "served": "a", "score": s} for s in [4, 5, 4, 5, 4, 5]]
-            + [{"asked": "a", "served": "b", "score": s} for s in [1, 2, 1, 2, 1]])
+    rows = [{"asked": "a", "served": "a", "score": s} for s in [4, 5, 4, 5, 4, 5]] + [
+        {"asked": "a", "served": "b", "score": s} for s in [1, 2, 1, 2, 1]
+    ]
     p = substitution_impact(rows)[0]["p_value"]
     assert p is not None and p < 0.01
 
@@ -75,10 +87,17 @@ def test_ewma_chart_stable_series_no_violations():
 
 
 def test_efficiency_score_full_components():
-    out = efficiency_score({
-        "quality": 5.0, "irrelevant_share": 0.0, "cost_usd": 10.0, "waste_usd": 0.0,
-        "cache_read_tokens": 100, "fresh_prompt_tokens": 0, "avg_bloat": 0.0,
-    })
+    out = efficiency_score(
+        {
+            "quality": 5.0,
+            "irrelevant_share": 0.0,
+            "cost_usd": 10.0,
+            "waste_usd": 0.0,
+            "cache_read_tokens": 100,
+            "fresh_prompt_tokens": 0,
+            "avg_bloat": 0.0,
+        }
+    )
     assert out["score"] == 100
     assert set(out["components"]) == {"quality", "relevance", "waste", "cache", "bloat"}
 

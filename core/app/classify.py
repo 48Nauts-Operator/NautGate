@@ -36,11 +36,14 @@ _PII_RULES: list[tuple[str, re.Pattern[str]]] = [
     # allowed a separator after EVERY digit, which welded space-separated numeric
     # columns (an `ls -l` size/date/time row) into a fake 16-digit "card". Every
     # candidate is still Luhn+IIN validated by _MATCH_VALIDATORS before it counts.
-    ("credit_card_like", re.compile(
-        r"\b\d{13,19}\b"
-        r"|\b\d{4}(?:[ \-]\d{4}){2,3}(?:[ \-]\d{1,4})?\b"
-        r"|\b\d{4}[ \-]\d{6}[ \-]\d{5}\b"
-    )),
+    (
+        "credit_card_like",
+        re.compile(
+            r"\b\d{13,19}\b"
+            r"|\b\d{4}(?:[ \-]\d{4}){2,3}(?:[ \-]\d{1,4})?\b"
+            r"|\b\d{4}[ \-]\d{6}[ \-]\d{5}\b"
+        ),
+    ),
 ]
 
 _SECRET_RULES: list[tuple[str, re.Pattern[str]]] = [

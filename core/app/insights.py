@@ -44,13 +44,18 @@ def simulate_costs(rows: list[dict], pricing, target: tuple[str, str]) -> dict:
     priced = unpriced = 0
     for r in rows:
         actual += float(r.get("actual_usd") or 0)
-        c = pricing.compute_cost(
-            provider, model,
-            prompt_tokens=r.get("prompt_tokens"),
-            completion_tokens=r.get("completion_tokens"),
-            cache_read_tokens=r.get("cache_read_tokens"),
-            cache_write_tokens=r.get("cache_write_tokens"),
-        ) if pricing else None
+        c = (
+            pricing.compute_cost(
+                provider,
+                model,
+                prompt_tokens=r.get("prompt_tokens"),
+                completion_tokens=r.get("completion_tokens"),
+                cache_read_tokens=r.get("cache_read_tokens"),
+                cache_write_tokens=r.get("cache_write_tokens"),
+            )
+            if pricing
+            else None
+        )
         if c is None:
             unpriced += 1
         else:
@@ -116,16 +121,18 @@ def substitution_impact(rows: list[dict], min_n: int = 5) -> list[dict]:
                 continue
             s_mean = sum(scores) / len(scores)
             s_var = sum((x - s_mean) ** 2 for x in scores) / max(1, len(scores) - 1)
-            out.append({
-                "asked": asked,
-                "served": served,
-                "n_substituted": len(scores),
-                "n_as_asked": len(match),
-                "mean_substituted": round(s_mean, 2),
-                "mean_as_asked": round(m_mean, 2),
-                "delta": round(s_mean - m_mean, 2),
-                "p_value": _welch(s_mean, s_var, len(scores), m_mean, m_var, len(match)),
-            })
+            out.append(
+                {
+                    "asked": asked,
+                    "served": served,
+                    "n_substituted": len(scores),
+                    "n_as_asked": len(match),
+                    "mean_substituted": round(s_mean, 2),
+                    "mean_as_asked": round(m_mean, 2),
+                    "delta": round(s_mean - m_mean, 2),
+                    "p_value": _welch(s_mean, s_var, len(scores), m_mean, m_var, len(match)),
+                }
+            )
     out.sort(key=lambda x: x["delta"])
     return out
 
@@ -154,18 +161,24 @@ def ewma_chart(values: list[float], lam: float = 0.2, sigmas: float = 3.0) -> di
         lcl.append(round(mean - width, 4))
         if z > ucl[-1] or z < lcl[-1]:
             violations.append(i)
-    return {"ewma": ewma, "ucl": ucl, "lcl": lcl, "violations": violations,
-            "mean": round(mean, 4), "sd": round(sd, 4)}
+    return {
+        "ewma": ewma,
+        "ucl": ucl,
+        "lcl": lcl,
+        "violations": violations,
+        "mean": round(mean, 4),
+        "sd": round(sd, 4),
+    }
 
 
 SPC_METRICS = {
     "completion_tokens": "AVG(o.completion_tokens)",
     "reasoning_share": "AVG(CASE WHEN COALESCE(o.completion_tokens,0)+COALESCE(o.reasoning_tokens,0) > 0 "
-                       "THEN COALESCE(o.reasoning_tokens,0)::float/(COALESCE(o.completion_tokens,0)+COALESCE(o.reasoning_tokens,0)) END)",
+    "THEN COALESCE(o.reasoning_tokens,0)::float/(COALESCE(o.completion_tokens,0)+COALESCE(o.reasoning_tokens,0)) END)",
     "first_byte_ms": "AVG(o.first_byte_ms)",
     "empty_rate": "AVG(CASE WHEN o.was_empty THEN 1.0 ELSE 0.0 END)",
     "tool_calls": "AVG(CASE WHEN jsonb_typeof(o.tool_calls_made) = 'array' "
-                  "THEN jsonb_array_length(o.tool_calls_made) ELSE 0 END)",
+    "THEN jsonb_array_length(o.tool_calls_made) ELSE 0 END)",
 }
 
 
@@ -173,11 +186,11 @@ SPC_METRICS = {
 
 # Component weights; renormalized over whichever components have data.
 EFFICIENCY_WEIGHTS = {
-    "quality": 0.30,     # avg judged task_completion / 5
-    "relevance": 0.20,   # 1 - avg irrelevant_share/100
-    "waste": 0.20,       # 1 - waste_usd / cost_usd
-    "cache": 0.15,       # cache_read / (cache_read + fresh prompt)
-    "bloat": 0.15,       # 1 - avg bloat penalty * 5 (penalty ~[0, 0.2])
+    "quality": 0.30,  # avg judged task_completion / 5
+    "relevance": 0.20,  # 1 - avg irrelevant_share/100
+    "waste": 0.20,  # 1 - waste_usd / cost_usd
+    "cache": 0.15,  # cache_read / (cache_read + fresh prompt)
+    "bloat": 0.15,  # 1 - avg bloat penalty * 5 (penalty ~[0, 0.2])
 }
 
 
@@ -214,8 +227,10 @@ def efficiency_score(c: dict) -> dict:
 
 
 async def q_simulator(pool: asyncpg.Pool, pricing, hours: int) -> dict:
-    rows = [dict(r) for r in await pool.fetch(
-        """
+    rows = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT COALESCE(NULLIF(o.cost_usd, 0), o.notional_cost_usd, 0)::float AS actual_usd,
                o.prompt_tokens, o.completion_tokens,
                o.cache_read_tokens, o.cache_write_tokens
@@ -223,10 +238,14 @@ async def q_simulator(pool: asyncpg.Pool, pricing, hours: int) -> dict:
           JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE d.ts > NOW() - make_interval(hours => $1)
            AND o.status_code BETWEEN 200 AND 299
-        """, hours)]
-    quality = {r["model"]: {"quality": float(r["quality"]), "n": r["n"]}
-               for r in await pool.fetch(
-        """
+        """,
+            hours,
+        )
+    ]
+    quality = {
+        r["model"]: {"quality": float(r["quality"]), "n": r["n"]}
+        for r in await pool.fetch(
+            """
         SELECT COALESCE(o.actual_model, d.decision_model) AS model,
                AVG((q.rubric->>'task_completion')::numeric) AS quality,
                COUNT(*) AS n
@@ -235,7 +254,9 @@ async def q_simulator(pool: asyncpg.Pool, pricing, hours: int) -> dict:
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE q.rubric ? 'task_completion'
          GROUP BY 1
-        """)}
+        """
+        )
+    }
     policies = []
     for name, target in POLICIES.items():
         sim = simulate_costs(rows, pricing, target)
@@ -246,14 +267,19 @@ async def q_simulator(pool: asyncpg.Pool, pricing, hours: int) -> dict:
     # Traffic-weighted current quality across evaluated calls.
     tot_n = sum(v["n"] for v in quality.values())
     current_q = (sum(v["quality"] * v["n"] for v in quality.values()) / tot_n) if tot_n else None
-    return {"hours": hours, "policies": policies,
-            "current_quality": round(current_q, 2) if current_q is not None else None,
-            "evaluated_calls": tot_n}
+    return {
+        "hours": hours,
+        "policies": policies,
+        "current_quality": round(current_q, 2) if current_q is not None else None,
+        "evaluated_calls": tot_n,
+    }
 
 
 async def q_substitution(pool: asyncpg.Pool) -> dict:
-    rows = [dict(r) for r in await pool.fetch(
-        """
+    rows = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT d.decision_model AS asked,
                COALESCE(o.actual_model, d.decision_model) AS served,
                (q.rubric->>'task_completion')::float AS score
@@ -261,7 +287,9 @@ async def q_substitution(pool: asyncpg.Pool) -> dict:
           JOIN nautgate.route_decisions d ON d.id = q.decision_id
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE q.rubric ? 'task_completion'
-        """)]
+        """
+        )
+    ]
     return {"pairs": substitution_impact(rows), "judged_calls": len(rows)}
 
 
@@ -281,7 +309,9 @@ async def q_spc(pool: asyncpg.Pool, metric: str, hours: int, top_models: int = 4
            AND o.status_code BETWEEN 200 AND 299
          GROUP BY 1, 2
          ORDER BY 1, 2
-        """, hours)
+        """,
+        hours,
+    )
     by_model: dict[str, dict] = {}
     for r in rows:
         m = by_model.setdefault(r["model"], {"buckets": [], "values": [], "calls": 0})
@@ -295,8 +325,15 @@ async def q_spc(pool: asyncpg.Pool, metric: str, hours: int, top_models: int = 4
         if len(m["values"]) < 4:  # too few buckets for limits to mean anything
             continue
         chart = ewma_chart(m["values"])
-        models.append({"model": name, "calls": m["calls"], "buckets": m["buckets"],
-                       "values": [round(v, 4) for v in m["values"]], **chart})
+        models.append(
+            {
+                "model": name,
+                "calls": m["calls"],
+                "buckets": m["buckets"],
+                "values": [round(v, 4) for v in m["values"]],
+                **chart,
+            }
+        )
     return {"metric": metric, "hours": hours, "models": models}
 
 
@@ -319,12 +356,20 @@ async def q_efficiency(pool: asyncpg.Pool, days: int) -> dict:
          GROUP BY 1
         HAVING COUNT(*) >= 5
          ORDER BY 2 DESC
-        """, days)
+        """,
+        days,
+    )
     agents = []
     for r in rows:
         s = efficiency_score(dict(r))
-        agents.append({"agent_id": r["agent_id"], "calls": r["calls"],
-                       "cost_usd": round(r["cost_usd"] or 0, 4), **s})
+        agents.append(
+            {
+                "agent_id": r["agent_id"],
+                "calls": r["calls"],
+                "cost_usd": round(r["cost_usd"] or 0, 4),
+                **s,
+            }
+        )
     return {"days": days, "agents": agents, "weights": EFFICIENCY_WEIGHTS}
 
 
@@ -337,7 +382,9 @@ async def q_dataflow(pool: asyncpg.Pool, days: int) -> dict:
                jsonb_array_elements(COALESCE(d.classified_signals, '[]'::jsonb)) s
          WHERE d.ts > NOW() - make_interval(days => $1)
          GROUP BY 1, 2, 3
-        """, days)
+        """,
+        days,
+    )
     agent_cat: dict[tuple[str, str], int] = {}
     cat_prov: dict[tuple[str, str], int] = {}
     for r in rows:
@@ -347,10 +394,14 @@ async def q_dataflow(pool: asyncpg.Pool, days: int) -> dict:
         cat_prov[(cat, r["provider"])] = cat_prov.get((cat, r["provider"]), 0) + n
     return {
         "days": days,
-        "agent_to_category": [{"source": a, "target": c, "value": v}
-                              for (a, c), v in sorted(agent_cat.items(), key=lambda x: -x[1])],
-        "category_to_provider": [{"source": c, "target": p, "value": v}
-                                 for (c, p), v in sorted(cat_prov.items(), key=lambda x: -x[1])],
+        "agent_to_category": [
+            {"source": a, "target": c, "value": v}
+            for (a, c), v in sorted(agent_cat.items(), key=lambda x: -x[1])
+        ],
+        "category_to_provider": [
+            {"source": c, "target": p, "value": v}
+            for (c, p), v in sorted(cat_prov.items(), key=lambda x: -x[1])
+        ],
     }
 
 
@@ -368,24 +419,35 @@ async def q_overthinking(pool: asyncpg.Pool, limit: int = 800) -> dict:
            AND o.completion_tokens > 0
          ORDER BY q.ts DESC
          LIMIT $1
-        """, limit)
+        """,
+        limit,
+    )
     points = []
     for r in rows:
         total = int(r["completion_tokens"]) + int(r["reasoning_tokens"])
-        points.append({
-            "model": r["model"],
-            "reasoning_share": round(int(r["reasoning_tokens"]) / total, 3),
-            "score": r["score"],
-        })
+        points.append(
+            {
+                "model": r["model"],
+                "reasoning_share": round(int(r["reasoning_tokens"]) / total, 3),
+                "score": r["score"],
+            }
+        )
     return {"points": points}
 
 
 # ── Dispatch table used by the route ────────────────────────────────────────
 
 
-async def panel(name: str, pool: asyncpg.Pool, *, pricing=None,
-                hours: int = 168, days: int = 7, metric: str = "completion_tokens",
-                agent_id: str | None = None) -> Any:
+async def panel(
+    name: str,
+    pool: asyncpg.Pool,
+    *,
+    pricing=None,
+    hours: int = 168,
+    days: int = 7,
+    metric: str = "completion_tokens",
+    agent_id: str | None = None,
+) -> Any:
     if name == "simulator":
         return await q_simulator(pool, pricing, hours)
     if name == "substitution":
@@ -410,8 +472,9 @@ async def q_audit_report(pool: asyncpg.Pool, days: int) -> dict:
     """Everything the team LLM-usage & governance report needs, one payload.
     Read-only aggregates over the window; heavier than a panel, called on
     demand from the Reports page only."""
-    totals = dict(await pool.fetchrow(
-        """
+    totals = dict(
+        await pool.fetchrow(
+            """
         SELECT COUNT(*) AS calls,
                COUNT(DISTINCT d.agent_id) AS agents,
                COUNT(DISTINCT COALESCE(o.actual_model, d.decision_model)) AS models,
@@ -427,9 +490,14 @@ async def q_audit_report(pool: asyncpg.Pool, days: int) -> dict:
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE d.ts > NOW() - make_interval(days => $1)
-        """, days))
-    agents = [dict(r) for r in await pool.fetch(
-        """
+        """,
+            days,
+        )
+    )
+    agents = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT d.agent_id,
                COUNT(*) AS calls,
                COALESCE(SUM(COALESCE(NULLIF(o.cost_usd, 0), o.notional_cost_usd, 0)), 0)::float AS spend_usd,
@@ -444,9 +512,14 @@ async def q_audit_report(pool: asyncpg.Pool, days: int) -> dict:
           LEFT JOIN nautgate.quality_evals q ON q.decision_id = d.id
          WHERE d.ts > NOW() - make_interval(days => $1)
          GROUP BY 1 ORDER BY 2 DESC
-        """, days)]
-    models = [dict(r) for r in await pool.fetch(
-        """
+        """,
+            days,
+        )
+    ]
+    models = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT COALESCE(o.actual_model, d.decision_model) AS model,
                COUNT(*) AS calls,
                COALESCE(SUM(COALESCE(NULLIF(o.cost_usd, 0), o.notional_cost_usd, 0)), 0)::float AS spend_usd
@@ -454,26 +527,45 @@ async def q_audit_report(pool: asyncpg.Pool, days: int) -> dict:
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE d.ts > NOW() - make_interval(days => $1)
          GROUP BY 1 ORDER BY 2 DESC LIMIT 12
-        """, days)]
-    sensitivity = {r["s"]: int(r["n"]) for r in await pool.fetch(
-        """
+        """,
+            days,
+        )
+    ]
+    sensitivity = {
+        r["s"]: int(r["n"])
+        for r in await pool.fetch(
+            """
         SELECT COALESCE(classified_sensitivity, 'none') AS s, COUNT(*) AS n
           FROM nautgate.route_decisions
          WHERE ts > NOW() - make_interval(days => $1) GROUP BY 1
-        """, days)}
-    failure_tags = [dict(r) for r in await pool.fetch(
-        """
+        """,
+            days,
+        )
+    }
+    failure_tags = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT tag, COUNT(*) AS n
           FROM nautgate.quality_evals q, UNNEST(q.failure_tags) AS tag
          WHERE q.ts > NOW() - make_interval(days => $1)
          GROUP BY 1 ORDER BY 2 DESC LIMIT 10
-        """, days)]
-    drift_alerts = await pool.fetchval(
-        "SELECT COUNT(*) FROM nautgate.drift_alerts WHERE started_at > NOW() - make_interval(days => $1)",
-        days) if await pool.fetchval(
-        "SELECT to_regclass('nautgate.drift_alerts') IS NOT NULL") else 0
-    daily = [dict(r) for r in await pool.fetch(
-        """
+        """,
+            days,
+        )
+    ]
+    drift_alerts = (
+        await pool.fetchval(
+            "SELECT COUNT(*) FROM nautgate.drift_alerts WHERE started_at > NOW() - make_interval(days => $1)",
+            days,
+        )
+        if await pool.fetchval("SELECT to_regclass('nautgate.drift_alerts') IS NOT NULL")
+        else 0
+    )
+    daily = [
+        dict(r)
+        for r in await pool.fetch(
+            """
         SELECT date_trunc('day', d.ts)::date::text AS day,
                COUNT(*) AS calls,
                COUNT(*) FILTER (WHERE o.status_code >= 400) AS errors,
@@ -482,9 +574,13 @@ async def q_audit_report(pool: asyncpg.Pool, days: int) -> dict:
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
          WHERE d.ts > NOW() - make_interval(days => $1)
          GROUP BY 1 ORDER BY 1
-        """, days)]
+        """,
+            days,
+        )
+    ]
     dataflow = await q_dataflow(pool, days)
     from app import shadow as _shadow
+
     shadow_data = await _shadow.summary(pool, days=days)
     efficiency = await q_efficiency(pool, days)
     return {
@@ -505,8 +601,9 @@ async def q_audit_report(pool: asyncpg.Pool, days: int) -> dict:
 # ── Improvements page (prompt coaching) ─────────────────────────────────────
 
 
-async def q_improvements(pool: asyncpg.Pool, days: int, agent_id: str | None = None,
-                         limit: int = 30) -> dict:
+async def q_improvements(
+    pool: asyncpg.Pool, days: int, agent_id: str | None = None, limit: int = 30
+) -> dict:
     """Coachable prompts + aggregated writing-style learnings.
 
     A prompt is coachable when the judge left a concrete suggested rewrite.
@@ -515,8 +612,10 @@ async def q_improvements(pool: asyncpg.Pool, days: int, agent_id: str | None = N
     user's writing-habit stats)."""
     scope = "AND d.agent_id = $2" if agent_id else ""
     args: list = [days] + ([agent_id] if agent_id else [])
-    prompts = [dict(r) for r in await pool.fetch(
-        f"""
+    prompts = [
+        dict(r)
+        for r in await pool.fetch(
+            f"""
         SELECT d.id::text AS decision_id, d.ts, d.agent_id, d.prompt_excerpt,
                d.decision_model,
                (q.rubric->>'prompt_clarity')::int AS prompt_clarity,
@@ -538,11 +637,16 @@ async def q_improvements(pool: asyncpg.Pool, days: int, agent_id: str | None = N
            AND COALESCE(d.classified_sensitivity, 'none') != 'secret'
            {scope}
          ORDER BY q.ts DESC LIMIT {int(limit)}
-        """, *args)]
+        """,
+            *args,
+        )
+    ]
     for p in prompts:
         p["ts"] = p["ts"].isoformat()
-    habits = [dict(r) for r in await pool.fetch(
-        f"""
+    habits = [
+        dict(r)
+        for r in await pool.fetch(
+            f"""
         SELECT q.anti_pattern, COUNT(*) AS n,
                MAX(q.suggested_prompt) AS example_fix
           FROM nautgate.quality_evals q
@@ -552,9 +656,14 @@ async def q_improvements(pool: asyncpg.Pool, days: int, agent_id: str | None = N
            AND (q.rubric->>'prompt_clarity')::int <= 3
            {scope}
          GROUP BY 1 ORDER BY 2 DESC LIMIT 8
-        """, *args)]
-    trend = [dict(r) for r in await pool.fetch(
-        f"""
+        """,
+            *args,
+        )
+    ]
+    trend = [
+        dict(r)
+        for r in await pool.fetch(
+            f"""
         SELECT date_trunc('week', q.ts)::date::text AS week,
                AVG((q.rubric->>'prompt_clarity')::numeric)::float AS clarity,
                COUNT(*) AS n
@@ -564,9 +673,17 @@ async def q_improvements(pool: asyncpg.Pool, days: int, agent_id: str | None = N
            AND q.rubric ? 'prompt_clarity'
            {scope}
          GROUP BY 1 ORDER BY 1
-        """, *args)]
-    return {"days": days, "agent_id": agent_id, "prompts": prompts,
-            "habits": habits, "clarity_trend": trend}
+        """,
+            *args,
+        )
+    ]
+    return {
+        "days": days,
+        "agent_id": agent_id,
+        "prompts": prompts,
+        "habits": habits,
+        "clarity_trend": trend,
+    }
 
 
 async def q_headline(pool: asyncpg.Pool, pricing) -> dict:
@@ -574,27 +691,46 @@ async def q_headline(pool: asyncpg.Pool, pricing) -> dict:
     eff = await q_efficiency(pool, 7)
     agents = eff.get("agents") or []
     tot_calls = sum(a["calls"] for a in agents) or 1
-    eff_score = round(sum((a["score"] or 0) * a["calls"] for a in agents) / tot_calls) if agents else None
+    eff_score = (
+        round(sum((a["score"] or 0) * a["calls"] for a in agents) / tot_calls) if agents else None
+    )
     sim = await q_simulator(pool, pricing, hours=168)
-    best = max((p for p in sim["policies"] if p["priced_calls"] > 0),
-               key=lambda p: p["savings_usd"], default=None)
+    best = max(
+        (p for p in sim["policies"] if p["priced_calls"] > 0),
+        key=lambda p: p["savings_usd"],
+        default=None,
+    )
     from app import shadow as _shadow
+
     cfg = await _shadow.shadow_config(pool)
     exps = (await _shadow.summary(pool, days=7)).get("experiments") or []
     live = [e for e in exps if e["n"] > 0]
     proven = [e for e in live if e.get("non_inferior") is True]
-    sens = {r["s"]: int(r["n"]) for r in await pool.fetch(
-        """SELECT COALESCE(classified_sensitivity,'none') AS s, COUNT(*) AS n
+    sens = {
+        r["s"]: int(r["n"])
+        for r in await pool.fetch(
+            """SELECT COALESCE(classified_sensitivity,'none') AS s, COUNT(*) AS n
              FROM nautgate.route_decisions
-            WHERE ts > NOW() - interval '7 days' GROUP BY 1""")}
+            WHERE ts > NOW() - interval '7 days' GROUP BY 1"""
+        )
+    }
     return {
         "efficiency": {"score": eff_score, "agents": len(agents)},
-        "savings": ({"weekly_usd": round(best["savings_usd"], 2), "policy": best["policy"]}
-                    if best and best["savings_usd"] > 0 else None),
-        "experiments": {"count": len(live), "proven": len(proven),
-                        "running": bool(cfg.get("enabled") or cfg.get("diet_enabled"))},
-        "governance": {"secrets": sens.get("secret", 0), "pii": sens.get("pii", 0),
-                       "clean": sens.get("none", 0)},
+        "savings": (
+            {"weekly_usd": round(best["savings_usd"], 2), "policy": best["policy"]}
+            if best and best["savings_usd"] > 0
+            else None
+        ),
+        "experiments": {
+            "count": len(live),
+            "proven": len(proven),
+            "running": bool(cfg.get("enabled") or cfg.get("diet_enabled")),
+        },
+        "governance": {
+            "secrets": sens.get("secret", 0),
+            "pii": sens.get("pii", 0),
+            "clean": sens.get("none", 0),
+        },
     }
 
 
@@ -619,15 +755,23 @@ async def q_tooling(pool: asyncpg.Pool, days: int, agent_id: str | None = None) 
            AND jsonb_typeof(o.tool_calls_made) = 'array'
            AND ($2::text IS NULL OR d.agent_id = $2)
          GROUP BY 1 ORDER BY 2 DESC
-        """, days, agent_id)
+        """,
+        days,
+        agent_id,
+    )
     servers: dict[str, dict] = {}
     for r in usage_rows:
         name = r["tool"] or "?"
-        server = name.split("__")[1] if name.startswith("mcp__") and name.count("__") >= 2 else "built-in"
+        server = (
+            name.split("__")[1]
+            if name.startswith("mcp__") and name.count("__") >= 2
+            else "built-in"
+        )
         s = servers.setdefault(server, {"server": server, "invocations": 0, "tools_used": []})
         s["invocations"] += int(r["n"])
-        s["tools_used"].append({"tool": name, "n": int(r["n"]),
-                                "last_used": r["last_used"].isoformat()})
+        s["tools_used"].append(
+            {"tool": name, "n": int(r["n"]), "last_used": r["last_used"].isoformat()}
+        )
     # Schema overhead: latest captured tool manifest per agent; a server's
     # footprint is what its tool defs weigh in EVERY request that carries them.
     manifests = await pool.fetch(
@@ -637,8 +781,12 @@ async def q_tooling(pool: asyncpg.Pool, days: int, agent_id: str | None = None) 
          WHERE tools_body IS NOT NULL AND ts > NOW() - make_interval(days => $1)
            AND ($2::text IS NULL OR agent_id = $2)
          ORDER BY agent_id, ts DESC LIMIT 12
-        """, days, agent_id)
+        """,
+        days,
+        agent_id,
+    )
     import json as _json
+
     overhead: dict[str, dict] = {}
     for m in manifests:
         try:
@@ -651,7 +799,11 @@ async def q_tooling(pool: asyncpg.Pool, days: int, agent_id: str | None = None) 
             if not isinstance(d, dict):
                 continue
             name = d.get("name") or "?"
-            server = name.split("__")[1] if name.startswith("mcp__") and name.count("__") >= 2 else "built-in"
+            server = (
+                name.split("__")[1]
+                if name.startswith("mcp__") and name.count("__") >= 2
+                else "built-in"
+            )
             o = overhead.setdefault(server, {"tools": set(), "bytes": 0, "agents": set()})
             o["agents"].add(m["agent_id"])
             if name not in o["tools"]:
@@ -665,8 +817,10 @@ async def q_tooling(pool: asyncpg.Pool, days: int, agent_id: str | None = None) 
     out_servers = sorted(servers.values(), key=lambda s: -s["invocations"])
     for s in out_servers:
         s["tools_used"] = s["tools_used"][:8]
-    daily = [dict(r) for r in await pool.fetch(
-        r"""
+    daily = [
+        dict(r)
+        for r in await pool.fetch(
+            r"""
         SELECT date_trunc('day', o.ts)::date::text AS day,
                COUNT(*) AS calls,
                AVG(o.prompt_tokens)::float AS avg_prompt_tokens,
@@ -680,9 +834,19 @@ async def q_tooling(pool: asyncpg.Pool, days: int, agent_id: str | None = None) 
            AND jsonb_typeof(o.tool_calls_made) = 'array'
            AND ($3::text IS NULL OR d.agent_id = $3)
          GROUP BY 1 ORDER BY 1
-        """, days, list(FS_DISCOVERY_TOOLS), agent_id)]
-    return {"days": days, "agent_id": agent_id, "servers": out_servers, "daily": daily,
-            "fs_tools": list(FS_DISCOVERY_TOOLS)}
+        """,
+            days,
+            list(FS_DISCOVERY_TOOLS),
+            agent_id,
+        )
+    ]
+    return {
+        "days": days,
+        "agent_id": agent_id,
+        "servers": out_servers,
+        "daily": daily,
+        "fs_tools": list(FS_DISCOVERY_TOOLS),
+    }
 
 
 # ── Usage-burst detection (notifications) ───────────────────────────────────
@@ -719,5 +883,6 @@ async def q_bursts(pool: asyncpg.Pool) -> list[dict]:
            AND (h.calls > GREATEST(20, 4 * b.med_calls)
                 OR h.spend > GREATEST(1.0, 4 * b.med_spend))
          ORDER BY h.calls DESC
-        """)
+        """
+    )
     return [dict(r) for r in rows]

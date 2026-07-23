@@ -74,17 +74,29 @@ async def create_backup(pool: asyncpg.Pool, *, via: str = "manual") -> dict:
                                           created_via, status)
             VALUES ($1, $2, $3, 0, $4, 'in_progress')
             """,
-            bid, now, str(file_path), via,
+            bid,
+            now,
+            str(file_path),
+            via,
         )
 
     try:
         # docker exec pg_dump → stdout, we gzip into the target file.
         # --no-owner --no-privileges keeps the dump portable across users.
         cmd = [
-            "docker", "exec", _db_container(),
-            "pg_dump", "-U", "nautgate", "-d", "nautgate",
-            "--schema=nautgate", "--no-owner", "--no-privileges",
+            "docker",
+            "exec",
+            _db_container(),
+            "pg_dump",
+            "-U",
+            "nautgate",
+            "-d",
+            "nautgate",
+            "--schema=nautgate",
+            "--no-owner",
+            "--no-privileges",
         ]
+
         # Run in a thread so we don't block the event loop on big dumps.
         def _run():
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -111,7 +123,9 @@ async def create_backup(pool: asyncpg.Pool, *, via: str = "manual") -> dict:
                    SET size_bytes=$2, table_counts=$3::jsonb, status='ok'
                  WHERE id=$1
                 """,
-                bid, size, json.dumps(counts),
+                bid,
+                size,
+                json.dumps(counts),
             )
 
         log.info("backup_created", backup_id=str(bid), size=size, via=via)
@@ -127,7 +141,8 @@ async def create_backup(pool: asyncpg.Pool, *, via: str = "manual") -> dict:
                    SET status='failed', error_message=$2
                  WHERE id=$1
                 """,
-                bid, str(exc)[:1000],
+                bid,
+                str(exc)[:1000],
             )
         log.error("backup_failed", backup_id=str(bid), error=str(exc))
         # Re-raise for the caller (API handler) to return a 500.
@@ -156,17 +171,26 @@ async def restore_backup(pool: asyncpg.Pool, backup_id: uuid.UUID) -> None:
             sql = f.read()
         # First drop the schema (CASCADE wipes everything), then load.
         drop = subprocess.run(
-            ["docker", "exec", _db_container(),
-             "psql", "-U", "nautgate", "-d", "nautgate",
-             "-c", "DROP SCHEMA IF EXISTS nautgate CASCADE;"],
+            [
+                "docker",
+                "exec",
+                _db_container(),
+                "psql",
+                "-U",
+                "nautgate",
+                "-d",
+                "nautgate",
+                "-c",
+                "DROP SCHEMA IF EXISTS nautgate CASCADE;",
+            ],
             capture_output=True,
         )
         if drop.returncode != 0:
             raise RuntimeError(f"DROP SCHEMA failed: {drop.stderr.decode()[:500]}")
         load = subprocess.run(
-            ["docker", "exec", "-i", _db_container(),
-             "psql", "-U", "nautgate", "-d", "nautgate"],
-            input=sql, capture_output=True,
+            ["docker", "exec", "-i", _db_container(), "psql", "-U", "nautgate", "-d", "nautgate"],
+            input=sql,
+            capture_output=True,
         )
         if load.returncode != 0:
             raise RuntimeError(f"psql restore failed: {load.stderr.decode()[:500]}")
@@ -235,8 +259,13 @@ async def get_config(pool: asyncpg.Pool) -> dict:
         """
     )
     if row is None:
-        return {"enabled": True, "interval_hours": 3, "retention_count": 20,
-                "last_run_at": None, "next_run_at": None}
+        return {
+            "enabled": True,
+            "interval_hours": 3,
+            "retention_count": 20,
+            "last_run_at": None,
+            "next_run_at": None,
+        }
     d = dict(row)
     for k in ("last_run_at", "next_run_at", "updated_at"):
         v = d.get(k)
@@ -246,7 +275,8 @@ async def get_config(pool: asyncpg.Pool) -> dict:
 
 
 async def update_config(
-    pool: asyncpg.Pool, *,
+    pool: asyncpg.Pool,
+    *,
     enabled: bool | None = None,
     interval_hours: int | None = None,
     retention_count: int | None = None,
@@ -303,6 +333,7 @@ async def run_scheduler(pool: asyncpg.Pool, *, tick_seconds: int = 60) -> None:
             if next_run_at is None:
                 # First boot, or interval just changed: schedule the next run.
                 from datetime import timedelta
+
                 planned = now + timedelta(hours=cfg["interval_hours"])
                 await pool.execute(
                     "UPDATE nautgate.backup_config SET next_run_at=$1 WHERE id=1",
@@ -319,10 +350,12 @@ async def run_scheduler(pool: asyncpg.Pool, *, tick_seconds: int = 60) -> None:
                 # Whether it succeeded or not, advance the schedule so we
                 # don't tight-loop. Update last_run_at + next_run_at.
                 from datetime import timedelta
+
                 planned = now + timedelta(hours=cfg["interval_hours"])
                 await pool.execute(
                     "UPDATE nautgate.backup_config SET last_run_at=$1, next_run_at=$2 WHERE id=1",
-                    now, planned,
+                    now,
+                    planned,
                 )
         except asyncio.CancelledError:
             log.info("backup_scheduler_cancelled")
@@ -340,9 +373,14 @@ async def _table_counts(pool: asyncpg.Pool) -> dict[str, int]:
     the UI can show "this backup has 1,243 decisions, 87 incidents, …"
     """
     tables = (
-        "api_keys", "route_decisions", "route_outcomes",
-        "model_scorecard", "model_incidents",
-        "model_baselines", "model_anomalies", "drift_alerts",
+        "api_keys",
+        "route_decisions",
+        "route_outcomes",
+        "model_scorecard",
+        "model_incidents",
+        "model_baselines",
+        "model_anomalies",
+        "drift_alerts",
     )
     out: dict[str, int] = {}
     for t in tables:
