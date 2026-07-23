@@ -2326,6 +2326,80 @@ html, body { height: 100%; }
 .offline-toggle input { width: 15px; height: 15px; cursor: pointer; }
 .settings-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
 
+/* ─── First-run onboarding overlay (NAUTGATE-6) ─────────────────────────── */
+.firstrun {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(5, 7, 10, 0.72);
+  backdrop-filter: blur(3px);
+}
+.firstrun[hidden] { display: none; }
+.firstrun-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 32px 30px 26px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.firstrun-mark { width: 40px; height: 40px; margin-bottom: 18px; }
+.firstrun-mark svg { width: 100%; height: 100%; display: block; border-radius: 9px; }
+.firstrun-card h2 { margin: 0 0 6px; font-size: 21px; color: var(--text); letter-spacing: -0.01em; }
+.firstrun-card p { margin: 0 0 14px; color: var(--text-dim); font-size: 14px; line-height: 1.55; }
+.firstrun-hint { margin-bottom: 8px !important; }
+.firstrun-cmd {
+  display: block;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--accent-bright);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 13px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.firstrun-field {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 7px;
+}
+#firstrun-token {
+  width: 100%;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 13px;
+}
+#firstrun-token:focus { outline: none; border-color: var(--accent-mid); }
+.firstrun-err { min-height: 18px; margin: 8px 0 0; font-size: 12.5px; color: #E5484D; }
+.firstrun-btn {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #0A0B00;
+  background: var(--accent);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.firstrun-btn:hover { background: var(--accent-mid); }
+.firstrun-alt { margin: 16px 0 0 !important; text-align: center; font-size: 12.5px; }
+.firstrun-alt a { color: var(--text-dim); }
 /* ─── Provider keys pane (NAUTGATE-8) ───────────────────────────────────── */
 .providers-list { display: flex; flex-direction: column; gap: 10px; max-width: 760px; margin-top: 12px; }
 .provider-row {

@@ -68,6 +68,48 @@
     // Migration cleanup: drop the old single-token key once we have sessions.
     if (sessions.length) localStorage.removeItem(TOKEN_KEY);
   }
+  // Validate an ng_ token against /v1/whoami and, if good, save it as a session
+  // and make it active. Shared by the Settings add-token form and the first-run
+  // onboarding overlay. Returns { ok, error?, me? }. Never mints a key.
+  async function activateToken(rawToken, label) {
+    let token = (rawToken || "").replace(/^Bearer\s+/i, "").replace(/^["']|["']$/g, "").trim();
+    if (!token) return { ok: false, error: "token required" };
+    if (!token.startsWith("ng_")) {
+      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+      return { ok: false, error: looksLikeUuid
+        ? "that's a key_id (UUID) — the token is the longer value that starts with ng_…"
+        : "expected ng_… format (got " + token.slice(0, 8) + "…)" };
+    }
+    try {
+      const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + token } });
+      if (res.status === 401) return { ok: false, error: "401 — token rejected" };
+      if (!res.ok) return { ok: false, error: "validation failed: " + res.status };
+      const me = await res.json();
+      const sessions = loadSessions();
+      const existing = sessions.find((s) => s.token === token);
+      if (existing) {
+        existing.agent_id = me.agent_id;
+        existing.key_id = me.key_id;
+        existing.last_seen_at = new Date().toISOString();
+        if (label) existing.label = label;
+      } else {
+        sessions.push({
+          id: cryptoId(),
+          label: label || me.agent_id || "session",
+          token,
+          agent_id: me.agent_id,
+          key_id: me.key_id,
+          last_seen_at: new Date().toISOString(),
+        });
+      }
+      saveSessions(sessions);
+      if (!getActiveSessionId()) setActiveSessionId(sessions[sessions.length - 1].id);
+      renderAuth(); renderSessions(); refreshActive();
+      return { ok: true, me };
+    } catch (e) {
+      return { ok: false, error: "error: " + e.message };
+    }
+  }
   function cryptoId() {
     if (window.crypto?.randomUUID) return crypto.randomUUID();
     return "s_" + Math.random().toString(36).slice(2, 12);
@@ -364,54 +406,14 @@
   document.getElementById("add-save")?.addEventListener("click", async () => {
     const errorEl = document.getElementById("add-error");
     errorEl.textContent = "";
-    let token = document.getElementById("add-token").value.trim();
-    // Be forgiving: strip "Bearer " prefix and any quotes a copy-paste may add.
-    token = token.replace(/^Bearer\s+/i, "").replace(/^["']|["']$/g, "").trim();
-    const label = document.getElementById("add-label").value.trim();
-    if (!token) { errorEl.textContent = "token required"; return; }
-    if (!token.startsWith("ng_")) {
-      // Common mistake: pasting the key_id UUID instead of the full token.
-      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
-      errorEl.textContent = looksLikeUuid
-        ? "that looks like a key_id (UUID). The token is on the next line of the issue_key.py output — starts with ng_…"
-        : "expected ng_… format (got " + token.slice(0, 8) + "…)";
-      return;
-    }
-    // Validate by hitting whoami before saving.
-    try {
-      const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + token } });
-      if (res.status === 401) { errorEl.textContent = "401 — token rejected"; return; }
-      if (!res.ok) { errorEl.textContent = "validation failed: " + res.status; return; }
-      const me = await res.json();
-      const sessions = loadSessions();
-      // Dedupe by token.
-      const existing = sessions.find(s => s.token === token);
-      if (existing) {
-        existing.agent_id = me.agent_id;
-        existing.key_id = me.key_id;
-        existing.last_seen_at = new Date().toISOString();
-        if (label) existing.label = label;
-      } else {
-        sessions.push({
-          id: cryptoId(),
-          label: label || me.agent_id || "session",
-          token,
-          agent_id: me.agent_id,
-          key_id: me.key_id,
-          last_seen_at: new Date().toISOString(),
-        });
-      }
-      saveSessions(sessions);
-      // If this was the first session, make it active.
-      if (!getActiveSessionId()) setActiveSessionId(sessions[sessions.length - 1].id);
-      // Reset form.
-      document.getElementById("add-token").value = "";
-      document.getElementById("add-label").value = "";
-      document.getElementById("sessions-add").open = false;
-      renderAuth(); renderSessions(); refreshActive();
-    } catch (e) {
-      errorEl.textContent = "error: " + e.message;
-    }
+    const r = await activateToken(
+      document.getElementById("add-token").value,
+      document.getElementById("add-label").value.trim(),
+    );
+    if (!r.ok) { errorEl.textContent = r.error; return; }
+    document.getElementById("add-token").value = "";
+    document.getElementById("add-label").value = "";
+    document.getElementById("sessions-add").open = false;
   });
 
   // --- API helpers --------------------------------------------------------
@@ -6288,6 +6290,42 @@
   }
   renderAuth();
   renderSessions();
+
+  // First-run onboarding: a fresh browser has no token, so the dashboard can't
+  // authenticate and every panel is empty. Show a welcome overlay that helps the
+  // operator paste the first-run key NautGate printed to its log. It only ever
+  // *validates and saves an existing* key (no minting, no new endpoint), so it
+  // adds no attack surface — the key is retrievable only by whoever can read the
+  // container log, i.e. whoever owns the box.
+  (function firstRunOnboarding() {
+    const overlay = document.getElementById("firstrun");
+    if (!overlay) return;
+    const show = () => { overlay.hidden = !!getToken(); };
+    const input = document.getElementById("firstrun-token");
+    const err = document.getElementById("firstrun-err");
+    const btn = document.getElementById("firstrun-activate");
+    let busy = false;
+    const activate = async () => {
+      if (busy) return;                 // guard against double-click racing two saves
+      busy = true;
+      if (btn) btn.disabled = true;
+      err.textContent = "";
+      try {
+        const r = await activateToken(input.value);
+        if (!r.ok) { err.textContent = r.error; return; }
+        overlay.hidden = true;
+      } finally {
+        busy = false;
+        if (btn) btn.disabled = false;
+      }
+    };
+    document.getElementById("firstrun-activate")?.addEventListener("click", activate);
+    input?.addEventListener("keydown", (e) => { if (e.key === "Enter") activate(); });
+    document.getElementById("firstrun-dismiss")?.addEventListener("click", (e) => {
+      e.preventDefault(); overlay.hidden = true;
+    });
+    show();
+  })();
 
   // Version chip, bottom-right (NAUTGATE-13) — from /health.
   fetch("/health").then((r) => r.json()).then((d) => {
