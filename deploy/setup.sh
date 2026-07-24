@@ -14,11 +14,13 @@ PROXY_URL="http://${NAUTPROXY_HOST:-127.0.0.1}:${NAUTPROXY_PORT:-8092}"
 NG_DIR="$HOME/.nautgate"
 CA="$NG_DIR/nautproxy-ca.pem"
 
-tty_read() {  # read one line from the real terminal (stdin is the curl pipe)
+tty_read() {  # read one line from the real terminal (stdin is the curl pipe).
+    # The group redirect swallows the "Device not configured" the OPEN of
+    # /dev/tty raises when there's no controlling terminal (CI, curl in a pipe).
     REPLY=""
-    if [ -r /dev/tty ]; then IFS= read -r REPLY < /dev/tty 2>/dev/null || REPLY=""; fi
+    { IFS= read -r REPLY < /dev/tty; } 2>/dev/null || REPLY=""
 }
-prompt() { printf '%s ' "$1" > /dev/tty 2>/dev/null || true; tty_read; }
+prompt() { { printf '%s ' "$1" > /dev/tty; } 2>/dev/null || true; tty_read; }
 
 echo "NautGate capture setup"
 echo "----------------------"
