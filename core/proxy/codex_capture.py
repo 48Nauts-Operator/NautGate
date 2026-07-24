@@ -28,9 +28,9 @@ observed latency ever matters.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 
@@ -39,7 +39,10 @@ try:  # only needed at runtime under mitmdump; keep the module importable for te
 except ImportError:  # pragma: no cover
     http = None  # type: ignore[assignment]
 
-_INGEST_URL = os.environ.get("NAUTGATE_INGEST_URL", "http://nautgate:8090/v1/ingest")
+# Default to localhost — the common case is a local proxy in front of a local
+# NautGate. The Docker sidecar overrides this with the compose service name
+# (NAUTGATE_INGEST_URL=http://nautgate:8090/v1/ingest).
+_INGEST_URL = os.environ.get("NAUTGATE_INGEST_URL", "http://localhost:8090/v1/ingest")
 _INGEST_TOKEN = os.environ.get("NAUTGATE_INGEST_TOKEN", "")
 _AGENT_ID = os.environ.get("NAUTPROXY_AGENT_ID", "codex")
 _DEBUG_DUMP = os.environ.get("CODEX_CAPTURE_DEBUG") == "1"
@@ -131,8 +134,14 @@ def _build_turn(agent_id, fmt, provider, src_ip, req, resp, start_ts, end_ts) ->
     }
 
 
+# Bypass any HTTP(S)_PROXY the mitmproxy process inherited — otherwise the POST
+# to NautGate gets routed back through this very proxy and loops.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _post_ingest(turn: dict) -> None:
-    """POST one turn to /v1/ingest. Blocking stdlib call — run in a thread."""
+    """POST one turn to /v1/ingest, direct (no proxy). Runs in a daemon thread,
+    so it never blocks the mitmproxy event loop or touches its executor."""
     body = json.dumps(turn).encode("utf-8")
     req = urllib.request.Request(
         _INGEST_URL,
@@ -141,12 +150,18 @@ def _post_ingest(turn: dict) -> None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with _DIRECT.open(req, timeout=5) as r:
             r.read()
+        print(
+            f"[nautproxy] recorded {turn['agent_id']} model={turn['model']} "
+            f"in={turn['usage'].get('prompt_tokens')} out={turn['usage'].get('completion_tokens')}",
+            flush=True,
+        )
     except urllib.error.HTTPError as exc:
-        print(f"[nautproxy] ingest {exc.code}: {exc.read()[:200]!r}", flush=True)
+        hint = " (set NAUTGATE_INGEST_TOKEN on both sides)" if exc.code in (401, 404) else ""
+        print(f"[nautproxy] ingest {exc.code} → {_INGEST_URL}{hint}", flush=True)
     except Exception as exc:  # noqa: BLE001 — never let capture break the proxy
-        print(f"[nautproxy] ingest failed: {exc}", flush=True)
+        print(f"[nautproxy] ingest failed → {_INGEST_URL}: {exc}", flush=True)
 
 
 async def websocket_end(flow) -> None:
@@ -171,9 +186,4 @@ async def websocket_end(flow) -> None:
     src_ip = flow.client_conn.peername[0] if flow.client_conn.peername else None
     for req, resp, start_ts, end_ts in turns:
         turn = _build_turn(_AGENT_ID, fmt, provider, src_ip, req, resp, start_ts, end_ts)
-        await asyncio.to_thread(_post_ingest, turn)
-        print(
-            f"[nautproxy] recorded {_AGENT_ID} model={turn['model']} "
-            f"in={turn['usage'].get('prompt_tokens')} out={turn['usage'].get('completion_tokens')}",
-            flush=True,
-        )
+        threading.Thread(target=_post_ingest, args=(turn,), daemon=True).start()
