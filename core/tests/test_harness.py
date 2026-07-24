@@ -107,3 +107,18 @@ def test_stream_off_by_default_streams_text():
     assert '"type":"tool_use"' not in events
     assert "text_delta" in events
     assert '"stop_reason":"end_turn"' in events
+
+
+def test_real_qwen_multi_call_capture():
+    # Verbatim content captured from qwen/qwen3.6-35b-a3b via LM Studio (2026-07-24):
+    # two Hermes tool calls, newline before each closing tag, leading blank lines.
+    real = (
+        '\n\n<tool_call>{"name": "get_weather", "arguments": {"location": "Paris"}}\n</tool_call>\n'
+        '<tool_call>{"name": "search_web", "arguments": {"query": "best croissant paris"}}\n</tool_call>'
+    )
+    msg, promoted = promote_text_tool_calls({"role": "assistant", "content": real})
+    assert promoted
+    names = [tc["function"]["name"] for tc in msg["tool_calls"]]
+    assert names == ["get_weather", "search_web"]
+    assert json.loads(msg["tool_calls"][1]["function"]["arguments"]) == {"query": "best croissant paris"}
+    assert msg["content"] is None
