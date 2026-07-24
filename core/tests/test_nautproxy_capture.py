@@ -1,45 +1,46 @@
 """nautproxy addon — pure parsing/shaping (no mitmproxy needed)."""
 
 import json
-from dataclasses import dataclass
 
-from proxy.codex_capture import _build_turn, _pair_turns, _usage_from_responses
-
-
-@dataclass
-class FakeMsg:
-    from_client: bool
-    content: bytes
-    timestamp: float | None = None
+from proxy.codex_capture import _build_turn, _consume, _usage_from_responses
 
 
-def _msg(from_client, obj, ts=None):
-    return FakeMsg(from_client, json.dumps(obj).encode(), ts)
+def _c(pending, content_obj_or_bytes, from_client, ts=None, flow_id="f1"):
+    content = content_obj_or_bytes if isinstance(content_obj_or_bytes, bytes) else json.dumps(content_obj_or_bytes).encode()
+    return _consume(pending, flow_id, content, from_client, ts)
 
 
-def test_pair_turns_matches_create_to_completed():
-    msgs = [
-        _msg(True, {"type": "response.create", "model": "gpt-5-codex", "input": [{"role": "user"}]}, ts=1.0),
-        _msg(False, {"type": "response.output_text.delta"}),  # noise between
-        _msg(False, {"type": "response.completed", "response": {"model": "gpt-5-codex-2026", "usage": {"input_tokens": 100, "output_tokens": 20}}}, ts=2.5),
-    ]
-    turns = _pair_turns(msgs)
-    assert len(turns) == 1
-    req, resp, start, end = turns[0]
+def test_consume_emits_turn_on_completed():
+    pending: dict = {}
+    # create → buffered, nothing emitted yet (this is the live-capture fix)
+    assert _c(pending, {"type": "response.create", "model": "gpt-5-codex", "input": [{"role": "user"}]}, True, ts=1.0) is None
+    # a delta frame in between → ignored
+    assert _c(pending, {"type": "response.output_text.delta"}, False) is None
+    # completed → emits the paired turn immediately
+    out = _c(pending, {"type": "response.completed", "response": {"model": "gpt-5-codex-2026", "usage": {"input_tokens": 100, "output_tokens": 20}}}, False, ts=2.5)
+    assert out is not None
+    req, resp, start, end = out
     assert req["model"] == "gpt-5-codex"
     assert resp["model"] == "gpt-5-codex-2026"
     assert (start, end) == (1.0, 2.5)
+    assert pending == {}  # consumed
 
 
-def test_pair_turns_ignores_unpaired_and_garbage():
-    msgs = [
-        FakeMsg(True, b"not-json"),
-        _msg(True, {"type": "response.create", "model": "m"}),  # no completed after
-        _msg(False, {"type": "response.completed"}),  # completed with no pending create before it? -> paired with the create above
-    ]
-    turns = _pair_turns(msgs)
-    # the create pairs with the trailing completed; garbage is skipped
-    assert len(turns) == 1
+def test_consume_ignores_garbage_and_unpaired():
+    pending: dict = {}
+    assert _c(pending, b"not-json", True) is None
+    assert _c(pending, {"type": "response.completed"}, False) is None  # no pending create
+    assert _c(pending, {"type": "response.create", "model": "m"}, True) is None  # buffered, not emitted
+    assert pending  # a create is now pending
+
+
+def test_consume_two_sequential_turns():
+    pending: dict = {}
+    _c(pending, {"type": "response.create", "model": "m"}, True, ts=1.0)
+    assert _c(pending, {"type": "response.completed", "response": {"model": "m"}}, False, ts=2.0) is not None
+    _c(pending, {"type": "response.create", "model": "m"}, True, ts=3.0)
+    out2 = _c(pending, {"type": "response.completed", "response": {"model": "m"}}, False, ts=4.0)
+    assert out2 is not None and out2[2:] == (3.0, 4.0)
 
 
 def test_usage_subtracts_cached_from_input():

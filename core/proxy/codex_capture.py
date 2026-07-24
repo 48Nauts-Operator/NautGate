@@ -86,30 +86,33 @@ def _usage_from_responses(resp: dict) -> dict:
     }
 
 
-def _pair_turns(messages) -> list[tuple[dict, dict, float | None, float | None]]:
-    """Pair each client ``response.create`` with the following server
-    ``response.completed``. Returns (request, response, start_ts, end_ts) per turn."""
-    turns: list[tuple[dict, dict, float | None, float | None]] = []
-    pending: dict | None = None
-    start_ts: float | None = None
-    for m in messages:
-        try:
-            ev = json.loads(m.content)
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(ev, dict):
-            continue
-        t = ev.get("type")
-        if m.from_client and t == "response.create":
-            pending = ev
-            start_ts = getattr(m, "timestamp", None)
-        elif (not m.from_client) and t == "response.completed" and pending is not None:
-            resp = ev.get("response")
-            turns.append(
-                (pending, resp if isinstance(resp, dict) else {}, start_ts, getattr(m, "timestamp", None))
-            )
-            pending = None
-    return turns
+def _consume(pending: dict, flow_id, content, from_client: bool, ts):
+    """Fold one WS frame into per-flow state. Returns a completed
+    (request, response, start_ts, end_ts) tuple when a server
+    ``response.completed`` closes the pending client ``response.create`` — so
+    each turn is emitted the instant it finishes, not at WS close. Else None.
+
+    ponytail: one pending create per flow. Codex runs turns sequentially on a
+    connection; if it ever pipelines, a second create overwrites the first.
+    """
+    try:
+        ev = json.loads(content)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(ev, dict):
+        return None
+    t = ev.get("type")
+    if from_client and t == "response.create":
+        pending[flow_id] = (ev, ts)
+        return None
+    if (not from_client) and t == "response.completed":
+        p = pending.pop(flow_id, None)
+        if p is None:
+            return None
+        create_ev, start_ts = p
+        resp = ev.get("response")
+        return create_ev, resp if isinstance(resp, dict) else {}, start_ts, ts
+    return None
 
 
 def _build_turn(agent_id, fmt, provider, src_ip, req, resp, start_ts, end_ts) -> dict:
@@ -164,26 +167,34 @@ def _post_ingest(turn: dict) -> None:
         print(f"[nautproxy] ingest failed → {_INGEST_URL}: {exc}", flush=True)
 
 
-async def websocket_end(flow) -> None:
-    """On WS close, record one turn per response.create→response.completed pair."""
+# Per-flow pending state (flow.id → (create_event, start_ts)).
+_PENDING: dict = {}
+
+
+def websocket_message(flow) -> None:
+    """Fires on every WS frame. Record a turn the moment its response.completed
+    arrives — so it appears LIVE in the dashboard, not only when the (long-lived,
+    session-length) Codex WebSocket finally closes."""
     if flow.websocket is None:
         return
     matched = _match(flow.request.pretty_host, flow.request.path)
     if matched is None:
         return
     fmt, provider = matched
+    m = flow.websocket.messages[-1]  # the frame that just arrived
     if _DEBUG_DUMP:
-        with open("/tmp/codex_ws_dump.txt", "w") as f:
-            for i, m in enumerate(flow.websocket.messages):
-                who = "CLIENT" if m.from_client else "SERVER"
-                f.write(
-                    f"--- [{i}] {who} ({len(m.content)}b)\n"
-                    f"{m.content.decode('utf-8', errors='replace')[:4000]}\n\n"
-                )
-    turns = _pair_turns(flow.websocket.messages)
-    if not turns:
+        who = "CLIENT" if m.from_client else "SERVER"
+        with open("/tmp/codex_ws_dump.txt", "a") as f:
+            f.write(f"--- {who} ({len(m.content)}b)\n{m.content.decode('utf-8', errors='replace')[:4000]}\n\n")
+    out = _consume(_PENDING, flow.id, m.content, m.from_client, getattr(m, "timestamp", None))
+    if out is None:
         return
+    req, resp, start_ts, end_ts = out
     src_ip = flow.client_conn.peername[0] if flow.client_conn.peername else None
-    for req, resp, start_ts, end_ts in turns:
-        turn = _build_turn(_AGENT_ID, fmt, provider, src_ip, req, resp, start_ts, end_ts)
-        threading.Thread(target=_post_ingest, args=(turn,), daemon=True).start()
+    turn = _build_turn(_AGENT_ID, fmt, provider, src_ip, req, resp, start_ts, end_ts)
+    threading.Thread(target=_post_ingest, args=(turn,), daemon=True).start()
+
+
+def websocket_end(flow) -> None:
+    """Drop any dangling pending state when the connection closes."""
+    _PENDING.pop(getattr(flow, "id", None), None)
