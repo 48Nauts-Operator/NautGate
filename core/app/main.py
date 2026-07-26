@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import crypto
+from app.compliance import load_policy as load_compliance_policy
 from app.db import queries
 from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
@@ -45,6 +46,7 @@ from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
 DEFAULT_ROUTING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "routing.yaml"
+DEFAULT_COMPLIANCE_CONFIG = Path(__file__).resolve().parents[2] / "config" / "compliance.yaml"
 DEFAULT_PRICING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "pricing.yaml"
 
 
@@ -110,6 +112,21 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("routing_table_load_failed", path=str(routing_path), error=str(exc))
         app.state.routing_table = None
+
+    # Compliance AUDIT policy (NAUTGATE-25) — jurisdiction scope, provider
+    # registry, activity patterns, flag rules. Purely observational: it decides
+    # what gets recorded and flagged, never whether a call proceeds.
+    compliance_path = Path(settings.nautgate_compliance_config_path or DEFAULT_COMPLIANCE_CONFIG)
+    try:
+        app.state.compliance_policy = load_compliance_policy(compliance_path)
+        log.info(
+            "compliance_policy_loaded",
+            path=str(compliance_path),
+            evaluated_against=app.state.compliance_policy.evaluated_against(),
+        )
+    except Exception as exc:
+        log.warning("compliance_policy_load_failed", path=str(compliance_path), error=str(exc))
+        app.state.compliance_policy = None
 
     # Pricing config — feeds the per-outcome cost calculation.
     pricing_path = Path(settings.nautgate_pricing_config_path or DEFAULT_PRICING_CONFIG)
