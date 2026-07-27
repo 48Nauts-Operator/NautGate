@@ -282,11 +282,12 @@ def build_trace(
     elif data_class == "personal":
         label = strictest(label, "Y")
 
+    resolved = _resolved_provider(policy, provider_name, model) or provider_name
     flags = evaluate_flags(
         policy,
         pattern=pattern,
         data_class=data_class,
-        provider_name=provider_name,
+        provider_name=resolved,
         terms=terms,
         has_assessment=has_assessment,
         has_human_review=has_human_review,
@@ -311,7 +312,7 @@ def build_trace(
         evaluated_against=evaluated,
         regimes_touched=touched,
         destination={
-            "provider": _resolved_provider(policy, provider_name, model) or provider_name,
+            "provider": resolved,
             "region": region,
             "hosting": terms.get("hosting"),
             "third_country_transfer": bool(region) and region not in policy.home_regions,

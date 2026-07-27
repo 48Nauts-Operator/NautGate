@@ -85,6 +85,23 @@ async def _bootstrap_first_run_key(pool) -> None:
         log.warning("first_run_key_bootstrap_failed", error=str(exc))
 
 
+
+class _RevalidatingStatic(StaticFiles):
+    """Serve /static with `Cache-Control: no-cache`.
+
+    Without it browsers heuristically cache these files for a long time, so an
+    edited app.js or style.css keeps serving stale to anyone who has the page
+    open — the mtime `?v=` bust only helps if the browser bothers to re-request.
+    `no-cache` means "revalidate", not "don't cache": the ETag still yields a
+    304, so this costs a conditional request, not a re-download.
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -286,21 +303,30 @@ def create_app() -> FastAPI:
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        app.mount("/static", _RevalidatingStatic(directory=str(static_dir)), name="static")
 
-        # In-process cache for index.html — keyed by file mtime so edits land
-        # without a restart. Reading on every request is cheap (one stat +
-        # one read for ~50 KB), but caching avoids the read when the file is
-        # unchanged across thousands of dashboard hits.
-        _index_cache: dict[str, str | int] = {"mtime": 0, "html": ""}
+        # In-process cache for index.html — keyed by the mtime of index.html AND
+        # of every asset whose mtime it stamps into a `?v=` query. Keying on
+        # index.html alone meant editing app.js or style.css left the cached HTML
+        # in place, so the page kept advertising the OLD `?v=` and browsers went
+        # on serving stale JS/CSS until index.html happened to change too.
+        _index_cache: dict[str, str | tuple] = {"key": (), "html": ""}
+
+        def _asset_key() -> tuple:
+            out = []
+            for name in ("index.html", "style.css", "app.js", "kit.js"):
+                try:
+                    out.append(int((static_dir / name).stat().st_mtime))
+                except OSError:
+                    out.append(0)
+            return tuple(out)
 
         def _read_index() -> str:
-            try:
-                m = int((static_dir / "index.html").stat().st_mtime)
-            except OSError:
+            key = _asset_key()
+            if key == (0, 0, 0, 0):
                 return _index_cache.get("html") or ""
-            if m != _index_cache["mtime"]:
-                _index_cache["mtime"] = m
+            if key != _index_cache["key"]:
+                _index_cache["key"] = key
                 _index_cache["html"] = (static_dir / "index.html").read_text(encoding="utf-8")
             return _index_cache["html"]
 

@@ -403,18 +403,20 @@
 
     <!-- Reports (audit / meeting deliverables) ------------------------------->
     <section id="tab-compliance" class="tab">
-      <div class="page-toolbar">
-        <p class="hint" style="flex:1;margin:0">What every call touched — recorded, never blocked. Labels are a severity reading, not a gate; NautGate records what a call touched and does not assert that it was lawful. <span id="comp-scope"></span></p>
+      <div class="page-toolbar" id="comp-toolbar">
+        <span id="comp-bread" class="hint" style="flex:1"></span>
         <span class="win-group" id="comp-window">
           <button data-hours="24" class="active">24h</button>
           <button data-hours="168">7d</button>
           <button data-hours="720">30d</button>
         </span>
         <button id="comp-flagged" class="ghost">Flagged only</button>
+        <button id="comp-scope-btn" class="ghost">Scope</button>
       </div>
       <div id="comp-kpis" class="v2-section"></div>
-      <div id="comp-traces" class="v2-section"></div>
+      <div id="comp-body" class="v2-section"></div>
     </section>
+
 
     <section id="tab-reports" class="tab">
       <div class="page-toolbar">

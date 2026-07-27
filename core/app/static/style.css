@@ -2437,6 +2437,7 @@ html, body { height: 100%; }
 @media (max-width: 640px) {
   .provider-row { grid-template-columns: 1fr auto; }
   .provider-input { grid-column: 1 / -1; }
+}
 /* Version chip, bottom-right (NAUTGATE-13). right offset clears the 36px help rail. */
 .app-version {
   position: fixed;
@@ -2490,3 +2491,48 @@ html, body { height: 100%; }
   color: #0A0D12;
 }
 #comp-flagged.active { background: var(--accent); color: #0A0D12; border-color: var(--accent); }
+
+/* Compliance: detail + flow views (NAUTGATE-25) */
+.comp-label-lg { width: 32px; height: 32px; font-size: 16px; border-radius: 7px; }
+.comp-banner {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 14px;
+  padding: 16px 18px; border-radius: 10px;
+  border: 1px solid var(--bad); background: rgba(229, 72, 77, 0.08);
+}
+.comp-banner-clean { border-color: var(--border); background: var(--bg-card); }
+.comp-banner-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.comp-sev {
+  display: inline-block; padding: 3px 9px; border-radius: 5px;
+  font-size: 12px; font-weight: 600;
+}
+.comp-sev-crit { background: var(--bad); color: #fff; }
+.comp-sev-high { border: 1px solid var(--bad); color: var(--bad); }
+.comp-chip {
+  display: inline-block; margin: 0 6px 6px 0; padding: 5px 12px;
+  border-radius: 999px; border: 1px solid var(--border);
+  font-size: 13px; color: var(--text-dim);
+}
+.comp-chip.on { background: var(--accent); border-color: var(--accent); color: #0A0D12; font-weight: 500; }
+.comp-note {
+  margin-top: 14px; padding: 14px 18px; border-radius: 10px;
+  border-left: 3px solid var(--accent); background: rgba(195, 206, 31, 0.06);
+  font-size: 14px; color: var(--text-dim);
+}
+.comp-note b { color: var(--text); }
+/* flow canvas */
+.comp-canvas { position: relative; overflow: hidden; border-radius: 8px; background: var(--bg); }
+.comp-n {
+  position: absolute; width: 172px; height: 128px;
+  display: flex; flex-direction: column; gap: 5px; padding: 11px 12px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--bg-raised);
+}
+.comp-n-flag { border-color: var(--bad); background: rgba(229, 72, 77, 0.12); }
+.comp-n-absent { border: 1px dashed var(--bad); background: transparent; }
+.comp-n-ok { border-color: var(--border); }
+.comp-n-kind {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em;
+  color: var(--label); text-transform: uppercase;
+}
+.comp-n-flag .comp-n-kind, .comp-n-absent .comp-n-kind { color: var(--bad); }
+.comp-n-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.comp-n-sub { font-size: 10.5px; color: var(--text-dim); line-height: 14px; }
