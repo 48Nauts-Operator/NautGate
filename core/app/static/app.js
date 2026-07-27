@@ -487,6 +487,7 @@
     improve:   ["Improvements", "Prompt coaching — learn from your own calls"],
     tooling:   ["Tooling", "What connected MCPs cost to carry & save in discovery"],
     bench:     ["Bench", "Same task, N models — behavior, tools, tokens & cost side by side"],
+    compliance:["Compliance", "What every call touched — recorded, never blocked"],
     reports:   ["Reports", "Print-ready usage & governance audits"],
     cost:      ["Cost", "Spend & subscription savings"],
     cache:     ["Prompt Cache", "Prompt-cache accounting & leak detector"],
@@ -579,6 +580,7 @@
     else if (activeTab === "cost") loadCost();
     else if (activeTab === "cache") loadCache();
     else if (activeTab === "privacy") loadPrivacy();
+    else if (activeTab === "compliance") loadCompliance();
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "scorecard") loadScorecard();
     else if (activeTab === "drift") loadDrift();
@@ -6279,6 +6281,121 @@
       return null;
     }
   }
+
+  // === Compliance — the audit layer (NAUTGATE-25) ============================
+  // Reads what each call touched. Nothing here gates traffic; the label is a
+  // severity reading ("how closely does this want looking at"), and a flag is a
+  // marker for review, never a block.
+
+  let compWindow = 24;
+  let compFlaggedOnly = false;
+
+  const COMP_LABEL_COLOR = {
+    G: "var(--good)", Y: "var(--warn)", O: "#C2662A",
+    R: "var(--bad)", X: "#8B6BB1",
+  };
+
+  document.querySelectorAll("#comp-window button").forEach((b) => {
+    b.addEventListener("click", () => {
+      compWindow = Number(b.dataset.hours);
+      document.querySelectorAll("#comp-window button")
+        .forEach((x) => x.classList.toggle("active", x === b));
+      loadCompliance();
+    });
+  });
+  document.getElementById("comp-flagged")?.addEventListener("click", (e) => {
+    compFlaggedOnly = !compFlaggedOnly;
+    e.currentTarget.classList.toggle("active", compFlaggedOnly);
+    loadCompliance();
+  });
+
+  function compLabelPill(label) {
+    const c = COMP_LABEL_COLOR[label] || "var(--text-dim)";
+    return `<span class="comp-label" style="background:${c}">${esc(label)}</span>`;
+  }
+
+  async function loadCompliance() {
+    if (!getToken()) return;
+    const kpis = document.getElementById("comp-kpis");
+    const list = document.getElementById("comp-traces");
+    try {
+      const [scope, sum, traces] = await Promise.all([
+        api("/v1/compliance/scope").catch(() => null),
+        api(`/v1/compliance/summary?hours=${compWindow}`),
+        api(`/v1/compliance/traces?hours=${compWindow}&limit=100${compFlaggedOnly ? "&flagged=true" : ""}`),
+      ]);
+
+      const scopeEl = document.getElementById("comp-scope");
+      if (scopeEl && scope) {
+        scopeEl.innerHTML = `Evaluated against <b>${(scope.evaluated_against || []).map(esc).join(" · ")}</b>`;
+      }
+
+      if (kpis) {
+        NG.statRow(kpis, [
+          NG.statCard({ label: "Calls traced", value: (sum.traced || 0).toLocaleString(),
+            sub: "every call, whatever the label" }),
+          NG.statCard({ label: "Flagged", value: String(sum.flags),
+            sub: `${sum.flagged_calls} call${sum.flagged_calls === 1 ? "" : "s"} want a look`,
+            highlight: sum.flags > 0 }),
+          NG.statCard({ label: "Left CH / EEA", value: (sum.left_home || 0).toLocaleString(),
+            sub: "recorded, not blocked" }),
+          NG.statCard({ label: "Touched personal data", value: (sum.personal || 0).toLocaleString(),
+            sub: "GDPR · FADP in scope" }),
+        ]);
+      }
+
+      const badge = document.getElementById("nav-comp-count");
+      if (badge) { badge.textContent = String(sum.flags || 0); badge.hidden = !sum.flags; }
+
+      const rows = traces.data || [];
+      if (!list) return;
+      if (!rows.length) {
+        list.innerHTML = NG.card({
+          title: "Trace",
+          body: NG.el("p", { class: "hint", style: "padding:12px 14px",
+            text: compFlaggedOnly
+              ? "Nothing flagged in this window — every call is still recorded."
+              : "No traffic traced in this window yet." }),
+        }).outerHTML;
+        return;
+      }
+
+      const body = rows.map((r) => {
+        const d = r.destination || {};
+        const dest = d.provider ? `${esc(d.provider)}${d.region ? " · " + esc(d.region) : ""}` : "—";
+        const destColor = d.third_country_transfer ? "var(--warn)" : "var(--good)";
+        const flags = r.flag_count
+          ? `<span style="color:var(--bad)">⚑ ${r.flag_count}</span>`
+          : '<span class="hint">—</span>';
+        const worst = (r.flags || []).some((f) => f.severity === "critical");
+        return `<tr${worst ? ' style="background:rgba(229,72,77,0.06)"' : ""}>
+          <td class="mono hint">${esc((r.ts || "").slice(11, 19))}</td>
+          <td>${esc(r.agent_id || "—")}</td>
+          <td>${esc(r.activity || "unknown")}</td>
+          <td>${compLabelPill(r.label)}</td>
+          <td class="hint">${(r.regimes_touched || []).map(esc).join(" · ") || "—"}</td>
+          <td class="mono" style="color:${destColor}">${dest}</td>
+          <td>${flags}</td>
+        </tr>`;
+      }).join("");
+
+      list.innerHTML = "";
+      list.appendChild(NG.card({
+        title: "Trace",
+        meta: `${rows.length} call${rows.length === 1 ? "" : "s"} · last ${compWindow}h${compFlaggedOnly ? " · flagged only" : ""}`,
+        body: NG.el("div", {
+          html: `<table class="v2-table"><thead><tr>
+            <th>TIME</th><th>AGENT</th><th>ACTIVITY</th><th>LABEL</th>
+            <th>TOUCHED</th><th>DESTINATION</th><th>FLAGS</th>
+          </tr></thead><tbody>${body}</tbody></table>`,
+        }),
+      }));
+    } catch (e) {
+      console.error("[compliance] load failed:", e);
+      if (list) list.innerHTML = '<p class="hint" style="padding:12px">Compliance trace unavailable — check the auth chip.</p>';
+    }
+  }
+
   const importedLabel = await consumeImportFragment();
 
   // Start tab from URL hash, default to overview.
@@ -6456,4 +6573,5 @@
     }
     if (dirty) { renderAuth(); renderSessions(); }
   }, 100);
+
 })();

@@ -2479,3 +2479,14 @@ html, body { height: 100%; }
   /* keep the active-tab accent visible when collapsed */
   .app-shell.sidebar-collapsed .sidebar nav a.nav-item.active { background: var(--bg-raised); }
 }
+
+/* ─── Compliance audit layer (NAUTGATE-25) ─────────────────────────────── */
+/* The label is a severity reading — "how closely does this want looking at" —
+   not an enforcement band. Colour carries the reading; nothing here gates. */
+.comp-label {
+  display: inline-grid; place-items: center;
+  width: 22px; height: 22px; border-radius: 5px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  color: #0A0D12;
+}
+#comp-flagged.active { background: var(--accent); color: #0A0D12; border-color: var(--accent); }
