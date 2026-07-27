@@ -75,7 +75,7 @@ def _normalize_tool_calls(raw: list, sensitivity: str) -> list[dict] | None:
 
 
 async def _record_compliance_trace(
-    pool, policy, *, decision_id, activity, sensitivity, provider_name
+    pool, policy, *, decision_id, activity, sensitivity, provider_name, model=None
 ) -> None:
     """Build and persist the compliance trace. Never raises into the request."""
     try:
@@ -84,6 +84,7 @@ async def _record_compliance_trace(
             activity=activity,
             sensitivity=sensitivity,
             provider_name=provider_name,
+            model=model,
         )
         await queries.write_compliance_trace(pool, decision_id=decision_id, trace=trace.to_dict())
     except Exception as exc:  # noqa: BLE001 — annotation must never break the call
@@ -459,6 +460,7 @@ async def _process_chat_request(
                 activity=request.headers.get("x-nautgate-activity"),
                 sensitivity=classification.sensitivity,
                 provider_name=decision_provider,
+                model=decision_model,
             )
         )
 

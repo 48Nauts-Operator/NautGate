@@ -139,8 +139,20 @@ class Policy:
             return self.activities[name], "declared"
         return self.unknown_activity, "fallback"
 
-    def provider(self, name: str | None) -> dict:
-        return self.providers.get(name or "", {})
+    def provider(self, name: str | None, model: str | None = None) -> dict:
+        """Resolve provider terms, falling back to the model's own prefix.
+
+        The routing decision records a *lane* ("passthrough", "override") for an
+        explicitly-addressed model, not the provider that actually served it. So
+        "openrouter/deepseek/..." arrives as provider="passthrough" and would
+        otherwise miss the registry entirely — losing the region, and with it the
+        transfer flag, which is the one that matters most.
+        """
+        hit = self.providers.get(name or "")
+        if hit:
+            return hit
+        prefix = (model or "").split("/", 1)[0].strip().lower()
+        return self.providers.get(prefix, {})
 
 
 def load_policy(path: str | Path) -> Policy:
@@ -227,6 +239,16 @@ def evaluate_flags(
     return [f for f in flags if f is not None]
 
 
+
+def _resolved_provider(policy: Policy, name: str | None, model: str | None) -> str | None:
+    """Name of the registry entry the terms came from — the lane if it matched,
+    otherwise the model's prefix. Recorded so the row names a real destination."""
+    if policy.providers.get(name or ""):
+        return name
+    prefix = (model or "").split("/", 1)[0].strip().lower()
+    return prefix if policy.providers.get(prefix) else None
+
+
 # --- trace construction ---------------------------------------------------
 
 
@@ -236,6 +258,7 @@ def build_trace(
     activity: str | None = None,
     sensitivity: str = "none",
     provider_name: str | None = None,
+    model: str | None = None,
     has_assessment: bool = False,
     has_human_review: bool = False,
 ) -> Trace:
@@ -248,7 +271,7 @@ def build_trace(
     """
     pattern, confidence = policy.activity(activity)
     data_class = _SENSITIVITY_TO_CLASS.get(sensitivity, "personal")
-    terms = policy.provider(provider_name)
+    terms = policy.provider(provider_name, model)
     region = terms.get("region")
 
     # The label is the strictest of the activity's reading and what the data
@@ -288,7 +311,7 @@ def build_trace(
         evaluated_against=evaluated,
         regimes_touched=touched,
         destination={
-            "provider": provider_name,
+            "provider": _resolved_provider(policy, provider_name, model) or provider_name,
             "region": region,
             "hosting": terms.get("hosting"),
             "third_country_transfer": bool(region) and region not in policy.home_regions,
