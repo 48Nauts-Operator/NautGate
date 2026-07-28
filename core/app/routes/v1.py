@@ -490,7 +490,15 @@ async def _process_chat_request(
         raw = None
     except Exception as exc:
         upstream_status = 502
-        log.error("nautrouter_call_failed", error=str(exc), decision_id=str(decision_id))
+        # str() on an httpx timeout is the empty string, so logging only the
+        # message produced `error: ""` and told us nothing — a 120s read timeout
+        # looked identical to a hard upstream failure. Always log the type.
+        log.error(
+            "nautrouter_call_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+            decision_id=str(decision_id),
+        )
         raw = None
 
     if isinstance(raw, dict):

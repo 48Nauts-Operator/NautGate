@@ -143,7 +143,10 @@ async def lifespan(app: FastAPI):
         log.warning("no_db_url_configured", hint="set NAUTGATE_DB_URL to enable persistence")
 
     if settings.nautrouter_base_url:
-        app.state.nautrouter = NautRouterClient(settings.nautrouter_base_url)
+        app.state.nautrouter = NautRouterClient(
+            settings.nautrouter_base_url,
+            timeout_s=settings.nautgate_upstream_timeout_s,
+        )
         log.info("nautrouter_client_ready", base_url=settings.nautrouter_base_url)
 
     # Quality-eval judge client. Direct httpx to OpenAI (or LMStudio when
