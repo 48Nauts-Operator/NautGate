@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # captured turns to /v1/ingest. Unset → the ingest endpoint is disabled.
     nautgate_ingest_token: str | None = None
 
+    # Opt-in harness module (NAUTGATE-24): when true, the Anthropic Messages
+    # bridge promotes a local model's text/reasoning pseudo tool call
+    # (<tool_call>{...}</tool_call>) into structured tool_calls, so an agentic
+    # harness (Claude Code) doesn't stall on an "empty answer". Off by default —
+    # the default bridge path is unchanged.
+    nautgate_harness_normalize: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

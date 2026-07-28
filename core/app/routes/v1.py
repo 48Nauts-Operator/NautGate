@@ -1003,6 +1003,10 @@ async def messages(request: Request) -> Response:
 
     payload = ant.request_to_openai_chat(raw)
 
+    # Opt-in harness module (NAUTGATE-24) — off by default.
+    settings = getattr(request.app.state, "settings", None)
+    normalize = bool(getattr(settings, "nautgate_harness_normalize", False))
+
     stream_translator = None
     stream_translator_finish = None
     if payload.get("stream"):
@@ -1012,7 +1016,9 @@ async def messages(request: Request) -> Response:
         def _ensure():
             if translator_holder["t"] is None:
                 model_name = getattr(request.state, "decision_model", payload.get("model", ""))
-                translator_holder["t"] = ant.AnthropicStreamTranslator(model=model_name)
+                translator_holder["t"] = ant.AnthropicStreamTranslator(
+                    model=model_name, normalize=normalize
+                )
             return translator_holder["t"]
 
         def _on_chunk(chunk: bytes) -> list[bytes]:
@@ -1028,7 +1034,9 @@ async def messages(request: Request) -> Response:
         request,
         payload=payload,
         inbound_format="anthropic",
-        response_translator=ant.response_to_anthropic,
+        response_translator=lambda resp, model: ant.response_to_anthropic(
+            resp, model, normalize=normalize
+        ),
         stream_translator=stream_translator,
         stream_translator_finish=stream_translator_finish,
     )

@@ -18,6 +18,8 @@ import json
 import uuid
 from typing import Any
 
+from app.harness import promote_text_tool_calls
+
 # --- Stop reason mapping ---------------------------------------------------
 
 # OpenAI finish_reason → Anthropic stop_reason
@@ -235,12 +237,22 @@ def request_to_openai_chat(payload: dict) -> dict:
 # --- Response: OpenAI Chat → Anthropic Messages ---------------------------
 
 
-def response_to_anthropic(openai_resp: dict, model: str | None = None) -> dict:
-    """Translate a non-streaming OpenAI Chat response into an Anthropic Messages response."""
+def response_to_anthropic(
+    openai_resp: dict, model: str | None = None, normalize: bool = False
+) -> dict:
+    """Translate a non-streaming OpenAI Chat response into an Anthropic Messages response.
+
+    ``normalize`` (opt-in harness module) promotes a local model's pseudo tool
+    call from text into structured tool_calls before translation.
+    """
     choices = openai_resp.get("choices") or []
     msg = (choices[0] if choices else {}).get("message") or {}
-    content = msg.get("content") or ""
     finish = (choices[0] if choices else {}).get("finish_reason")
+    if normalize:
+        msg, promoted = promote_text_tool_calls(msg)
+        if promoted:
+            finish = "tool_calls"
+    content = msg.get("content") or ""
     usage = openai_resp.get("usage") or {}
 
     # NAUTGATE-2 (issue #2): map OpenAI tool_calls → Anthropic tool_use blocks
@@ -298,8 +310,12 @@ class AnthropicStreamTranslator:
             yield out_chunk
     """
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, normalize: bool = False):
         self.model = model
+        # Opt-in harness module: buffer text and promote a pseudo tool call at
+        # the end (see app.harness). Off by default → streams text as it arrives.
+        self.normalize = normalize
+        self._accum_text = ""
         self._buf = bytearray()
         self._message_started = False
         # Text content block (index 0 if any text was streamed).
@@ -498,10 +514,46 @@ class AnthropicStreamTranslator:
         out.extend(self._terminate())
         return out
 
+    def _flush_normalized(self) -> list[bytes]:
+        """Opt-in harness path: decide tool_use-vs-text for the buffered content
+        once the whole message is known, and emit the right Anthropic blocks."""
+        out: list[bytes] = []
+        msg, promoted = promote_text_tool_calls({"content": self._accum_text})
+        if not promoted:
+            if not self._text_block_started:
+                out.append(self._start_content_block())
+            out.append(self._delta_text(self._accum_text))
+            return out
+        self._finish_reason = "tool_calls"
+        leftover = msg.get("content")
+        if isinstance(leftover, str) and leftover.strip():
+            if not self._text_block_started:
+                out.append(self._start_content_block())
+            out.append(self._delta_text(leftover))
+        for i, tc in enumerate(msg.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            out.append(
+                self._start_tool_block(
+                    i,
+                    tool_id=tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                    name=fn.get("name", ""),
+                )
+            )
+            args = fn.get("arguments")
+            args_str = args if isinstance(args, str) else json.dumps(args or {})
+            if args_str:
+                out.append(self._delta_tool_input(i, args_str))
+        return out
+
     def _terminate(self):
         out: list[bytes] = []
         if not self._message_started:
             out.append(self._start_message())
+        # Opt-in harness module: flush buffered text (promoted to tool_use if it
+        # held a pseudo tool call). Only when nothing structured was streamed.
+        if self.normalize and self._accum_text and not self._tool_blocks:
+            out.extend(self._flush_normalized())
+            self._accum_text = ""
         if self._text_block_started and not self._text_block_stopped:
             out.append(self._stop_content_block())
         # Close any still-open tool_use blocks so the message ends cleanly.
@@ -534,9 +586,14 @@ class AnthropicStreamTranslator:
         # Text content delta — opens the text block on first non-empty text.
         text = delta.get("content")
         if isinstance(text, str) and text:
-            if not self._text_block_started:
-                out.append(self._start_content_block())
-            out.append(self._delta_text(text))
+            if self.normalize:
+                # Hold text back; _terminate decides tool_use-vs-text once the
+                # full message is known.
+                self._accum_text += text
+            else:
+                if not self._text_block_started:
+                    out.append(self._start_content_block())
+                out.append(self._delta_text(text))
 
         # Tool-call deltas. OpenAI streams these as a list, each entry tagged
         # with its own `index`. The first chunk for a given index carries
