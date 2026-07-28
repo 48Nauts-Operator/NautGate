@@ -239,7 +239,6 @@ def evaluate_flags(
     return [f for f in flags if f is not None]
 
 
-
 def _resolved_provider(policy: Policy, name: str | None, model: str | None) -> str | None:
     """Name of the registry entry the terms came from — the lane if it matched,
     otherwise the model's prefix. Recorded so the row names a real destination."""

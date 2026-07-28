@@ -73,7 +73,6 @@ def _normalize_tool_calls(raw: list, sensitivity: str) -> list[dict] | None:
     return out or None
 
 
-
 async def _record_compliance_trace(
     pool, policy, *, decision_id, activity, sensitivity, provider_name, model=None
 ) -> None:

@@ -2157,7 +2157,9 @@ async def get_compliance_traces(
             "label": r["label"],
             "data_class": r["data_class"],
             "regimes_touched": list(r["regimes_touched"] or []),
-            "destination": json.loads(r["destination"]) if isinstance(r["destination"], str) else (r["destination"] or {}),
+            "destination": json.loads(r["destination"])
+            if isinstance(r["destination"], str)
+            else (r["destination"] or {}),
             "flags": json.loads(r["flags"]) if isinstance(r["flags"], str) else (r["flags"] or []),
             "flag_count": int(r["flag_count"] or 0),
             "reviewed": r["reviewed_at"] is not None,

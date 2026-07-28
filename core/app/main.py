@@ -85,7 +85,6 @@ async def _bootstrap_first_run_key(pool) -> None:
         log.warning("first_run_key_bootstrap_failed", error=str(exc))
 
 
-
 class _RevalidatingStatic(StaticFiles):
     """Serve /static with `Cache-Control: no-cache`.
 

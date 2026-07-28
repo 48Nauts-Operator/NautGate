@@ -88,9 +88,7 @@ def test_scenario_research_is_clean(policy):
 
 
 def test_scenario_business_email_local_is_clean_but_recorded(policy):
-    t = build_trace(
-        policy, activity="business-email", sensitivity="pii", provider_name="lmstudio"
-    )
+    t = build_trace(policy, activity="business-email", sensitivity="pii", provider_name="lmstudio")
     assert t.label == "O"
     assert t.flags == []
     assert t.destination["third_country_transfer"] is False
@@ -99,9 +97,7 @@ def test_scenario_business_email_local_is_clean_but_recorded(policy):
 
 def test_scenario_cv_screening_raises_three_flags(policy):
     # The hero row: it ran, nothing was blocked, and the record says why it matters.
-    t = build_trace(
-        policy, activity="cv-screening", sensitivity="pii", provider_name="openrouter"
-    )
+    t = build_trace(policy, activity="cv-screening", sensitivity="pii", provider_name="openrouter")
     assert t.label == "R"
     ids = {f.id for f in t.flags}
     assert ids == {"third-country-transfer", "high-risk-no-assessment", "no-human-review"}
