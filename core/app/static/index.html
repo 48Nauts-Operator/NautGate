@@ -89,6 +89,11 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg>
         <span class="nav-label">Privacy</span>
       </a>
+      <a class="nav-item" href="#compliance" data-tab="compliance">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 7h14M7 7l-3 6h6zM17 7l-3 6h6z"/></svg>
+        <span class="nav-label">Compliance</span>
+        <span class="nav-count" id="nav-comp-count" hidden></span>
+      </a>
       <a class="nav-item" href="#reports" data-tab="reports">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>
         <span class="nav-label">Reports</span>
@@ -397,6 +402,22 @@
     </section>
 
     <!-- Reports (audit / meeting deliverables) ------------------------------->
+    <section id="tab-compliance" class="tab">
+      <div class="page-toolbar" id="comp-toolbar">
+        <span id="comp-bread" class="hint" style="flex:1"></span>
+        <span class="win-group" id="comp-window">
+          <button data-hours="24" class="active">24h</button>
+          <button data-hours="168">7d</button>
+          <button data-hours="720">30d</button>
+        </span>
+        <button id="comp-flagged" class="ghost">Flagged only</button>
+        <button id="comp-scope-btn" class="ghost">Scope</button>
+      </div>
+      <div id="comp-kpis" class="v2-section"></div>
+      <div id="comp-body" class="v2-section"></div>
+    </section>
+
+
     <section id="tab-reports" class="tab">
       <div class="page-toolbar">
         <p class="hint" style="flex:1;margin:0">Print-ready reports built from the audit log — what every agent sent through the LLMs, what it cost, what data categories shipped where, and what the judge thought of the answers. Bodies are never included; safe to hand to a client or auditor.</p>

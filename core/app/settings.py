@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys
     # override via NAUTGATE_ROUTING_CONFIG_PATH=/etc/nautgate/routing.yaml.
     nautgate_routing_config_path: str | None = None
+    nautgate_compliance_config_path: str | None = None
+
+    # Compliance AUDIT trace (NAUTGATE-25). Observational — it records what a
+    # call touched and never gates one. Off disables the trace write entirely.
+    nautgate_compliance_trace: bool = True
 
     # Provider/model pricing. Defaults to <repo>/config/pricing.yaml.
     nautgate_pricing_config_path: str | None = None
