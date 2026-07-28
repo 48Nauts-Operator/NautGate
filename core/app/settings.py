@@ -26,11 +26,23 @@ class Settings(BaseSettings):
     # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys
     # override via NAUTGATE_ROUTING_CONFIG_PATH=/etc/nautgate/routing.yaml.
     nautgate_routing_config_path: str | None = None
+    nautgate_compliance_config_path: str | None = None
+
+    # Compliance AUDIT trace (NAUTGATE-25). Observational — it records what a
+    # call touched and never gates one. Off disables the trace write entirely.
+    nautgate_compliance_trace: bool = True
 
     # Provider/model pricing. Defaults to <repo>/config/pricing.yaml.
     nautgate_pricing_config_path: str | None = None
 
     nautrouter_base_url: str = "http://localhost:8404"
+
+    # Read timeout for upstream model calls, in seconds. A long report or a
+    # thinking model can legitimately run for many minutes, and the old
+    # hard-coded 120s aborted work that was still in progress and reported it
+    # as `502 upstream_failed`. Connect stays fast (2s) so a genuinely down
+    # sidecar still fails immediately.
+    nautgate_upstream_timeout_s: float = 600.0
 
     # CLASSIFY slow-path (Tech Paper §7.3). Off by default. When on, ambiguous
     # fast-path-"none" prompts get a one-shot LLM verify with a 500ms timeout.

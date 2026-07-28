@@ -14,7 +14,14 @@ class NautRouterClient:
     the tee accumulator in app.streaming.
     """
 
-    def __init__(self, base_url: str, *, timeout_s: float = 120.0) -> None:
+    def __init__(self, base_url: str, *, timeout_s: float | None = None) -> None:
+        # Default comes from settings so there is one source of truth — a
+        # second hard-coded default here silently outranked the configured
+        # value depending on who constructed the client.
+        if timeout_s is None:
+            from app.settings import get_settings
+
+            timeout_s = get_settings().nautgate_upstream_timeout_s
         self._base_url = base_url
         self._client = httpx.AsyncClient(
             base_url=base_url,

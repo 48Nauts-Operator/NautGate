@@ -185,7 +185,9 @@ def websocket_message(flow) -> None:
     if _DEBUG_DUMP:
         who = "CLIENT" if m.from_client else "SERVER"
         with open("/tmp/codex_ws_dump.txt", "a") as f:
-            f.write(f"--- {who} ({len(m.content)}b)\n{m.content.decode('utf-8', errors='replace')[:4000]}\n\n")
+            f.write(
+                f"--- {who} ({len(m.content)}b)\n{m.content.decode('utf-8', errors='replace')[:4000]}\n\n"
+            )
     out = _consume(_PENDING, flow.id, m.content, m.from_client, getattr(m, "timestamp", None))
     if out is None:
         return
