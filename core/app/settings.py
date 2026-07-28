@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # never set on a multi-tenant or internet-exposed deploy.
     nautgate_local_admin_token: str | None = None
 
+    # Shared secret the nautproxy sidecar presents (X-Ingest-Token) to POST
+    # captured turns to /v1/ingest. Unset → the ingest endpoint is disabled.
+    nautgate_ingest_token: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

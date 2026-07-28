@@ -74,6 +74,10 @@ services:
       # Set to a random secret and BACK IT UP — losing it means re-entering
       # those keys. Leave empty to keep provider keys in the env only.
       NAUTGATE_MASTER_KEY: ${NAUTGATE_MASTER_KEY:-}
+      # Shared secret the nautproxy sidecar (proxy profile) presents to POST
+      # captured turns to /v1/ingest. Unset → /v1/ingest is disabled. Set this
+      # to a random secret if you enable the proxy profile.
+      NAUTGATE_INGEST_TOKEN: ${NAUTGATE_INGEST_TOKEN:-}
       # Provider keys also reach core — quality-eval, shadow and the drift
       # investigator call models from here, not through the router.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -89,6 +93,34 @@ services:
       - "127.0.0.1:8090:8090"
     restart: unless-stopped
 
+  # Optional: capture clients that ignore OPENAI_BASE_URL (e.g. Codex in
+  # ChatGPT-OAuth mode). Enable with `--profile proxy`, set NAUTGATE_INGEST_TOKEN
+  # in your .env, then point the client at this proxy and trust its CA:
+  #   docker compose --profile proxy up -d
+  #   docker compose cp nautproxy:/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem ./nautproxy-ca.pem
+  #   export HTTPS_PROXY=http://127.0.0.1:8092 NODE_EXTRA_CA_CERTS=$PWD/nautproxy-ca.pem
+  nautproxy:
+    image: ghcr.io/48nauts-operator/nautproxy:latest
+    # To build locally instead of pulling, comment out `image` and uncomment:
+    # build:
+    #   context: ..
+    #   dockerfile: deploy/nautproxy.Dockerfile
+    profiles: ["proxy"]
+    depends_on:
+      nautgate:
+        condition: service_started
+    environment:
+      NAUTGATE_INGEST_URL: http://nautgate:8090/v1/ingest
+      NAUTGATE_INGEST_TOKEN: ${NAUTGATE_INGEST_TOKEN:-}
+      NAUTPROXY_AGENT_ID: ${NAUTPROXY_AGENT_ID:-codex}
+    volumes:
+      # CA persists across recreates — trust it once, not every restart.
+      - nautproxy-ca:/home/mitmproxy/.mitmproxy
+    ports:
+      - "127.0.0.1:8092:8092"
+    restart: unless-stopped
+
 volumes:
   nautgate-db-data:
   nautgate-backups:
+  nautproxy-ca:
