@@ -26,11 +26,23 @@ class Settings(BaseSettings):
     # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys
     # override via NAUTGATE_ROUTING_CONFIG_PATH=/etc/nautgate/routing.yaml.
     nautgate_routing_config_path: str | None = None
+    nautgate_compliance_config_path: str | None = None
+
+    # Compliance AUDIT trace (NAUTGATE-25). Observational — it records what a
+    # call touched and never gates one. Off disables the trace write entirely.
+    nautgate_compliance_trace: bool = True
 
     # Provider/model pricing. Defaults to <repo>/config/pricing.yaml.
     nautgate_pricing_config_path: str | None = None
 
     nautrouter_base_url: str = "http://localhost:8404"
+
+    # Read timeout for upstream model calls, in seconds. A long report or a
+    # thinking model can legitimately run for many minutes, and the old
+    # hard-coded 120s aborted work that was still in progress and reported it
+    # as `502 upstream_failed`. Connect stays fast (2s) so a genuinely down
+    # sidecar still fails immediately.
+    nautgate_upstream_timeout_s: float = 600.0
 
     # CLASSIFY slow-path (Tech Paper §7.3). Off by default. When on, ambiguous
     # fast-path-"none" prompts get a one-shot LLM verify with a 500ms timeout.
@@ -43,12 +55,17 @@ class Settings(BaseSettings):
     # never set on a multi-tenant or internet-exposed deploy.
     nautgate_local_admin_token: str | None = None
 
+    # Shared secret the nautproxy sidecar presents (X-Ingest-Token) to POST
+    # captured turns to /v1/ingest. Unset → the ingest endpoint is disabled.
+    nautgate_ingest_token: str | None = None
+
     # Opt-in harness module (NAUTGATE-24): when true, the Anthropic Messages
     # bridge promotes a local model's text/reasoning pseudo tool call
     # (<tool_call>{...}</tool_call>) into structured tool_calls, so an agentic
     # harness (Claude Code) doesn't stall on an "empty answer". Off by default —
     # the default bridge path is unchanged.
     nautgate_harness_normalize: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

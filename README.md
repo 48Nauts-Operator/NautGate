@@ -88,9 +88,13 @@ docker compose up -d
 docker compose logs nautgate | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+' | head -1
 ```
 
-Provider keys are optional — set the ones you use (`OPENROUTER_API_KEY`,
-`ANTHROPIC_API_KEY`, …) in a `.env` next to the compose file. Prefer to build
-from source? See [Development](#development).
+Paste that key into the dashboard to activate it, then add your model-provider
+keys in **Settings → Providers** (encrypted at rest — no `.env` or master key to
+configure). Prefer files? Set `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, … in a
+`.env` next to the compose instead. Building from source? See [Development](#development).
+
+**Updating:** `docker compose pull && docker compose up -d` pulls the latest
+image and recreates — your data (DB volume) is kept.
 
 Point a client at it:
 

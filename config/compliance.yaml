@@ -1,0 +1,117 @@
+# NautGate compliance AUDIT policy (NAUTGATE-25).
+#
+# NautGate is the AUDIT layer, not the compliance layer. Nothing here blocks,
+# denies or holds a call. Every value below only affects what gets RECORDED on
+# the audit row and what gets FLAGGED for a human to look at later.
+#
+# Labels are a severity reading — "how closely does this want looking at" —
+# not an enforcement band:
+#   G routine · Y personal data present · O sensitive/confidential
+#   R consequential decision · X should not be automated
+#
+# Baseline follows the Activity-to-Compliance Policy Matrix (CH + EU, Jul 2026).
+# It is a baseline reading, NOT a legal opinion.
+
+# --- Jurisdiction scope --------------------------------------------------
+# Three declarations, because "where am I" alone under-scopes: GDPR reaches
+# beyond the EU, so a Swiss firm serving EU customers is in scope regardless of
+# establishment. IMPORTANT: scope filters the FLAGS, never the RECORDING — the
+# full trace is captured whatever is declared here.
+scope:
+  establishment: CH        # where the organisation sits
+  markets: [CH, EU]        # whose residents' data you touch
+  sectors: []              # finma | dora | nis2 | health | education
+
+# Which regimes each scope element activates.
+regimes:
+  CH: [CH-FADP]
+  EU: [EU-GDPR, EU-AI-Act]
+  UK: [UK-GDPR]
+  US: []
+sector_regimes:
+  finma: [CH-FINMA]
+  dora: [EU-DORA]
+  nis2: [EU-NIS2]
+  health: [CH-HEALTH]
+  education: [EU-EDU]
+
+# Regions that count as "home" for transfer purposes.
+home_regions: [CH, EEA, EU]
+
+# --- Provider capability registry ---------------------------------------
+# Where a model actually runs and under what terms. This is what turns
+# "openrouter" into "US, no DPA, 30-day retention" on the audit row.
+# hosting: local | sovereign | api      trains: true | false | unknown
+providers:
+  lmstudio:      { region: CH, hosting: local,     dpa: false, trains: false,   retention: none }
+  ollama:        { region: CH, hosting: local,     dpa: false, trains: false,   retention: none }
+  infomaniak:    { region: CH, hosting: sovereign, dpa: true,  trains: false,   retention: none }
+  openrouter:    { region: US, hosting: api,       dpa: false, trains: unknown, retention: "30d" }
+  openai:        { region: US, hosting: api,       dpa: false, trains: unknown, retention: "30d" }
+  anthropic:     { region: US, hosting: api,       dpa: false, trains: false,   retention: "30d" }
+  gemini:        { region: US, hosting: api,       dpa: false, trains: unknown, retention: "30d" }
+  chatgpt-oauth: { region: US, hosting: api,       dpa: false, trains: unknown, retention: unknown }
+  anthropic-oauth: { region: US, hosting: api,     dpa: false, trains: false,   retention: unknown }
+
+# --- Activity patterns ---------------------------------------------------
+# Subset of the 31-pattern matrix, keyed by the activity the caller declares
+# (or that the classifier infers). decision_effect drives the oversight rules.
+# effect: draft | recommendation | ranking | significant | execution
+activities:
+  web-research:        { label: G, effect: draft }
+  public-code:         { label: G, effect: draft }
+  marketing-copy:      { label: G, effect: draft }
+  person-research:     { label: Y, effect: recommendation }
+  support-ticket:      { label: Y, effect: recommendation }
+  internal-docs:       { label: Y, effect: draft }
+  business-email:      { label: O, effect: recommendation }
+  private-email:       { label: O, effect: recommendation }
+  proprietary-code:    { label: O, effect: draft }
+  meeting-transcript:  { label: O, effect: draft }
+  security-logs:       { label: O, effect: recommendation }
+  payroll-accounting:  { label: O, effect: recommendation }
+  legal-matter:        { label: O, effect: recommendation }
+  osint-aggregation:   { label: O, effect: ranking }
+  production-action:   { label: O, effect: execution }
+  cv-screening:        { label: R, effect: significant, ai_act: annex-iii }
+  worker-monitoring:   { label: R, effect: significant, ai_act: annex-iii }
+  credit-scoring:      { label: R, effect: significant, ai_act: annex-iii }
+  health-triage:       { label: R, effect: significant, ai_act: annex-iii }
+  education-grading:   { label: R, effect: significant, ai_act: annex-iii }
+  subject-rights:      { label: R, effect: significant }
+  biometric-inference: { label: X, effect: significant, ai_act: prohibited }
+  credentials:         { label: X, effect: execution }
+
+# Fallback when the activity cannot be resolved. Fail-closed: unknown traffic
+# is read as the stricter band, never the looser one.
+unknown_activity: { label: O, effect: recommendation }
+
+# --- Flag rules ----------------------------------------------------------
+# The flags ARE the product. A clean row is filing; a flagged row is the thing
+# you would otherwise only find in an audit. Keep this list short and opinionated.
+flags:
+  - id: third-country-transfer
+    severity: critical
+    when: personal_data_left_home
+    regime: GDPR Chapter V
+    title: Personal data left CH / EEA with no DPA on record
+  - id: secret-to-external
+    severity: critical
+    when: secret_to_external_api
+    regime: Trade secrets
+    title: Secret-classified content sent to an external API
+  - id: high-risk-no-assessment
+    severity: high
+    when: high_risk_without_assessment
+    regime: EU AI Act Annex III
+    title: Annex III high-risk use with no assessment referenced
+  - id: no-human-review
+    severity: high
+    when: significant_without_review
+    regime: GDPR Art. 22
+    title: Consequential decision with no human-review evidence
+  - id: prohibited-practice
+    severity: critical
+    when: prohibited_activity
+    regime: EU AI Act Art. 5
+    title: Activity is a prohibited practice, not merely high-risk

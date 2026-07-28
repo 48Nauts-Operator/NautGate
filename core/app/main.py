@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import crypto
+from app.compliance import load_policy as load_compliance_policy
 from app.db import queries
 from app.db.migrate import apply_migrations
 from app.db.pool import open_pool
@@ -45,6 +46,7 @@ from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
 DEFAULT_ROUTING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "routing.yaml"
+DEFAULT_COMPLIANCE_CONFIG = Path(__file__).resolve().parents[2] / "config" / "compliance.yaml"
 DEFAULT_PRICING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "pricing.yaml"
 
 
@@ -83,6 +85,22 @@ async def _bootstrap_first_run_key(pool) -> None:
         log.warning("first_run_key_bootstrap_failed", error=str(exc))
 
 
+class _RevalidatingStatic(StaticFiles):
+    """Serve /static with `Cache-Control: no-cache`.
+
+    Without it browsers heuristically cache these files for a long time, so an
+    edited app.js or style.css keeps serving stale to anyone who has the page
+    open — the mtime `?v=` bust only helps if the browser bothers to re-request.
+    `no-cache` means "revalidate", not "don't cache": the ETag still yields a
+    304, so this costs a conditional request, not a re-download.
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -110,6 +128,21 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("routing_table_load_failed", path=str(routing_path), error=str(exc))
         app.state.routing_table = None
+
+    # Compliance AUDIT policy (NAUTGATE-25) — jurisdiction scope, provider
+    # registry, activity patterns, flag rules. Purely observational: it decides
+    # what gets recorded and flagged, never whether a call proceeds.
+    compliance_path = Path(settings.nautgate_compliance_config_path or DEFAULT_COMPLIANCE_CONFIG)
+    try:
+        app.state.compliance_policy = load_compliance_policy(compliance_path)
+        log.info(
+            "compliance_policy_loaded",
+            path=str(compliance_path),
+            evaluated_against=app.state.compliance_policy.evaluated_against(),
+        )
+    except Exception as exc:
+        log.warning("compliance_policy_load_failed", path=str(compliance_path), error=str(exc))
+        app.state.compliance_policy = None
 
     # Pricing config — feeds the per-outcome cost calculation.
     pricing_path = Path(settings.nautgate_pricing_config_path or DEFAULT_PRICING_CONFIG)
@@ -143,7 +176,10 @@ async def lifespan(app: FastAPI):
         log.warning("no_db_url_configured", hint="set NAUTGATE_DB_URL to enable persistence")
 
     if settings.nautrouter_base_url:
-        app.state.nautrouter = NautRouterClient(settings.nautrouter_base_url)
+        app.state.nautrouter = NautRouterClient(
+            settings.nautrouter_base_url,
+            timeout_s=settings.nautgate_upstream_timeout_s,
+        )
         log.info("nautrouter_client_ready", base_url=settings.nautrouter_base_url)
 
     # Quality-eval judge client. Direct httpx to OpenAI (or LMStudio when
@@ -269,21 +305,30 @@ def create_app() -> FastAPI:
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        app.mount("/static", _RevalidatingStatic(directory=str(static_dir)), name="static")
 
-        # In-process cache for index.html — keyed by file mtime so edits land
-        # without a restart. Reading on every request is cheap (one stat +
-        # one read for ~50 KB), but caching avoids the read when the file is
-        # unchanged across thousands of dashboard hits.
-        _index_cache: dict[str, str | int] = {"mtime": 0, "html": ""}
+        # In-process cache for index.html — keyed by the mtime of index.html AND
+        # of every asset whose mtime it stamps into a `?v=` query. Keying on
+        # index.html alone meant editing app.js or style.css left the cached HTML
+        # in place, so the page kept advertising the OLD `?v=` and browsers went
+        # on serving stale JS/CSS until index.html happened to change too.
+        _index_cache: dict[str, str | tuple] = {"key": (), "html": ""}
+
+        def _asset_key() -> tuple:
+            out = []
+            for name in ("index.html", "style.css", "app.js", "kit.js"):
+                try:
+                    out.append(int((static_dir / name).stat().st_mtime))
+                except OSError:
+                    out.append(0)
+            return tuple(out)
 
         def _read_index() -> str:
-            try:
-                m = int((static_dir / "index.html").stat().st_mtime)
-            except OSError:
+            key = _asset_key()
+            if key == (0, 0, 0, 0):
                 return _index_cache.get("html") or ""
-            if m != _index_cache["mtime"]:
-                _index_cache["mtime"] = m
+            if key != _index_cache["key"]:
+                _index_cache["key"] = key
                 _index_cache["html"] = (static_dir / "index.html").read_text(encoding="utf-8")
             return _index_cache["html"]
 

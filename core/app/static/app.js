@@ -487,6 +487,7 @@
     improve:   ["Improvements", "Prompt coaching — learn from your own calls"],
     tooling:   ["Tooling", "What connected MCPs cost to carry & save in discovery"],
     bench:     ["Bench", "Same task, N models — behavior, tools, tokens & cost side by side"],
+    compliance:["Compliance", "What every call touched — recorded, never blocked"],
     reports:   ["Reports", "Print-ready usage & governance audits"],
     cost:      ["Cost", "Spend & subscription savings"],
     cache:     ["Prompt Cache", "Prompt-cache accounting & leak detector"],
@@ -579,6 +580,7 @@
     else if (activeTab === "cost") loadCost();
     else if (activeTab === "cache") loadCache();
     else if (activeTab === "privacy") loadPrivacy();
+    else if (activeTab === "compliance") loadCompliance();
     else if (activeTab === "decisions") loadDecisions();
     else if (activeTab === "scorecard") loadScorecard();
     else if (activeTab === "drift") loadDrift();
@@ -6279,6 +6281,350 @@
       return null;
     }
   }
+
+  // === Compliance — the audit layer (NAUTGATE-25) ============================
+  // Four views over the same trace: the list, one call's findings, that call's
+  // flow, and the jurisdiction scope. Nothing here gates traffic — a label is a
+  // severity reading and a flag is a marker for review, never a block.
+
+  let compWindow = 24;
+  let compFlaggedOnly = false;
+  let compView = "list";      // list | detail | flow | scope
+  let compCurrentId = null;
+
+  const COMP_LABEL_COLOR = {
+    G: "var(--good)", Y: "var(--warn)", O: "#C2662A",
+    R: "var(--bad)", X: "#8B6BB1",
+  };
+  // A finding that describes something ABSENT rather than something that
+  // happened — drawn as a dashed "never ran" node on the flow.
+  const COMP_ABSENCE_FLAGS = new Set(["no-human-review", "high-risk-no-assessment"]);
+
+  document.querySelectorAll("#comp-window button").forEach((b) => {
+    b.addEventListener("click", () => {
+      compWindow = Number(b.dataset.hours);
+      document.querySelectorAll("#comp-window button")
+        .forEach((x) => x.classList.toggle("active", x === b));
+      compView = "list"; loadCompliance();
+    });
+  });
+  document.getElementById("comp-flagged")?.addEventListener("click", (e) => {
+    compFlaggedOnly = !compFlaggedOnly;
+    e.currentTarget.classList.toggle("active", compFlaggedOnly);
+    compView = "list"; loadCompliance();
+  });
+  document.getElementById("comp-scope-btn")?.addEventListener("click", () => {
+    compView = compView === "scope" ? "list" : "scope";
+    loadCompliance();
+  });
+
+  function compLabelPill(label) {
+    const c = COMP_LABEL_COLOR[label] || "var(--text-dim)";
+    return `<span class="comp-label" style="background:${c}">${esc(label)}</span>`;
+  }
+  function compSevPill(sev) {
+    return sev === "critical"
+      ? '<span class="comp-sev comp-sev-crit">Critical</span>'
+      : '<span class="comp-sev comp-sev-high">High</span>';
+  }
+  function compBread(parts) {
+    const el = document.getElementById("comp-bread");
+    if (el) el.innerHTML = parts.join(' <span style="opacity:.5">/</span> ');
+  }
+  function compGoto(view, id) {
+    compView = view; if (id !== undefined) compCurrentId = id;
+    loadCompliance();
+  }
+
+  async function loadCompliance() {
+    if (!getToken()) return;
+    const kpis = document.getElementById("comp-kpis");
+    const body = document.getElementById("comp-body");
+    if (!body) return;
+    const showKpis = compView === "list";
+    if (kpis) { kpis.hidden = !showKpis; if (!showKpis) kpis.innerHTML = ""; }
+    document.getElementById("comp-window").hidden = compView !== "list";
+    document.getElementById("comp-flagged").hidden = compView !== "list";
+
+    try {
+      if (compView === "scope") return await renderCompScope(body);
+      if (compView === "detail") return await renderCompDetail(body, compCurrentId);
+      if (compView === "flow") return await renderCompFlow(body, compCurrentId);
+      return await renderCompList(body, kpis);
+    } catch (e) {
+      console.error("[compliance] load failed:", e);
+      body.innerHTML = '<p class="hint" style="padding:12px">Compliance view unavailable — check the auth chip.</p>';
+    }
+  }
+
+  // ---- view: list ---------------------------------------------------------
+
+  async function renderCompList(body, kpis) {
+    const [scope, sum, traces] = await Promise.all([
+      api("/v1/compliance/scope").catch(() => null),
+      api(`/v1/compliance/summary?hours=${compWindow}`),
+      api(`/v1/compliance/traces?hours=${compWindow}&limit=100${compFlaggedOnly ? "&flagged=true" : ""}`),
+    ]);
+    compBread([
+      "What every call touched — recorded, never blocked."
+      + (scope ? ` Evaluated against <b>${(scope.evaluated_against || []).map(esc).join(" · ")}</b>` : ""),
+    ]);
+
+    if (kpis) {
+      NG.statRow(kpis, [
+        NG.statCard({ label: "Calls traced", value: (sum.traced || 0).toLocaleString(),
+          sub: "every call, whatever the label" }),
+        NG.statCard({ label: "Flagged", value: String(sum.flags),
+          sub: `${sum.flagged_calls} call${sum.flagged_calls === 1 ? "" : "s"} want a look`,
+          highlight: sum.flags > 0 }),
+        NG.statCard({ label: "Left CH / EEA", value: (sum.left_home || 0).toLocaleString(),
+          sub: "recorded, not blocked" }),
+        NG.statCard({ label: "Touched personal data", value: (sum.personal || 0).toLocaleString(),
+          sub: "GDPR · FADP in scope" }),
+      ]);
+    }
+    const badge = document.getElementById("nav-comp-count");
+    if (badge) { badge.textContent = String(sum.flags || 0); badge.hidden = !sum.flags; }
+
+    const rows = traces.data || [];
+    if (!rows.length) {
+      body.innerHTML = "";
+      body.appendChild(NG.card({ title: "Trace", body: NG.el("div", {
+        html: `<p class="hint" style="padding:12px 14px">${compFlaggedOnly
+          ? "Nothing flagged in this window — every call is still recorded."
+          : "No traffic traced in this window yet."}</p>` }) }));
+      return;
+    }
+
+    const tbody = rows.map((r) => {
+      const d = r.destination || {};
+      const dest = d.provider ? `${esc(d.provider)}${d.region ? " · " + esc(d.region) : ""}` : "—";
+      const destColor = d.third_country_transfer ? "var(--warn)" : "var(--good)";
+      const worst = (r.flags || []).some((f) => f.severity === "critical");
+      return `<tr class="comp-row" data-id="${esc(r.decision_id)}"${worst ? ' style="background:rgba(229,72,77,0.06)"' : ""}>
+        <td class="mono hint">${esc((r.ts || "").slice(11, 19))}</td>
+        <td>${esc(r.agent_id || "—")}</td>
+        <td>${esc(r.activity || "unknown")}</td>
+        <td>${compLabelPill(r.label)}</td>
+        <td class="hint">${(r.regimes_touched || []).map(esc).join(" · ") || "—"}</td>
+        <td class="mono" style="color:${destColor}">${dest}</td>
+        <td>${r.flag_count ? `<span style="color:var(--bad)">⚑ ${r.flag_count}</span>` : '<span class="hint">—</span>'}</td>
+      </tr>`;
+    }).join("");
+
+    body.innerHTML = "";
+    body.appendChild(NG.card({
+      title: "Trace",
+      meta: `${rows.length} call${rows.length === 1 ? "" : "s"} · last ${compWindow}h${compFlaggedOnly ? " · flagged only" : ""} · click a row for the findings`,
+      body: NG.el("div", { html: `<table class="v2-table"><thead><tr>
+        <th>TIME</th><th>AGENT</th><th>ACTIVITY</th><th>LABEL</th>
+        <th>TOUCHED</th><th>DESTINATION</th><th>FLAGS</th>
+      </tr></thead><tbody>${tbody}</tbody></table>` }),
+    }));
+    body.querySelectorAll(".comp-row").forEach((tr) => {
+      tr.addEventListener("click", () => compGoto("detail", tr.dataset.id));
+    });
+  }
+
+  // ---- view: detail (what went wrong) -------------------------------------
+
+  function compWhere(f, t) {
+    if (f.id === "third-country-transfer" || f.id === "secret-to-external") return ["Route", `→ ${(t.destination || {}).provider || "upstream"}`];
+    if (f.id === "high-risk-no-assessment" || f.id === "prohibited-practice") return ["Classify", `label ${t.label}`];
+    if (f.id === "no-human-review") return ["After serve", "never ran"];
+    return ["Call", ""];
+  }
+
+  async function renderCompDetail(body, id) {
+    const t = await api(`/v1/compliance/traces/${encodeURIComponent(id)}`);
+    compBread([
+      '<a href="#" id="comp-back" style="color:var(--accent-bright)">‹ Compliance</a>',
+      `trace ${esc(String(t.decision_id).slice(0, 8))}`,
+      `<b>${esc(t.activity)}</b> · ${esc(t.agent_id || "—")}`,
+    ]);
+    const flags = t.flags || [];
+
+    const banner = flags.length
+      ? `<div class="comp-banner">
+           <span class="comp-label comp-label-lg" style="background:${COMP_LABEL_COLOR[t.label] || "var(--text-dim)"}">${esc(t.label)}</span>
+           <div style="flex:1">
+             <div class="comp-banner-title">${flags.length} finding${flags.length === 1 ? "" : "s"} on this call</div>
+             <div class="hint">The call completed normally. It was recorded, not blocked — this is the row you want to find now rather than in an audit.</div>
+           </div>
+           <button class="ghost" id="comp-flow-btn">Show flow</button>
+           <button class="ghost" id="comp-review-btn"${t.reviewed ? " disabled" : ""}>${t.reviewed ? "Reviewed" : "Mark reviewed"}</button>
+         </div>`
+      : `<div class="comp-banner comp-banner-clean">
+           <span class="comp-label comp-label-lg" style="background:${COMP_LABEL_COLOR[t.label] || "var(--text-dim)"}">${esc(t.label)}</span>
+           <div style="flex:1">
+             <div class="comp-banner-title">Nothing to raise</div>
+             <div class="hint">The trace is complete and unremarkable. It is still recorded in full.</div>
+           </div>
+           <button class="ghost" id="comp-flow-btn">Show flow</button>
+         </div>`;
+
+    const rowsHtml = flags.map((f, i) => {
+      const [where, sub] = compWhere(f, t);
+      return `<tr>
+        <td class="mono hint">${i + 1}</td>
+        <td><div>${esc(where)}</div><div class="mono hint" style="font-size:11px">${esc(sub)}</div></td>
+        <td><div>${esc(f.regime || "—")}</div><div class="mono hint" style="font-size:11px">${esc(f.title)}</div></td>
+        <td class="hint">${esc(f.detail || "")}</td>
+        <td>${compSevPill(f.severity)}</td>
+      </tr>`;
+    }).join("");
+
+    const findings = flags.length
+      ? `<table class="v2-table"><thead><tr>
+           <th>#</th><th>WHERE</th><th>WHAT BREACHED</th><th>HOW</th><th>SEVERITY</th>
+         </tr></thead><tbody>${rowsHtml}</tbody></table>`
+      : '<p class="hint" style="padding:12px 14px">No findings. Destination, data class and regimes are still on the record below.</p>';
+
+    const d = t.destination || {}, terms = t.provider_terms || {};
+    const facts = `<table class="v2-table"><tbody>
+      <tr><td style="width:190px" class="hint">Activity</td><td>${esc(t.activity)} · ${esc(t.effect || "—")} <span class="hint">(${esc(t.confidence)})</span></td></tr>
+      <tr><td class="hint">Data class</td><td>${esc(t.data_class)}</td></tr>
+      <tr><td class="hint">Regimes touched</td><td class="mono">${(t.regimes_touched || []).map(esc).join(" · ") || "—"}</td></tr>
+      <tr><td class="hint">Destination</td><td class="mono" style="color:${d.third_country_transfer ? "var(--bad)" : "var(--good)"}">${esc(d.provider || "—")}${d.region ? " · " + esc(d.region) : ""}${d.third_country_transfer ? " · third country" : ""}</td></tr>
+      <tr><td class="hint">Provider terms</td><td>DPA ${terms.dpa ? "on record" : "<span style='color:var(--bad)'>none</span>"} · trains ${esc(String(terms.trains))} · retention ${esc(String(terms.retention))}</td></tr>
+      <tr><td class="hint">Served model</td><td class="mono">${esc(t.model || "—")} <span style="color:var(--accent-bright)">· attested</span></td></tr>
+      <tr><td class="hint">Evaluated against</td><td class="mono">${(t.evaluated_against || []).map(esc).join(" · ")}</td></tr>
+    </tbody></table>`;
+
+    body.innerHTML = "";
+    body.appendChild(NG.el("div", { html: banner }));
+    body.appendChild(NG.card({ title: "What went wrong",
+      meta: `${flags.length} finding${flags.length === 1 ? "" : "s"} · none of them blocked the call`,
+      body: NG.el("div", { html: findings }) }));
+    body.appendChild(NG.card({ title: "The record", body: NG.el("div", { html: facts }) }));
+
+    document.getElementById("comp-back")?.addEventListener("click", (e) => { e.preventDefault(); compGoto("list"); });
+    document.getElementById("comp-flow-btn")?.addEventListener("click", () => compGoto("flow", id));
+    document.getElementById("comp-review-btn")?.addEventListener("click", async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await fetch(`/v1/compliance/traces/${encodeURIComponent(id)}/reviewed`,
+          { method: "POST", headers: { Authorization: "Bearer " + getToken() } });
+      } catch (_) {}
+      compGoto("detail", id);
+    });
+  }
+
+  // ---- view: flow ---------------------------------------------------------
+
+  function compNode(x, y, kind, title, sub, state) {
+    const cls = state === "flagged" ? "comp-n comp-n-flag"
+      : state === "absent" ? "comp-n comp-n-absent"
+      : state === "ok" ? "comp-n comp-n-ok" : "comp-n";
+    return `<div class="${cls}" style="left:${x}px;top:${y}px">
+      <span class="comp-n-kind">${esc(kind)}</span>
+      <span class="comp-n-title">${esc(title)}</span>
+      <span class="comp-n-sub">${esc(sub)}</span>
+    </div>`;
+  }
+
+  async function renderCompFlow(body, id) {
+    const t = await api(`/v1/compliance/traces/${encodeURIComponent(id)}`);
+    compBread([
+      '<a href="#" id="comp-back" style="color:var(--accent-bright)">‹ Compliance</a>',
+      `<a href="#" id="comp-to-detail" style="color:var(--accent-bright)">trace ${esc(String(t.decision_id).slice(0, 8))}</a>`,
+      "<b>flow</b>",
+    ]);
+    const d = t.destination || {}, flags = t.flags || [];
+    const transferFlag = flags.find((f) => f.id === "third-country-transfer" || f.id === "secret-to-external");
+    const absences = flags.filter((f) => COMP_ABSENCE_FLAGS.has(f.id));
+
+    // Five hops across, absences hung underneath the hop they should have followed.
+    const X = [4, 198, 392, 586, 780], Y = 36, W = 172, H = 128, MID = Y + H / 2;
+    const nodes = [
+      compNode(X[0], Y, "1 · ORCHESTRATOR", t.agent_id || "caller", `declared ${t.confidence}`, ""),
+      compNode(X[1], Y, "2 · CLASSIFY", `label ${t.label}`, `${t.data_class} · ${t.effect || "—"}`, ""),
+      compNode(X[2], Y, transferFlag ? "3 · ROUTE ⚑" : "3 · ROUTE",
+        `${d.provider || "—"}${d.region ? " · " + d.region : ""}`,
+        transferFlag ? "left CH / EEA · no DPA" : "stayed in scope",
+        transferFlag ? "flagged" : "ok"),
+      compNode(X[3], Y, "4 · SERVED", t.model || "—", "attested from response", "ok"),
+      compNode(X[4], Y, "5 · RECORDED", `${flags.length} finding${flags.length === 1 ? "" : "s"}`,
+        `trace ${String(t.decision_id).slice(0, 8)}`, ""),
+    ];
+    absences.forEach((f, i) => {
+      nodes.push(compNode(X[3] + i * 194, 236, "⚑ NEVER RAN", f.title.replace(/ with .*$/, ""), "absent", "absent"));
+    });
+
+    const arrow = (x1, red) => `
+      <line x1="${x1}" y1="${MID}" x2="${x1 + 14}" y2="${MID}" stroke="${red ? "#E5484D" : "#5C6675"}" stroke-width="${red ? 2.2 : 1.5}"/>
+      <polyline points="${x1 + 9},${MID - 4} ${x1 + 14},${MID} ${x1 + 9},${MID + 4}" fill="none" stroke="${red ? "#E5484D" : "#5C6675"}" stroke-width="${red ? 2.2 : 1.5}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const drops = absences.map((_, i) => {
+      const cx = X[3] + i * 194 + W / 2;
+      return `<path d="M${cx} ${Y + H} L${cx} 228" fill="none" stroke="#E5484D" stroke-width="1.6" stroke-dasharray="4 4"/>
+              <polyline points="${cx - 4},223 ${cx},228 ${cx + 4},223" fill="none" stroke="#E5484D" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`;
+    }).join("");
+
+    const svg = `<svg width="100%" height="${absences.length ? 400 : 220}" style="position:absolute;left:0;top:0">
+      <defs><pattern id="ngdotsc" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1.6" cy="1.6" r="1.3" fill="#232B36"/></pattern></defs>
+      <rect x="0" y="0" width="100%" height="100%" fill="url(#ngdotsc)"/>
+      ${arrow(X[0] + W, false)}${arrow(X[1] + W, !!transferFlag)}${arrow(X[2] + W, false)}${arrow(X[3] + W, false)}
+      ${drops}
+    </svg>`;
+
+    body.innerHTML = "";
+    body.appendChild(NG.card({
+      title: "Where it went",
+      meta: "every hop this call made, and the one that should have been there · dashed = never happened",
+      body: NG.el("div", { class: "comp-canvas", style: `height:${absences.length ? 400 : 220}px`,
+        html: svg + nodes.join("") }),
+    }));
+    document.getElementById("comp-back")?.addEventListener("click", (e) => { e.preventDefault(); compGoto("list"); });
+    document.getElementById("comp-to-detail")?.addEventListener("click", (e) => { e.preventDefault(); compGoto("detail", id); });
+  }
+
+  // ---- view: scope --------------------------------------------------------
+
+  async function renderCompScope(body) {
+    const s = await api("/v1/compliance/scope");
+    compBread([
+      '<a href="#" id="comp-back" style="color:var(--accent-bright)">‹ Compliance</a>',
+      "<b>scope</b> — which law we read your traffic against",
+    ]);
+    const sc = s.scope || {};
+    const chips = (vals, active) => (vals || []).map((v) =>
+      `<span class="comp-chip${active.includes(v) ? " on" : ""}">${esc(v)}</span>`).join("");
+
+    const decl = `<table class="v2-table"><tbody>
+      <tr><td style="width:210px"><b>Establishment</b><div class="hint">where the organisation sits</div></td>
+          <td>${chips(["CH", "EU", "UK", "US"], [sc.establishment])}</td></tr>
+      <tr><td><b>Markets served</b><div class="hint">whose residents' data you touch</div></td>
+          <td>${chips(["CH", "EU", "UK", "US"], sc.markets || [])}
+              <div class="hint" style="margin-top:8px">GDPR reaches beyond the EU — a Swiss firm with EU customers is in scope regardless of where it sits, which is why this is asked separately.</div></td></tr>
+      <tr><td><b>Sector overlays</b><div class="hint">off by default</div></td>
+          <td>${chips(["finma", "dora", "nis2", "health", "education"], sc.sectors || [])}</td></tr>
+    </tbody></table>`;
+
+    const provRows = Object.entries(s.providers || {}).map(([name, p]) => `<tr>
+      <td class="mono">${esc(name)}</td>
+      <td class="mono" style="color:${["CH", "EEA", "EU"].includes(p.region) ? "var(--good)" : "var(--warn)"}">${esc(p.region || "—")}</td>
+      <td>${esc(p.hosting || "—")}</td>
+      <td>${p.dpa ? "yes" : '<span style="color:var(--bad)">no</span>'}</td>
+      <td>${esc(String(p.trains))}</td>
+      <td class="mono hint">${esc(String(p.retention))}</td>
+    </tr>`).join("");
+
+    body.innerHTML = "";
+    body.appendChild(NG.card({ title: "Declared scope",
+      meta: `evaluated against ${(s.evaluated_against || []).join(" · ")}`,
+      body: NG.el("div", { html: decl }) }));
+    body.appendChild(NG.card({ title: "Provider registry",
+      meta: "where each model actually runs, and under what terms",
+      body: NG.el("div", { html: `<table class="v2-table"><thead><tr>
+        <th>PROVIDER</th><th>REGION</th><th>HOSTING</th><th>DPA</th><th>TRAINS</th><th>RETENTION</th>
+      </tr></thead><tbody>${provRows}</tbody></table>` }) }));
+    body.appendChild(NG.el("div", { class: "comp-note", html:
+      "<b>Scope filters the flags, not the recording.</b> The full trace is captured for every call whatever is declared here — scope only decides what surfaces as wanting a look. Add a market later and the existing history lights up. " +
+      `<span class="hint">${esc(s.note || "")}</span>` }));
+    document.getElementById("comp-back")?.addEventListener("click", (e) => { e.preventDefault(); compGoto("list"); });
+  }
+
+
   const importedLabel = await consumeImportFragment();
 
   // Start tab from URL hash, default to overview.
@@ -6456,4 +6802,5 @@
     }
     if (dirty) { renderAuth(); renderSessions(); }
   }, 100);
+
 })();

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Codex capture proxy. A mitmproxy forward-proxy that tees Codex's ChatGPT-OAuth
-# `responses` traffic into NautGate's recorder (current Codex ignores
+# `responses` traffic into NautGate's /v1/ingest endpoint (current Codex ignores
 # OPENAI_BASE_URL, so the old codexps base-URL trick no longer works — it honours
 # HTTPS_PROXY + a trusted CA instead).
+#
+# The addon POSTs to NautGate over HTTP; set NAUTGATE_INGEST_TOKEN to the same
+# value NautGate has (env NAUTGATE_INGEST_TOKEN) or the gateway rejects it (401).
+# Override the target with NAUTGATE_INGEST_URL (default local :8090).
 #
 # Usage:
 #   scripts/codex-proxy.sh start    # launch mitmdump + addon (bg), print env to use
@@ -25,8 +29,17 @@ _running() { [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
 
 start() {
     if _running; then echo "✓ already running (pid $(cat "$PID_FILE")) on :$PORT"; env_block; return; fi
-    echo "starting codex capture proxy on 127.0.0.1:${PORT} ..."
-    ( cd "$CORE_DIR" && exec uv run mitmdump \
+    local ingest_url="${NAUTGATE_INGEST_URL:-http://localhost:8090/v1/ingest}"
+    if [[ -z "${NAUTGATE_INGEST_TOKEN:-}" ]]; then
+        echo "⚠ NAUTGATE_INGEST_TOKEN is not set — NautGate will reject ingest (401)."
+        echo "  Set the same token here and on NautGate (:8090), then restart."
+    fi
+    echo "starting codex capture proxy on 127.0.0.1:${PORT} → ${ingest_url} ..."
+    ( cd "$CORE_DIR" \
+        && NAUTGATE_INGEST_URL="$ingest_url" \
+           NAUTGATE_INGEST_TOKEN="${NAUTGATE_INGEST_TOKEN:-}" \
+           NAUTPROXY_AGENT_ID="${NAUTPROXY_AGENT_ID:-codex}" \
+           exec uv run mitmdump \
         -s proxy/codex_capture.py \
         --listen-host 127.0.0.1 --listen-port "$PORT" \
         --set stream_large_bodies=100m \

@@ -21,9 +21,7 @@ def test_promote_hermes_tool_call():
 
 
 def test_promote_keeps_surrounding_text():
-    msg, promoted = promote_text_tool_calls(
-        {"content": f"Let me look that up.\n{QWEN}\n"}
-    )
+    msg, promoted = promote_text_tool_calls({"content": f"Let me look that up.\n{QWEN}\n"})
     assert promoted
     assert msg["content"] == "Let me look that up."
     assert msg["tool_calls"][0]["function"]["name"] == "web_search"
@@ -58,7 +56,9 @@ def test_noop_on_plain_text():
 
 
 def _resp(content):
-    return {"choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]}
+    return {
+        "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]
+    }
 
 
 def test_response_to_anthropic_normalize_promotes():
@@ -96,7 +96,10 @@ def _drive(normalize, text_pieces):
 
 def test_stream_normalize_promotes_split_tool_call():
     # the <tool_call> arrives split across deltas
-    events = _drive(True, ["<tool_call>", '{"name": "web_search", ', '"arguments": {"query": "x"}}', "</tool_call>"])
+    events = _drive(
+        True,
+        ["<tool_call>", '{"name": "web_search", ', '"arguments": {"query": "x"}}', "</tool_call>"],
+    )
     assert '"type":"tool_use"' in events
     assert '"name":"web_search"' in events
     assert '"stop_reason":"tool_use"' in events
@@ -120,5 +123,7 @@ def test_real_qwen_multi_call_capture():
     assert promoted
     names = [tc["function"]["name"] for tc in msg["tool_calls"]]
     assert names == ["get_weather", "search_web"]
-    assert json.loads(msg["tool_calls"][1]["function"]["arguments"]) == {"query": "best croissant paris"}
+    assert json.loads(msg["tool_calls"][1]["function"]["arguments"]) == {
+        "query": "best croissant paris"
+    }
     assert msg["content"] is None

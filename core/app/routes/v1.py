@@ -29,6 +29,7 @@ from app.auth import authenticate
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.classify import assemble_user_text, classify
 from app.classify_llm import maybe_upgrade_classification
+from app.compliance import build_trace as build_compliance_trace
 from app.db import queries
 from app.formats import anthropic as ant
 from app.formats import openai_responses as resp_fmt
@@ -70,6 +71,23 @@ def _normalize_tool_calls(raw: list, sensitivity: str) -> list[dict] | None:
                 entry["arguments_truncated"] = True
         out.append(entry)
     return out or None
+
+
+async def _record_compliance_trace(
+    pool, policy, *, decision_id, activity, sensitivity, provider_name, model=None
+) -> None:
+    """Build and persist the compliance trace. Never raises into the request."""
+    try:
+        trace = build_compliance_trace(
+            policy,
+            activity=activity,
+            sensitivity=sensitivity,
+            provider_name=provider_name,
+            model=model,
+        )
+        await queries.write_compliance_trace(pool, decision_id=decision_id, trace=trace.to_dict())
+    except Exception as exc:  # noqa: BLE001 — annotation must never break the call
+        log.warning("compliance_trace_failed", error=str(exc), decision_id=str(decision_id))
 
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -425,6 +443,26 @@ async def _process_chat_request(
         project_id=getattr(request.state, "project_id", None),
     )
 
+    # COMPLIANCE TRACE (NAUTGATE-25) — annotate what this call touched.
+    # Fire-and-forget and never raises: the trace is an annotation on the audit
+    # log, so a failed trace write must never affect the call it describes.
+    # Declared activity beats inference — an orchestrator that states
+    # "cv-screening" or a tool scope of mail:read tells us far more than the
+    # prompt text does.
+    _policy = getattr(request.app.state, "compliance_policy", None)
+    if _policy is not None and getattr(settings, "nautgate_compliance_trace", True):
+        asyncio.create_task(
+            _record_compliance_trace(
+                pool,
+                _policy,
+                decision_id=decision_id,
+                activity=request.headers.get("x-nautgate-activity"),
+                sensitivity=classification.sensitivity,
+                provider_name=decision_provider,
+                model=decision_model,
+            )
+        )
+
     # PLUGINS: on_request — fire-and-forget after PRECAPTURE.
     if plugins is not None and not plugins.is_empty:
         plugins.dispatch_on_request(
@@ -490,7 +528,15 @@ async def _process_chat_request(
         raw = None
     except Exception as exc:
         upstream_status = 502
-        log.error("nautrouter_call_failed", error=str(exc), decision_id=str(decision_id))
+        # str() on an httpx timeout is the empty string, so logging only the
+        # message produced `error: ""` and told us nothing — a 120s read timeout
+        # looked identical to a hard upstream failure. Always log the type.
+        log.error(
+            "nautrouter_call_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+            decision_id=str(decision_id),
+        )
         raw = None
 
     if isinstance(raw, dict):
@@ -4099,3 +4145,221 @@ async def put_profile(request: Request) -> Response:
         notes=notes,
     )
     return JSONResponse(result)
+
+
+@router.post("/ingest")
+async def ingest(request: Request) -> JSONResponse:
+    """Record a captured turn observed by the nautproxy sidecar.
+
+    The sidecar (forward proxy + trusted CA) parses a provider request/response
+    it intercepted and POSTs the normalized turn here, so uncooperative clients
+    (Codex et al.) land in the same audit log as inline traffic. Reuses the
+    precapture + persist_outcome path, so attestation and capture policy apply
+    identically — the only difference is the bytes arrived over the proxy, not
+    the gateway. Auth: X-Ingest-Token must match NAUTGATE_INGEST_TOKEN; unset
+    disables the endpoint.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    token = getattr(settings, "nautgate_ingest_token", None) if settings else None
+    if not token:
+        raise HTTPException(status_code=404, detail="ingest_disabled")
+    if request.headers.get("x-ingest-token", "") != token:
+        raise HTTPException(status_code=401, detail="bad_ingest_token")
+
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+
+    agent_id = str(body.get("agent_id") or "proxy")
+    inbound_format = str(body.get("inbound_format") or "proxy")
+    provider = str(body.get("provider") or "passthrough")
+    model = body.get("model")
+    messages = body.get("messages")
+    tools = body.get("tools")
+    response = body.get("response") if isinstance(body.get("response"), dict) else {}
+    served_model = body.get("served_model") or response.get("model") or model
+    status_code = int(body.get("status_code", 200))
+    duration_ms = int(body.get("duration_ms", 0))
+    source_ip = body.get("source_ip")
+
+    decision_id = uuid.uuid4()
+    payload = {"model": model, "messages": messages, "tools": tools}
+    # ponytail: proxy traffic is local/trusted — capture at sensitivity "none"
+    # (no PII classification), same as the Codex WS path did.
+    captured = capture_prompt(messages, "none") if messages else None
+    captured_tools = capture_tools(tools, "none") if tools else None
+
+    await queries.precapture(
+        pool,
+        decision_id=decision_id,
+        agent_id=agent_id,
+        inbound_format=inbound_format,
+        model_requested=str(model) if model else None,
+        classified_tier="passthrough",
+        classified_sensitivity="none",
+        classified_score=score(payload).aggregate,
+        decision_provider=provider,
+        decision_model=str(model) if model else "unknown",
+        decision_reason="nautproxy:ingest",
+        prompt_body=captured.body if captured else None,
+        prompt_body_truncated_at_byte=captured.truncated_at_byte if captured else None,
+        tools_body=captured_tools.body if captured_tools else None,
+        tools_body_truncated_at_byte=captured_tools.truncated_at_byte if captured_tools else None,
+        source_ip=source_ip,
+        messages_count=len(messages) if isinstance(messages, list) else None,
+        tools_count=len(tools) if isinstance(tools, list) else None,
+        stream_flag=bool(body.get("stream")),
+    )
+
+    # Usage: prefer the proxy's pre-parsed counts, else normalize response.usage.
+    u = body.get("usage")
+    if isinstance(u, dict):
+        prompt_tokens = u.get("prompt_tokens")
+        completion_tokens = u.get("completion_tokens")
+        reasoning_tokens = u.get("reasoning_tokens")
+        cache_read_tokens = u.get("cache_read_tokens")
+        cache_write_tokens = u.get("cache_write_tokens")
+    else:
+        nu = normalize_usage(response.get("usage") or {}, provider_hint="openai")
+        prompt_tokens = nu.prompt_tokens
+        completion_tokens = nu.completion_tokens
+        reasoning_tokens = nu.reasoning_tokens
+        cache_read_tokens = nu.cache_read_tokens
+        cache_write_tokens = nu.cache_write_tokens
+
+    resp_json = json.dumps(response)
+    response_captured = capture_response(resp_json, "none")
+    spool = getattr(request.app.state, "outcome_spool", None)
+    await persist_outcome(
+        pool,
+        spool,
+        decision_id=decision_id,
+        status_code=status_code,
+        duration_ms=duration_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        prefix_hash=cache_prefix_hash(payload),
+        response_body=response_captured.body,
+        response_body_truncated_at_byte=response_captured.truncated_at_byte,
+        response_size_bytes=len(resp_json.encode("utf-8")),
+        actual_provider=provider,
+        actual_model=served_model,
+    )
+
+    return JSONResponse({"ok": True, "decision_id": str(decision_id)})
+
+
+# ============================================================================
+# Compliance AUDIT layer (NAUTGATE-25)
+#
+# Read-only views over what calls touched. NautGate is the audit layer for
+# compliance, not the compliance layer — nothing here gates anything, and the
+# labels are a severity reading rather than an enforcement band.
+# ============================================================================
+
+
+def _hours_param(request: Request, default: int = 24) -> int:
+    try:
+        hours = int(request.query_params.get("hours", str(default)))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 87600:
+        raise HTTPException(status_code=400, detail="hours must be in 1..87600")
+    return hours
+
+
+@router.get("/compliance/scope")
+async def compliance_scope(request: Request) -> Response:
+    """The declared jurisdiction lens: establishment, markets, sector overlays.
+
+    Scope filters which findings surface as flags — it never limits what is
+    recorded, so widening it later re-illuminates existing history.
+    """
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    policy = getattr(request.app.state, "compliance_policy", None)
+    if policy is None:
+        raise HTTPException(status_code=503, detail="compliance_policy_unavailable")
+    return JSONResponse(
+        {
+            "scope": policy.scope,
+            "evaluated_against": policy.evaluated_against(),
+            "providers": policy.providers,
+            "note": "Baseline reading, not a legal opinion. Records what a call "
+            "touched; asserts nothing about lawfulness.",
+        }
+    )
+
+
+@router.get("/compliance/summary")
+async def compliance_summary(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    return JSONResponse(await queries.get_compliance_summary(pool, hours=_hours_param(request)))
+
+
+@router.get("/compliance/traces")
+async def compliance_traces(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    hours = _hours_param(request)
+    only_flagged = request.query_params.get("flagged", "").lower() in ("1", "true", "yes")
+    try:
+        limit = int(request.query_params.get("limit", "50"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit must be an integer") from None
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be in 1..500")
+    rows = await queries.get_compliance_traces(
+        pool, hours=hours, only_flagged=only_flagged, limit=limit
+    )
+    return JSONResponse({"hours": hours, "flagged_only": only_flagged, "data": rows})
+
+
+@router.get("/compliance/traces/{decision_id}")
+async def compliance_trace_detail(decision_id: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    try:
+        did = uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="decision_id must be a uuid") from None
+    row = await queries.get_compliance_trace(pool, did)
+    if row is None:
+        raise HTTPException(status_code=404, detail="trace_not_found")
+    return JSONResponse(row)
+
+
+@router.post("/compliance/traces/{decision_id}/reviewed")
+async def compliance_mark_reviewed(decision_id: str, request: Request) -> Response:
+    """Mark a flagged trace as looked at. Records who; changes no traffic."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    who = await authenticate(pool, request)
+    try:
+        did = uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="decision_id must be a uuid") from None
+    ok = await queries.mark_compliance_reviewed(pool, did, who)
+    if not ok:
+        raise HTTPException(status_code=404, detail="trace_not_found")
+    return JSONResponse({"ok": True, "decision_id": decision_id, "reviewed_by": who})

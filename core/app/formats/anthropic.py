@@ -534,7 +534,9 @@ class AnthropicStreamTranslator:
             fn = tc.get("function") or {}
             out.append(
                 self._start_tool_block(
-                    i, tool_id=tc.get("id") or f"call_{uuid.uuid4().hex[:24]}", name=fn.get("name", "")
+                    i,
+                    tool_id=tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                    name=fn.get("name", ""),
                 )
             )
             args = fn.get("arguments")

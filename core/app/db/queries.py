@@ -2059,3 +2059,154 @@ async def delete_provider_credential(pool: asyncpg.Pool, provider: str) -> bool:
         "DELETE FROM nautgate.provider_credentials WHERE provider = $1", provider
     )
     return res.endswith(" 1")
+
+
+# --- Compliance audit trace (NAUTGATE-25) ---------------------------------
+# Fire-and-forget: the trace is an annotation on the audit log, never on the
+# request path. A failed trace write must never affect the call it describes.
+
+
+async def write_compliance_trace(pool: asyncpg.Pool, *, decision_id: UUID, trace: dict) -> None:
+    """Record what one call touched. Upsert so a re-evaluation can rewrite it."""
+    dest = trace.get("destination") or {}
+    flags = trace.get("flags") or []
+    await pool.execute(
+        """
+        INSERT INTO nautgate.compliance_traces
+            (decision_id, activity, label, confidence, effect, data_class,
+             evaluated_against, regimes_touched, destination, provider_terms,
+             flags, flag_count)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12)
+        ON CONFLICT (decision_id) DO UPDATE SET
+            activity = EXCLUDED.activity, label = EXCLUDED.label,
+            confidence = EXCLUDED.confidence, effect = EXCLUDED.effect,
+            data_class = EXCLUDED.data_class,
+            evaluated_against = EXCLUDED.evaluated_against,
+            regimes_touched = EXCLUDED.regimes_touched,
+            destination = EXCLUDED.destination,
+            provider_terms = EXCLUDED.provider_terms,
+            flags = EXCLUDED.flags, flag_count = EXCLUDED.flag_count
+        """,
+        decision_id,
+        trace.get("activity") or "unknown",
+        trace.get("label") or "O",
+        trace.get("confidence") or "fallback",
+        trace.get("effect"),
+        trace.get("data_class") or "public",
+        list(trace.get("evaluated_against") or []),
+        list(trace.get("regimes_touched") or []),
+        json.dumps(dest),
+        json.dumps(trace.get("provider_terms") or {}),
+        json.dumps(flags),
+        len(flags),
+    )
+
+
+async def get_compliance_summary(pool: asyncpg.Pool, *, hours: int) -> dict:
+    """KPI row for the Compliance page."""
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(*)                                                   AS traced,
+               COALESCE(SUM(flag_count), 0)                               AS flags,
+               COUNT(*) FILTER (WHERE flag_count > 0)                     AS flagged_calls,
+               COUNT(*) FILTER (WHERE (destination->>'third_country_transfer') = 'true')
+                                                                          AS left_home,
+               COUNT(*) FILTER (WHERE data_class IN ('personal','sensitive'))
+                                                                          AS personal
+          FROM nautgate.compliance_traces
+         WHERE ts > NOW() - make_interval(hours => $1)
+        """,
+        hours,
+    )
+    return {
+        "window_hours": hours,
+        "traced": int((row or {}).get("traced") or 0),
+        "flags": int((row or {}).get("flags") or 0),
+        "flagged_calls": int((row or {}).get("flagged_calls") or 0),
+        "left_home": int((row or {}).get("left_home") or 0),
+        "personal": int((row or {}).get("personal") or 0),
+    }
+
+
+async def get_compliance_traces(
+    pool: asyncpg.Pool, *, hours: int, only_flagged: bool = False, limit: int = 50
+) -> list[dict]:
+    """Recent traces joined to the decision they annotate."""
+    rows = await pool.fetch(
+        f"""
+        SELECT c.decision_id, c.ts, c.activity, c.label, c.data_class,
+               c.regimes_touched, c.destination, c.flags, c.flag_count,
+               c.reviewed_at, d.agent_id, d.decision_model
+          FROM nautgate.compliance_traces c
+          JOIN nautgate.route_decisions d ON d.id = c.decision_id
+         WHERE c.ts > NOW() - make_interval(hours => $1)
+           {"AND c.flag_count > 0" if only_flagged else ""}
+         ORDER BY c.ts DESC
+         LIMIT $2
+        """,
+        hours,
+        limit,
+    )
+    return [
+        {
+            "decision_id": str(r["decision_id"]),
+            "ts": r["ts"].isoformat(),
+            "agent_id": r["agent_id"],
+            "model": r["decision_model"],
+            "activity": r["activity"],
+            "label": r["label"],
+            "data_class": r["data_class"],
+            "regimes_touched": list(r["regimes_touched"] or []),
+            "destination": json.loads(r["destination"])
+            if isinstance(r["destination"], str)
+            else (r["destination"] or {}),
+            "flags": json.loads(r["flags"]) if isinstance(r["flags"], str) else (r["flags"] or []),
+            "flag_count": int(r["flag_count"] or 0),
+            "reviewed": r["reviewed_at"] is not None,
+        }
+        for r in rows
+    ]
+
+
+async def get_compliance_trace(pool: asyncpg.Pool, decision_id: UUID) -> dict | None:
+    """One trace in full, for the detail view."""
+    r = await pool.fetchrow(
+        """
+        SELECT c.*, d.agent_id, d.decision_model, d.decision_provider, d.ts AS decision_ts
+          FROM nautgate.compliance_traces c
+          JOIN nautgate.route_decisions d ON d.id = c.decision_id
+         WHERE c.decision_id = $1
+        """,
+        decision_id,
+    )
+    if r is None:
+        return None
+    j = lambda v: json.loads(v) if isinstance(v, str) else (v or {})  # noqa: E731
+    return {
+        "decision_id": str(r["decision_id"]),
+        "ts": r["ts"].isoformat(),
+        "agent_id": r["agent_id"],
+        "model": r["decision_model"],
+        "provider": r["decision_provider"],
+        "activity": r["activity"],
+        "label": r["label"],
+        "confidence": r["confidence"],
+        "effect": r["effect"],
+        "data_class": r["data_class"],
+        "evaluated_against": list(r["evaluated_against"] or []),
+        "regimes_touched": list(r["regimes_touched"] or []),
+        "destination": j(r["destination"]),
+        "provider_terms": j(r["provider_terms"]),
+        "flags": j(r["flags"]) or [],
+        "reviewed": r["reviewed_at"] is not None,
+    }
+
+
+async def mark_compliance_reviewed(pool: asyncpg.Pool, decision_id: UUID, who: str) -> bool:
+    res = await pool.execute(
+        "UPDATE nautgate.compliance_traces SET reviewed_at = NOW(), reviewed_by = $2 "
+        "WHERE decision_id = $1",
+        decision_id,
+        who,
+    )
+    return res.endswith(" 1")
