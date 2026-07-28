@@ -2457,8 +2457,17 @@ html, body { height: 100%; }
 .app-version[hidden] { display: none; }
 /* ─── Collapsible sidebar (NAUTGATE-11) ─────────────────────────────────── */
 .sidebar { transition: width 0.16s ease; }
-.sidebar-collapse { background: transparent; border: 0; width: 100%; font: inherit; text-align: left; cursor: pointer; }
-.sidebar-collapse svg { transition: transform 0.16s ease; }
+/* Collapse toggle — a quiet icon button in the brand header (top of the pane). */
+.sidebar-toggle {
+  margin-left: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex-shrink: 0;
+  background: transparent; border: 0; border-radius: 7px;
+  color: var(--text-dim); cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.sidebar-toggle:hover { background: var(--bg-raised); color: var(--text); }
+.sidebar-toggle svg { width: 18px; height: 18px; display: block; stroke: currentColor; transition: transform 0.16s ease; }
 
 /* collapsed: icons-only rail. Desktop only — below 820px the sidebar is an
    off-canvas drawer, and the persisted collapsed class must not shrink it. */
@@ -2469,14 +2478,15 @@ html, body { height: 100%; }
   .app-shell.sidebar-collapsed .nav-label,
   .app-shell.sidebar-collapsed .nav-group-label,
   .app-shell.sidebar-collapsed .nav-chip,
-  .app-shell.sidebar-collapsed .brand-name,
-  .app-shell.sidebar-collapsed .brand-sub { display: none; }
+  .app-shell.sidebar-collapsed .brand-text { display: none; }
   .app-shell.sidebar-collapsed .sidebar nav a.nav-item,
   .app-shell.sidebar-collapsed .sidebar-footer .nav-item { justify-content: center; padding-left: 0; padding-right: 0; }
-  .app-shell.sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+  /* collapsed rail: stack the logo mark over the (now expand) toggle, centered */
+  .app-shell.sidebar-collapsed .brand { flex-direction: column; gap: 10px; justify-content: center; padding-left: 0; padding-right: 0; }
+  .app-shell.sidebar-collapsed .sidebar-toggle { margin-left: 0; }
+  .app-shell.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
   .app-shell.sidebar-collapsed .nav-count,
   .app-shell.sidebar-collapsed .nav-dot { display: none; }
-  .app-shell.sidebar-collapsed .sidebar-collapse svg { transform: rotate(180deg); }
   /* keep the active-tab accent visible when collapsed */
   .app-shell.sidebar-collapsed .sidebar nav a.nav-item.active { background: var(--bg-raised); }
 }
