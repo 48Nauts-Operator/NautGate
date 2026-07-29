@@ -24,12 +24,15 @@ try:
 except ImportError:
     pass
 
+import os as _os
+
 import structlog
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import crypto
+from app.catalogue import ModelCatalogue
 from app.compliance import load_policy as load_compliance_policy
 from app.db import queries
 from app.db.migrate import apply_migrations
@@ -144,6 +147,13 @@ async def lifespan(app: FastAPI):
         log.warning("compliance_policy_load_failed", path=str(compliance_path), error=str(exc))
         app.state.compliance_policy = None
 
+    # Model catalogue — the full, self-updating list of selectable models.
+    app.state.model_catalogue = (
+        ModelCatalogue(ttl_seconds=settings.nautgate_model_catalogue_ttl_h * 3600.0)
+        if settings.nautgate_model_catalogue
+        else None
+    )
+
     # Pricing config — feeds the per-outcome cost calculation.
     pricing_path = Path(settings.nautgate_pricing_config_path or DEFAULT_PRICING_CONFIG)
     app.state.pricing = PricingTable.from_yaml(pricing_path)
@@ -205,7 +215,6 @@ async def lifespan(app: FastAPI):
     # openrouter.ai on a timer regardless of where traffic is actually routed,
     # so on an isolated box they produce a steady outbound beacon to providers
     # that aren't being used. Serving local models needs neither.
-    import os as _os
 
     app.state.offline = _os.environ.get("NAUTGATE_OFFLINE", "").strip().lower() in (
         "1",
@@ -249,10 +258,44 @@ async def lifespan(app: FastAPI):
             )
         )
 
+        # Model catalogue refresh. Providers ship new models constantly, so the
+        # picker refetches on a timer (24h by default) instead of anyone editing
+        # a hardcoded list. Stands down while offline like the other schedulers.
+        if app.state.model_catalogue is not None:
+            from app.catalogue import run_scheduler as _catalogue_scheduler
+
+            async def _catalogue_keys() -> dict:
+                """Provider keys for catalogue fetches: env first, then the
+                encrypted store the dashboard writes to."""
+                out: dict[str, str] = {}
+                for prov, env in (
+                    ("openrouter", "OPENROUTER_API_KEY"),
+                    ("anthropic", "ANTHROPIC_API_KEY"),
+                    ("openai", "OPENAI_API_KEY"),
+                ):
+                    val = _os.environ.get(env)
+                    if not val and app.state.db is not None:
+                        try:
+                            val = await queries.get_provider_credential(app.state.db, prov)
+                        except Exception:
+                            val = None
+                    if val:
+                        out[prov] = val
+                return out
+
+            app.state.catalogue_keys = _catalogue_keys
+            app.state.catalogue_task = _asyncio.create_task(
+                _catalogue_scheduler(
+                    app.state.model_catalogue,
+                    _catalogue_keys,
+                    is_offline=lambda: bool(getattr(app.state, "offline", False)),
+                )
+            )
+
     try:
         yield
     finally:
-        for _tname in ("backup_task", "llm_probe_task", "heartbeat_task"):
+        for _tname in ("backup_task", "llm_probe_task", "heartbeat_task", "catalogue_task"):
             _t = getattr(app.state, _tname, None)
             if _t is not None:
                 _t.cancel()

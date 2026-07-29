@@ -37,6 +37,12 @@ class Settings(BaseSettings):
 
     nautrouter_base_url: str = "http://localhost:8404"
 
+    # Model catalogue: fetch each provider's own model list so the picker
+    # offers everything they actually serve, and refresh it on a timer so new
+    # models appear without anyone editing a hardcoded list.
+    nautgate_model_catalogue: bool = True
+    nautgate_model_catalogue_ttl_h: float = 24.0
+
     # Read timeout for upstream model calls, in seconds. A long report or a
     # thinking model can legitimately run for many minutes, and the old
     # hard-coded 120s aborted work that was still in progress and reported it
