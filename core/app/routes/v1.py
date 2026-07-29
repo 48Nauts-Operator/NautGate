@@ -1193,7 +1193,24 @@ async def list_models(request: Request) -> Response:
             item["nautgate_unhealthy"] = True
 
     data = sorted(seen.values(), key=lambda m: (m["nautgate_provider"], m["id"]))
-    data.extend(await _lmstudio_models())
+
+    # Merge the provider catalogues — every model OpenRouter/Anthropic/OpenAI
+    # actually serves, not just the handful named in routing.yaml. Without this
+    # the Settings → Keys picker can only pin the ~8 tier models. Refreshed on a
+    # 24h timer; primed lazily here on the first request after a restart so a
+    # fresh boot is not empty.
+    # Read-only here on purpose: the scheduler owns fetching, so this endpoint
+    # never does network I/O and stays fast and deterministic. Use
+    # /v1/models/refresh to force one. Before the first refresh lands we fall
+    # back to the local LM Studio probe so a just-booted gateway is not empty.
+    catalogue = getattr(request.app.state, "model_catalogue", None)
+    catalogue_status = None
+    if catalogue is not None and catalogue.models():
+        catalogue_status = catalogue.status()
+        known = {m["id"] for m in data}
+        data.extend(m for m in catalogue.models() if m["id"] not in known)
+    else:
+        data.extend(await _lmstudio_models())
     # Synthetic "auto" entry — NautGate's tier-driven router.
     data.insert(
         0,
@@ -1205,7 +1222,25 @@ async def list_models(request: Request) -> Response:
             "nautgate_tiers": list(table.keys()),
         },
     )
-    return JSONResponse({"object": "list", "data": data})
+    body: dict = {"object": "list", "data": data}
+    if catalogue_status is not None:
+        body["nautgate_catalogue"] = catalogue_status
+    return JSONResponse(body)
+
+
+@router.get("/models/refresh")
+async def refresh_models(request: Request) -> Response:
+    """Force a catalogue refetch now, rather than waiting for the 24h tick."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    catalogue = getattr(request.app.state, "model_catalogue", None)
+    if catalogue is None:
+        raise HTTPException(status_code=404, detail="catalogue_disabled")
+    resolver = getattr(request.app.state, "catalogue_keys", None)
+    status = await catalogue.refresh(keys=await resolver() if resolver else {}, force=True)
+    return JSONResponse(status)
 
 
 @router.get("/findings/summary")
