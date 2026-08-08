@@ -53,6 +53,33 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **"Subscription saved" was counting everything except the traffic that
+  matters.** It read **$38.82** for a day with 1,291 calls. The OAuth forwarder
+  prices subscription traffic as provider `anthropic`, so it looks up
+  `anthropic/claude-opus-5` — a key `config/pricing.yaml` never had.
+  `PricingTable.lookup()` is an exact `provider/model` match with no
+  normalization, so it returned `None`, `compute_cost` gave up, and **10,585
+  calls carrying 12.9M real tokens recorded $0**. Opus 5 is the daily driver, so
+  the metric measured everything except the dominant model.
+
+  Rates were read from OpenRouter's published pricing rather than derived from
+  the neighbouring tiers, which mattered: **Opus 5 is $5/M input — a third of
+  Opus 4's $15**. Copying the Opus 4 block, or assuming a newer tier costs more,
+  would have overstated every downstream figure 3×. `claude-sonnet-5` and
+  `claude-opus-5-fast` were missing for the same reason; `[1m]` variants are
+  aliased as `opus-4-8[1m]` already was.
+
+  Recomputed through the real `PricingTable` against live rows, the figure moves
+  from **$38.82 → $234.64** for the day and **$41,308.57 → $44,255.81** all-time.
+  Existing rows keep their `NULL` — pricing is computed once and stored, so this
+  fixes calls from here on; `scripts/backfill_notional_cost.py` reprices history
+  (dry run by default, 13,930 rows / +$2,948.47).
+
+  Two known gaps remain and are deliberately **not** papered over:
+  `chatgpt-oauth/gpt-5.6-sol` (4,128 calls) and `claude-sonnet-4-6` (2,970) are
+  still unpriced, and 22,421 outcomes record no usage counts at all — a capture
+  gap, not a pricing one, so no price table can fix them ([#41]).
+
 - **Long generations died at exactly 120 s with `502 upstream_failed`.** The
   upstream read timeout was hard-coded to `120.0`; requests failed at 120071 ms
   and 120066 ms — our own deadline, not a provider outage. What made it hard to
@@ -136,3 +163,4 @@ reports what it cost.
 [#36]: https://github.com/48Nauts-Operator/NautGate/pull/36
 [#37]: https://github.com/48Nauts-Operator/NautGate/pull/37
 [#38]: https://github.com/48Nauts-Operator/NautGate/pull/38
+[#41]: https://github.com/48Nauts-Operator/NautGate/pull/41

@@ -43,6 +43,30 @@ pricing:
   # prompts carry an Anthropic premium not modeled here — base tier is a
   # close-enough default for typical sub-200K calls.
   "anthropic/claude-opus-4-8[1m]": *opus4
+  # Claude 5 family. Rates read from OpenRouter's published pricing on
+  # 2026-08-01, not derived — Opus 5 is cheaper than Opus 4, so the old
+  # "newer tier costs more" assumption would have overstated it 3×.
+  # Without these keys, subscription traffic on Opus 5 priced as NULL and
+  # vanished from "Subscription saved" — 10,585 calls / 12.9M tokens of it.
+  anthropic/claude-opus-5: &opus5
+    input: 5.00
+    output: 25.00
+    cache_read: 0.50
+    cache_write: 6.25
+  "anthropic/claude-opus-5[1m]": *opus5
+  anthropic/claude-opus-5-fast: &opus5fast
+    input: 10.00
+    output: 50.00
+    cache_read: 1.00
+    cache_write: 12.50
+  "anthropic/claude-opus-5-fast[1m]": *opus5fast
+  anthropic/claude-sonnet-5: &sonnet5
+    input: 2.00
+    output: 10.00
+    cache_read: 0.20
+    cache_write: 2.50
+  "anthropic/claude-sonnet-5[1m]": *sonnet5
+
   # Fable 5: input rate from Andre ($50/M). output/cache derived from the same
   # ratios every other Anthropic tier here uses (output = 5× input, cache_read
   # = input/10, cache_write = input × 1.25). CORRECT `output` if Fable's ratio
