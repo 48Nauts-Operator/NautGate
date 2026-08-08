@@ -80,6 +80,26 @@ regression we introduced, the entry says so.
   still unpriced, and 22,421 outcomes record no usage counts at all — a capture
   gap, not a pricing one, so no price table can fix them ([#41]).
 
+- **Browser-based clients could never reach the gateway.** A builder UI on
+  `http://localhost:3000` reported *"NautGate unreachable — check the Base URL in
+  Settings"* while the gateway was healthy and `curl` to the identical URL
+  returned 200. There was no `CORSMiddleware` anywhere in `core/app/`: the
+  gateway sent no `Access-Control-*` headers and answered preflight `OPTIONS`
+  with **405**, so the browser refused the request before it left the tab.
+  `curl` doesn't enforce CORS, which is why this presented as a network problem
+  rather than a server one.
+
+  This affected every browser-based client, not one app. A different **port** is
+  already a different origin, so `localhost:3000 → localhost:8090` needed this as
+  much as a deployed site would.
+
+  `localhost`, `127.0.0.1` and `[::1]` on any port now work with no
+  configuration; deployed origins go in `NAUTGATE_CORS_ORIGINS` (comma-separated,
+  or `*`). **`allow_credentials` stays off** deliberately — auth is a bearer key,
+  not a cookie, so nothing is sent ambiently and an allowed origin still cannot
+  act as the user without holding a key. An unknown origin receives no
+  allow-origin header at all ([#40]).
+
 - **Long generations died at exactly 120 s with `502 upstream_failed`.** The
   upstream read timeout was hard-coded to `120.0`; requests failed at 120071 ms
   and 120066 ms — our own deadline, not a provider outage. What made it hard to
@@ -164,3 +184,4 @@ reports what it cost.
 [#37]: https://github.com/48Nauts-Operator/NautGate/pull/37
 [#38]: https://github.com/48Nauts-Operator/NautGate/pull/38
 [#41]: https://github.com/48Nauts-Operator/NautGate/pull/41
+[#40]: https://github.com/48Nauts-Operator/NautGate/pull/40
