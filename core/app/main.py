@@ -28,6 +28,7 @@ import os as _os
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -337,6 +338,22 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Memory-aware LLM gateway",
         lifespan=lifespan,
+    )
+    # A browser refuses a cross-origin call unless the server opts in, and a
+    # different port already counts as cross-origin — so any browser-based
+    # client talking to the gateway needs this. Bearer-token auth (not cookies)
+    # means allow_credentials stays off, so an allowed origin still cannot act
+    # as the user without holding a key.
+    cors = get_settings().nautgate_cors_origins
+    origins = [o.strip() for o in cors.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if "*" in origins else origins,
+        allow_origin_regex=None
+        if "*" in origins
+        else r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.include_router(health.router)
     app.include_router(v1.router)

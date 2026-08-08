@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     nautgate_model_catalogue: bool = True
     nautgate_model_catalogue_ttl_h: float = 24.0
 
+    # Browser clients (a local builder UI, a dashboard on another port) are
+    # cross-origin even on the same host — a different port is a different
+    # origin. localhost/127.0.0.1 on any port is allowed out of the box; list
+    # deployed origins here, comma-separated, or "*" to allow all.
+    nautgate_cors_origins: str = ""
+
     # Read timeout for upstream model calls, in seconds. A long report or a
     # thinking model can legitimately run for many minutes, and the old
     # hard-coded 120s aborted work that was still in progress and reported it
