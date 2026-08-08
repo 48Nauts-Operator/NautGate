@@ -53,6 +53,39 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **The savings figure was inflated roughly 3× by wrong prices — and the
+  correction in [#41] repeated one of them.** Checked against Anthropic's own
+  pricing page (2026-08-09) rather than inference:
+
+  | model | table said | actual |
+  | --- | --- | --- |
+  | Claude Fable 5 | $50 / $250 | **$10 / $50** |
+  | Claude Opus 4.7 / 4.8 | $15 / $75 | **$5 / $25** |
+
+  Fable 5's rate was a guess recorded in a code comment, with output derived from
+  an assumed 5× ratio; it was 5× high on every field. The Opus error was
+  structural: `claude-opus-4-7` and `claude-opus-4-8` were YAML-aliased to the
+  `claude-opus-4` block, but only the *retired* Opus 4 and 4.1 cost $15/$75 —
+  every Opus from 4.5 onward is $5/$25. The alias silently applied a retired
+  model's price to the current one, and Opus 4.8 is the single largest line in
+  the ledger at 27,430 priced calls.
+
+  Measured against live rows: **$29,640.89 of the reported all-time savings did
+  not exist.** [#41] published $41,308.57 → $44,255.81 for the all-time figure;
+  the true value after both corrections and the outstanding backfill is
+  approximately **$15,036**. Correcting a metric upward and then finding it was
+  overstated all along is exactly why this file gives both values.
+
+  Also added: Opus 4.5/4.6 and Mythos 5 (previously absent), and a note that
+  Sonnet 5's $2/$10 is *introductory* pricing that becomes $3/$15 on 2026-09-01 —
+  a rate that will silently go stale otherwise.
+
+  `scripts/backfill_notional_cost.py` gained `--reprice-all`, because filling
+  NULLs never touches a row already priced with a rate we later found wrong. It
+  reports corrections separately from fills so the two are never conflated
+  (currently: 55,283 rows, net −$29,640.89 corrected, +$3,309.53 newly priced)
+  ([#44]).
+
 - **"Subscription saved" was counting everything except the traffic that
   matters.** It read **$38.82** for a day with 1,291 calls. The OAuth forwarder
   prices subscription traffic as provider `anthropic`, so it looks up
@@ -184,4 +217,5 @@ reports what it cost.
 [#37]: https://github.com/48Nauts-Operator/NautGate/pull/37
 [#38]: https://github.com/48Nauts-Operator/NautGate/pull/38
 [#41]: https://github.com/48Nauts-Operator/NautGate/pull/41
+[#44]: https://github.com/48Nauts-Operator/NautGate/pull/44
 [#40]: https://github.com/48Nauts-Operator/NautGate/pull/40
