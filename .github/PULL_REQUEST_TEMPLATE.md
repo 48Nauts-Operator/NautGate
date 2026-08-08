@@ -19,6 +19,7 @@ Closes #
 
 ## Checklist
 
+- [ ] User-visible change? `CHANGELOG.md` updated under `## [Unreleased]`
 - [ ] One concern — this PR doesn't also do something else
 - [ ] No real API keys or captured bodies in code, tests or fixtures
 - [ ] Existing behaviour unchanged, or the change is called out below
