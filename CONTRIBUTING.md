@@ -100,6 +100,24 @@ docs: clarify the --bare requirement for Claude Code
 Explain *why* in the body when the change isn't self-evident. The diff already
 says what.
 
+## Changelog
+
+Anything a user would notice gets an entry in `CHANGELOG.md` under
+`## [Unreleased]`, in the same PR as the code. Internal refactors, test-only
+changes and dependency bumps don't need one.
+
+NautGate's whole claim is *evidence* — an attested record of what each call did
+and cost. So the bar for an entry is higher than "fixed a bug":
+
+- **Symptom first**, in terms a user would recognise — what did they see?
+- **The mechanism**, not the file you touched. "The read timeout was hard-coded
+  to 120 s" tells someone whether it hit them; "fixed timeout handling" doesn't.
+- **Who it affected.** "Fired on most real launches" and "only with a local
+  proxy" are very different facts, and the reader needs the difference.
+- **If a number the product reports changed, give both values.** Someone who saw
+  $38.82 yesterday and $234.64 today must be able to find out why here.
+- **If it was our regression, say so** and link the PR that introduced it.
+
 ## Reporting bugs
 
 Use the issue templates. For routing or model problems, the single most useful
