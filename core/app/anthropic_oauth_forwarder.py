@@ -311,7 +311,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                 request_size_bytes=len(raw_body),
             )
         except Exception as exc:
-            log.warning("anthropic_oauth_precapture_failed", error=str(exc))
+            log.warning(
+                "anthropic_oauth_precapture_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
 
     # Forward. Use a per-request client so we don't tie up the global pool
     # with long SSE streams.
@@ -361,7 +365,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             await asyncio.sleep(delay)
     except httpx.HTTPError as exc:
         await client.aclose()
-        log.error("anthropic_oauth_forward_failed", error=str(exc))
+        log.error(
+            "anthropic_oauth_forward_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         raise HTTPException(status_code=502, detail=f"anthropic_unreachable: {exc}") from None
 
     # Build the response back to the client. Preserve Content-Encoding
@@ -513,7 +521,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                             actual_model=meta.get("actual_model"),
                         )
                     except Exception as exc:
-                        log.warning("anthropic_oauth_brain_failed", error=str(exc))
+                        log.warning(
+                            "anthropic_oauth_brain_failed",
+                            error=str(exc) or repr(exc),
+                            error_type=type(exc).__name__,
+                        )
                     # NAUTGATE-1: drift detection was dark on OAuth traffic —
                     # zero model_baselines rows despite it being most of volume.
                     # Additive + fire-and-forget; keyed on (provider, model) like
@@ -523,7 +535,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
 
                         await _process_drift(pool, decision_id=decision_id)
                     except Exception as exc:
-                        log.warning("anthropic_oauth_drift_failed", error=str(exc))
+                        log.warning(
+                            "anthropic_oauth_drift_failed",
+                            error=str(exc) or repr(exc),
+                            error_type=type(exc).__name__,
+                        )
                     try:
                         from app.shadow import process_shadow as _process_shadow
 
@@ -534,7 +550,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                             pricing=pricing,
                         )
                     except Exception as exc:
-                        log.warning("anthropic_oauth_shadow_failed", error=str(exc))
+                        log.warning(
+                            "anthropic_oauth_shadow_failed",
+                            error=str(exc) or repr(exc),
+                            error_type=type(exc).__name__,
+                        )
                     # Engram-OSS / SecondBrain memory ingest — byte-by-byte
                     # parity with flow-memory-proxy's storeDelta:
                     #   - agent_id constant "claude-code" (matches proxy.js:138)
@@ -567,7 +587,11 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                             error=str(exc),
                         )
                 except Exception as exc:
-                    log.warning("anthropic_oauth_outcome_failed", error=str(exc))
+                    log.warning(
+                        "anthropic_oauth_outcome_failed",
+                        error=str(exc) or repr(exc),
+                        error_type=type(exc).__name__,
+                    )
 
     return StreamingResponse(
         _relay(),

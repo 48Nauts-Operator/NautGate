@@ -1313,7 +1313,9 @@ async def run_investigation(
             pricing_path = Path(__file__).resolve().parents[2] / "config" / "pricing.yaml"
         pricing = PricingTable.from_yaml(pricing_path)
     except Exception as exc:
-        log.warning("drift_invest_no_pricing", error=str(exc))
+        log.warning(
+            "drift_invest_no_pricing", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
 
     # For routing suite, run the probe against every transport.
     # For everything else, just the first (preferred) transport.
@@ -1383,7 +1385,11 @@ async def run_investigation(
             total_cost=total_cost,
         )
     except Exception as exc:
-        log.warning("drift_invest_verdict_failed", error=str(exc))
+        log.warning(
+            "drift_invest_verdict_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         await _finalise(
             pool, iid, status="failed", verdict_text=f"verdict_failed: {exc}", total_cost=total_cost
         )

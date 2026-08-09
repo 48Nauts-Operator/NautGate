@@ -181,7 +181,12 @@ async def create_backup(pool: asyncpg.Pool, *, via: str = "manual") -> dict:
                 bid,
                 str(exc)[:1000],
             )
-        log.error("backup_failed", backup_id=str(bid), error=str(exc))
+        log.error(
+            "backup_failed",
+            backup_id=str(bid),
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         # Re-raise for the caller (API handler) to return a 500.
         raise
 
@@ -378,7 +383,11 @@ async def run_scheduler(pool: asyncpg.Pool, *, tick_seconds: int = 60) -> None:
                 try:
                     await create_backup(pool, via="scheduled")
                 except Exception as exc:
-                    log.warning("scheduled_backup_failed", error=str(exc))
+                    log.warning(
+                        "scheduled_backup_failed",
+                        error=str(exc) or repr(exc),
+                        error_type=type(exc).__name__,
+                    )
                 # Whether it succeeded or not, advance the schedule so we
                 # don't tight-loop. Update last_run_at + next_run_at.
                 from datetime import timedelta
@@ -393,7 +402,11 @@ async def run_scheduler(pool: asyncpg.Pool, *, tick_seconds: int = 60) -> None:
             log.info("backup_scheduler_cancelled")
             raise
         except Exception as exc:
-            log.error("backup_scheduler_iteration_failed", error=str(exc))
+            log.error(
+                "backup_scheduler_iteration_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
         await asyncio.sleep(tick_seconds)
 
 

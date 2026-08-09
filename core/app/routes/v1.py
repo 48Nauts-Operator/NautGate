@@ -256,7 +256,9 @@ async def _process_chat_request(
                     **diet_note,
                 )
     except Exception as exc:
-        log.warning("prompt_diet_failed", error=str(exc))
+        log.warning(
+            "prompt_diet_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
 
     messages = payload.get("messages")
     prompt_excerpt = queries.excerpt_last_user_message(messages)
@@ -923,7 +925,11 @@ def _streaming_response(
                         success=not state["client_disconnected"],
                     )
                 except Exception as exc:
-                    log.warning("provider_health_upsert_failed_stream", error=str(exc))
+                    log.warning(
+                        "provider_health_upsert_failed_stream",
+                        error=str(exc) or repr(exc),
+                        error_type=type(exc).__name__,
+                    )
 
             # PLUGINS: stream finished — fire on_response, after_route, on_outcome.
             stream_plugins = getattr(request.state, "plugins", None)
@@ -2511,7 +2517,11 @@ async def _resolve_provider_overrides(pool) -> dict:
             if k:
                 keys[c["provider"]] = k
     except Exception as exc:  # bad master key, decrypt failure, etc.
-        log.warning("provider_override_resolve_failed", error=str(exc))
+        log.warning(
+            "provider_override_resolve_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         return _PROVIDER_OVERRIDE_CACHE["keys"]
     _PROVIDER_OVERRIDE_CACHE.update(at=now, keys=keys)
     return keys
@@ -3659,7 +3669,9 @@ async def behavior_compare_run(request: Request) -> Response:
             models=models,
         )
     except Exception as exc:
-        log.error("behavior_compare_failed", error=str(exc))
+        log.error(
+            "behavior_compare_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
         raise HTTPException(status_code=502, detail=f"comparison_failed: {exc}") from None
     return JSONResponse(
         {
@@ -4154,7 +4166,9 @@ async def notifications(request: Request) -> Response:
                 },
             )
     except Exception as exc:
-        log.warning("burst_check_failed", error=str(exc))
+        log.warning(
+            "burst_check_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
 
     return JSONResponse({"items": items})
 

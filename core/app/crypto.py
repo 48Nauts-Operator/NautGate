@@ -82,7 +82,12 @@ def ensure_master_key() -> None:
         os.chmod(f, stat.S_IRUSR | stat.S_IWUSR)  # 0600
         log.warning("master_key_generated", path=str(f))
     except OSError as exc:
-        log.warning("master_key_persist_failed", path=str(f), error=str(exc))
+        log.warning(
+            "master_key_persist_failed",
+            path=str(f),
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def master_key_configured() -> bool:

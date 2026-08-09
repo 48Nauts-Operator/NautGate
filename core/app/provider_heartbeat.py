@@ -128,5 +128,9 @@ async def run_scheduler(pool, *, pricing, state, tick_seconds: int = 60) -> None
             log.info("provider_heartbeat_cancelled")
             raise
         except Exception as exc:
-            log.error("provider_heartbeat_iteration_failed", error=str(exc))
+            log.error(
+                "provider_heartbeat_iteration_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
         await asyncio.sleep(tick_seconds)

@@ -127,7 +127,11 @@ async def _get_daily_spend(pool) -> float:
     try:
         spend = await queries.get_daily_judge_spend(pool)
     except Exception as exc:
-        log.warning("quality_eval_spend_lookup_failed", error=str(exc))
+        log.warning(
+            "quality_eval_spend_lookup_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         return _spend_cache_value
     _spend_cache_value = spend
     _spend_cached_at = now
@@ -381,7 +385,11 @@ async def _call_judge(
         payload = resp.json()
     except Exception as exc:
         telemetry["judge_latency_ms"] = int((time.monotonic() - started) * 1000)
-        log.warning("quality_eval_judge_call_failed", error=str(exc))
+        log.warning(
+            "quality_eval_judge_call_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         return None, telemetry
 
     choices = payload.get("choices") or []

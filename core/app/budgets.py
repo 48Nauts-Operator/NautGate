@@ -375,7 +375,9 @@ async def evaluate(
     except Exception as exc:
         # asyncpg may not accept the array-of-record cast for empty arrays
         # or unexpected types; fall back to per-row lookups.
-        log.debug("budget_bulk_lookup_failed", error=str(exc))
+        log.debug(
+            "budget_bulk_lookup_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
         rows = []
         try:
             async with pool.acquire() as conn:

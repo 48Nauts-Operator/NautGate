@@ -72,7 +72,12 @@ class PluginRegistry:
         except FileNotFoundError:
             return cls([])
         except yaml.YAMLError as exc:
-            log.warning("plugin_config_parse_failed", path=str(path), error=str(exc))
+            log.warning(
+                "plugin_config_parse_failed",
+                path=str(path),
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
             return cls([])
 
         exts_raw = raw.get("extensions") or {}
@@ -191,7 +196,13 @@ class PluginRegistry:
             log.info("plugin_hook_timeout", ext=ext.name, hook=hook, timeout_ms=timeout_ms)
             return None
         except httpx.HTTPError as exc:
-            log.info("plugin_hook_http_error", ext=ext.name, hook=hook, error=str(exc))
+            log.info(
+                "plugin_hook_http_error",
+                ext=ext.name,
+                hook=hook,
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
             return None
 
     # ---- fire-and-forget hooks ----

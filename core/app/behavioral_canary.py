@@ -328,7 +328,9 @@ async def _judge_canary(
             return result
         jpayload = jr.json()
     except Exception as exc:
-        log.warning("behavioral_judge_failed", error=str(exc))
+        log.warning(
+            "behavioral_judge_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
         return result
     jchoices = jpayload.get("choices") or []
     if not jchoices:
@@ -471,5 +473,9 @@ async def quality_eval_config_or_default(pool) -> dict:
     try:
         return await quality_eval_config(pool)
     except Exception as exc:
-        log.warning("behavioral_canary_judge_config_failed", error=str(exc))
+        log.warning(
+            "behavioral_canary_judge_config_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         return {}

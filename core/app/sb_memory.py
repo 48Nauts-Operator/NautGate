@@ -140,7 +140,9 @@ async def _get_pool(cfg: dict) -> asyncpg.Pool | None:
         return _pool
     except Exception as exc:
         _record_failure()
-        log.warning("sb_memory_pool_init_failed", error=str(exc))
+        log.warning(
+            "sb_memory_pool_init_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
         return None
 
 

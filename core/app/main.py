@@ -108,7 +108,11 @@ async def _bootstrap_first_run_key(pool) -> None:
         print(banner, flush=True)
         log.warning("first_run_key_minted", agent_id="first-run")
     except Exception as exc:  # never block startup on this
-        log.warning("first_run_key_bootstrap_failed", error=str(exc))
+        log.warning(
+            "first_run_key_bootstrap_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 class _RevalidatingStatic(StaticFiles):
@@ -152,7 +156,12 @@ async def lifespan(app: FastAPI):
         app.state.routing_table = load_routing_table(routing_path)
         log.info("routing_table_loaded", path=str(routing_path), tiers=len(app.state.routing_table))
     except Exception as exc:
-        log.warning("routing_table_load_failed", path=str(routing_path), error=str(exc))
+        log.warning(
+            "routing_table_load_failed",
+            path=str(routing_path),
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         app.state.routing_table = None
 
     # Compliance AUDIT policy (NAUTGATE-25) — jurisdiction scope, provider
@@ -167,7 +176,12 @@ async def lifespan(app: FastAPI):
             evaluated_against=app.state.compliance_policy.evaluated_against(),
         )
     except Exception as exc:
-        log.warning("compliance_policy_load_failed", path=str(compliance_path), error=str(exc))
+        log.warning(
+            "compliance_policy_load_failed",
+            path=str(compliance_path),
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         app.state.compliance_policy = None
 
     # Model catalogue — the full, self-updating list of selectable models.
@@ -202,9 +216,13 @@ async def lifespan(app: FastAPI):
                         skipped_bad=result.skipped_bad,
                     )
             except Exception as exc:
-                log.warning("outcome_spool_drain_failed", error=str(exc))
+                log.warning(
+                    "outcome_spool_drain_failed",
+                    error=str(exc) or repr(exc),
+                    error_type=type(exc).__name__,
+                )
         except Exception as exc:
-            log.error("db_pool_failed", error=str(exc))
+            log.error("db_pool_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__)
     else:
         log.warning("no_db_url_configured", hint="set NAUTGATE_DB_URL to enable persistence")
 
