@@ -53,8 +53,25 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **A fresh install's first call failed with `502 {"detail":"upstream_failed"}`
+  and no hint why.** The commonest cause is the obvious one — no provider key
+  configured yet — and the gateway already knew: it logged the router's
+  `401 "Missing Authentication header"` and then threw that information away.
+  The operator had to read server logs to learn they needed a key.
+
+  A 401/403 from upstream now returns what to do about it:
+
+  > no working provider credential for openrouter — the upstream rejected the
+  > call (401). Set a provider key in Settings > Providers, or in the environment
+  > (e.g. `OPENROUTER_API_KEY`), then retry. Upstream said: Missing
+  > Authentication header
+
+  Other statuses keep the upstream reason (`upstream_failed (500): …`) instead of
+  discarding it. The routing lane `passthrough` is never named as a provider,
+  since it isn't something you can put a key in ([#48]).
+
 - **A private Tailscale IP was hardcoded across the codebase, and one use of it
-  sent data by default.** `100.71.163.122` appeared in 14 tracked files: core
+  sent data by default.** a private Tailscale address appeared in 14 tracked files: core
   source, a DB migration that seeded it into every install's `app_config`, the
   dashboard's Settings placeholder, `.env.example`, and three docs.
 
