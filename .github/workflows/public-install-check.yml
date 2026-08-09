@@ -1,0 +1,79 @@
+name: Public install check
+
+# The advertised install is `curl nautgate.dev/compose.yml && docker compose up -d`,
+# which pulls three images from GHCR anonymously. Nothing else in CI exercises that
+# path: the smoke test runs inside the repo with its credentials, so it can pull
+# images a stranger cannot — it stayed green the whole time the public install was
+# broken.
+#
+# GHCR package visibility is a SEPARATE setting from repository visibility and there
+# is no REST API to change it (UI only). So making the repo public does NOT make its
+# packages public, and nothing warns you. That is exactly how the first launch
+# attempt failed.
+#
+# This job pulls with no credentials, the way a stranger would.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/public-install-check.yml"
+      - "deploy/compose.published.yml"
+
+jobs:
+  anonymous-pull:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the repository public yet?
+        id: vis
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vis=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)
+          echo "visibility=$vis" >> "$GITHUB_OUTPUT"
+          echo "repository is $vis"
+
+      - name: Pull each image with no credentials
+        env:
+          # Lowercase: GHCR paths are case-sensitive and the owner is mixed-case.
+          OWNER: ${{ github.repository_owner }}
+          PUBLIC: ${{ steps.vis.outputs.visibility }}
+        run: |
+          set -u
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          # Ensure no inherited credentials — a stranger has none.
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          rc=0
+          for img in nautgate nautrouter nautproxy; do
+            ref="ghcr.io/${owner}/${img}:latest"
+            if docker pull -q "$ref" >/dev/null 2>&1; then
+              echo "OK        $ref"
+            else
+              echo "BLOCKED   $ref"
+              rc=1
+            fi
+          done
+
+          if [ "$rc" -eq 0 ]; then
+            echo "All three images pull anonymously — the advertised install works."
+            exit 0
+          fi
+
+          if [ "$PUBLIC" != "public" ]; then
+            echo
+            echo "::notice::Repository is '$PUBLIC', so private packages are expected."
+            echo "::notice::This check becomes enforcing the moment the repo goes public."
+            exit 0
+          fi
+
+          echo
+          echo "::error::The repo is public but at least one image cannot be pulled anonymously."
+          echo "::error::Package visibility is separate from repo visibility and is UI-only:"
+          echo "::error::  https://github.com/orgs/${owner}/packages -> <package> -> Package settings"
+          echo "::error::  -> Danger Zone -> Change visibility -> Public. Repeat for all three."
+          exit 1
