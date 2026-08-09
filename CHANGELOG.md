@@ -53,6 +53,27 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **A private Tailscale IP was hardcoded across the codebase, and one use of it
+  sent data by default.** `100.71.163.122` appeared in 14 tracked files: core
+  source, a DB migration that seeded it into every install's `app_config`, the
+  dashboard's Settings placeholder, `.env.example`, and three docs.
+
+  The one that actually fired: NautRouter's cost logger defaulted `MEMORY_API`
+  to that host and POSTed `agent_id`, model, tier, tokens and cost on **every
+  routed call**. An unconfigured install would attempt to send usage metadata to
+  a machine its operator never chose — undisclosed telemetry, whether or not the
+  host was reachable. It is now unset by default and the sink is skipped
+  entirely unless `MEMORY_API` is set; the integration (an Engram-OSS
+  `/memories` endpoint) is unchanged when you opt in.
+
+  The Engram ingest host was already configurable from the Settings page — only
+  the *default* was personal, so nothing is lost by emptying it.
+
+  Also removed a hardcoded home directory in `scripts/shoot-dashboard.mjs`,
+  which imported Playwright from an absolute path that exists on exactly one
+  machine; it now reads `PLAYWRIGHT_MODULE` and falls back to a normal import
+  ([#46]).
+
 - **Every provider error came back as `200` with empty content.** Asking for any
   `claude-*` model on `/v1/chat/completions` returned HTTP 200, `content: ""`,
   0 tokens and `finish_reason: "stop"` — indistinguishable from a model that had
@@ -247,4 +268,5 @@ reports what it cost.
 [#41]: https://github.com/48Nauts-Operator/NautGate/pull/41
 [#44]: https://github.com/48Nauts-Operator/NautGate/pull/44
 [#45]: https://github.com/48Nauts-Operator/NautGate/pull/45
+[#46]: https://github.com/48Nauts-Operator/NautGate/pull/46
 [#40]: https://github.com/48Nauts-Operator/NautGate/pull/40

@@ -17,7 +17,7 @@ INSERT INTO nautgate.app_config (id, settings)
 VALUES (1, jsonb_build_object(
     'sb_ingest', jsonb_build_object(
         'enabled', false,
-        'host', '100.71.163.122',
+        'host', '',
         'port', 5433,
         'database', 'agents_memory',
         'user', 'agents'

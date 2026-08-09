@@ -17,7 +17,7 @@ Flow Proxy stays running for 48 h after the flip; rollback = re-point the env va
    ```
 2. **Confirm `agents_memory` Postgres is reachable from stargate**:
    ```bash
-   ssh stargate "psql postgres://agents:agents_secure_2026@100.71.163.122:5433/agents_memory -c 'SELECT count(*) FROM memories'"
+   ssh stargate "psql postgres://agents:agents_secure_2026@engram.example.com:5433/agents_memory -c 'SELECT count(*) FROM memories'"
    ```
 3. **Confirm sb-capture has provider keys** (or accepts that until you drop
    keys in `.env`, `model:auto` will 502 for new traffic):
@@ -35,7 +35,7 @@ On stargate:
 cd /path/to/NautGate
 cat >> deploy/.env <<EOF
 SB_CAPTURE_SINK=both
-SB_CAPTURE_DB_URL=postgres://agents:agents_secure_2026@100.71.163.122:5433/agents_memory
+SB_CAPTURE_DB_URL=postgres://agents:agents_secure_2026@engram.example.com:5433/agents_memory
 EOF
 
 docker compose \

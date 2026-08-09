@@ -26,7 +26,11 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const LMSTUDIO_URL = process.env.LMSTUDIO_URL ?? "http://localhost:1238";
-const MEMORY_API = process.env.MEMORY_API ?? "http://100.71.163.122:8085/memories";
+// Optional cost sink — an Engram-OSS /memories endpoint. UNSET BY DEFAULT: a
+// shipped default would mean every install silently POSTs agent_id, model,
+// tokens and cost to a host its operator never chose. Point MEMORY_API at your
+// own Engram-OSS instance to opt in.
+const MEMORY_API = process.env.MEMORY_API ?? "";
 const DEFAULT_PROFILE = (process.env.NAUT_PROFILE ?? "auto") as Profile;
 
 // ── Types ──
@@ -892,6 +896,7 @@ async function forwardGemini(modelDef: ModelDef, body: any, stream: boolean, ove
 // ══════════════════════════════════════════════════════════════
 
 async function logCost(agentId: string, decision: RoutingDecision, inputTokens: number, outputTokens: number) {
+  if (!MEMORY_API) return; // opt-in only — see MEMORY_API above
   const inputCost = (inputTokens / 1_000_000) * decision.costPer1MInput;
   const outputCost = (outputTokens / 1_000_000) * decision.costPer1MOutput;
   const totalCost = inputCost + outputCost;
