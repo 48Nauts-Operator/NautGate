@@ -580,6 +580,15 @@ async function forwardToProvider(
   }
 }
 
+// OpenAI-compatible servers omit the usage block from a STREAM unless it is
+// explicitly requested. Without it a streamed call records no tokens at all, so
+// it costs $0 in the ledger and vanishes from every spend figure. forwardLMStudio
+// already did this; OpenRouter, OpenAI and Gemini did not.
+function withStreamUsage(out: any, stream: boolean): any {
+  if (stream) out.stream_options = { ...(out.stream_options ?? {}), include_usage: true };
+  return out;
+}
+
 async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean, overrides: ProviderKeys = {}): Promise<Response> {
   // OpenRouter speaks OpenAI Chat Completions natively. Pass through with key.
   return fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -590,7 +599,7 @@ async function forwardOpenRouter(modelDef: ModelDef, body: any, stream: boolean,
       "HTTP-Referer": "https://github.com/48Nauts-Operator/NautGate",
       "X-Title": "NautGate",
     },
-    body: JSON.stringify({ ...body, model: modelDef.id, stream }),
+    body: JSON.stringify(withStreamUsage({ ...body, model: modelDef.id, stream }, stream)),
   });
 }
 
@@ -602,6 +611,7 @@ async function forwardOpenAI(modelDef: ModelDef, body: any, stream: boolean, ove
     out.max_completion_tokens = out.max_tokens;
     delete out.max_tokens;
   }
+  withStreamUsage(out, stream);
   return fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -618,10 +628,7 @@ async function forwardLMStudio(modelDef: ModelDef, body: any, stream: boolean): 
   // explicitly requested — without this, local runs recorded 0 prompt/completion
   // tokens, so local-vs-cloud could not be measured at all. include_usage adds a
   // final chunk carrying usage; NautGate's SSE parser already reads it.
-  const out: any = { ...body, model: modelDef.id, stream };
-  if (stream) {
-    out.stream_options = { ...(out.stream_options ?? {}), include_usage: true };
-  }
+  const out: any = withStreamUsage({ ...body, model: modelDef.id, stream }, stream);
   return fetch(`${LMSTUDIO_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -887,7 +894,7 @@ async function forwardGemini(modelDef: ModelDef, body: any, stream: boolean, ove
       "Content-Type": "application/json",
       Authorization: `Bearer ${overrides.gemini || GEMINI_API_KEY}`,
     },
-    body: JSON.stringify({ ...body, model: modelDef.id, stream }),
+    body: JSON.stringify(withStreamUsage({ ...body, model: modelDef.id, stream }, stream)),
   });
 }
 
