@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import subprocess
+import time as _time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -472,3 +473,54 @@ async def _enforce_retention(pool: asyncpg.Pool) -> None:
     )
     for r in rows:
         await delete_backup(pool, r["id"])
+
+    await _reap_orphan_files(pool)
+
+
+# A dump that failed, was killed, or whose row was removed leaves its file
+# behind, and row-based retention can never see it again. On a real instance
+# that reached 31 GB of unreferenced dumps against 49 GB of free disk.
+_ORPHAN_MIN_AGE_S = 3600
+
+
+async def _reap_orphan_files(pool: asyncpg.Pool) -> None:
+    """Delete backup files in the backup dir that no row references.
+
+    Only touches files matching our own naming pattern, and only those older
+    than an hour — a dump in flight has no completed row yet and must not be
+    deleted out from under itself.
+    """
+    directory = _backup_dir()
+    if not directory.is_dir():
+        return
+    try:
+        referenced = {
+            Path(r["file_path"]).name
+            for r in await pool.fetch(
+                "SELECT file_path FROM nautgate.backups WHERE file_path IS NOT NULL"
+            )
+        }
+    except Exception as exc:
+        log.warning(
+            "backup_orphan_scan_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
+        return
+
+    now = _time.time()
+    removed = 0
+    freed = 0
+    for f in directory.glob("nautgate-*.sql.gz"):
+        if f.name in referenced:
+            continue
+        try:
+            st = f.stat()
+            if now - st.st_mtime < _ORPHAN_MIN_AGE_S:
+                continue  # possibly still being written
+            size = st.st_size
+            f.unlink()
+            removed += 1
+            freed += size
+        except OSError as exc:
+            log.warning("backup_orphan_unlink_failed", path=str(f), error=str(exc) or repr(exc))
+    if removed:
+        log.info("backup_orphans_reaped", files=removed, freed_bytes=freed)
