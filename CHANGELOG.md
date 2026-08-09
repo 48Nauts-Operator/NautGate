@@ -71,7 +71,7 @@ regression we introduced, the entry says so.
   since it isn't something you can put a key in ([#48]).
 
 - **A private Tailscale IP was hardcoded across the codebase, and one use of it
-  sent data by default.** `100.71.163.122` appeared in 14 tracked files: core
+  sent data by default.** a private Tailscale address appeared in 14 tracked files: core
   source, a DB migration that seeded it into every install's `app_config`, the
   dashboard's Settings placeholder, `.env.example`, and three docs.
 
