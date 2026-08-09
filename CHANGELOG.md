@@ -53,6 +53,21 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **Retention could never delete a backup it had lost track of.**
+  `_enforce_retention` deletes rows with `status='ok'` beyond the keep count and
+  removes their files — so a dump that failed, was killed, or whose row was
+  removed leaves a multi-gigabyte file behind that nothing will ever reclaim.
+
+  On the live instance that reached **31 GB of unreferenced dumps** — 5 files —
+  next to 3 correctly-retained ones, on a disk with 49 GB free. Each dump is ~8 GB
+  because `route_decisions` (captured prompt bodies) is 13 GB of a 14 GB database
+  and has no retention of its own.
+
+  Retention now also reaps files in the backup directory that no row references.
+  It only touches our own `nautgate-*.sql.gz` naming pattern, skips anything
+  modified in the last hour (a dump in flight has no completed row yet), and
+  refuses to delete anything at all if the reference list cannot be read ([#52]).
+
 - **47 error logs could say nothing at all.** `log.error(..., error=str(exc))`
   produces `error: ""` whenever the exception's message is empty, which is the
   normal case for several common ones — `httpx.ReadTimeout` among them. The
