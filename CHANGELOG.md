@@ -73,6 +73,26 @@ regression we introduced, the entry says so.
   which imported Playwright from an absolute path that exists on exactly one
   machine; it now reads `PLAYWRIGHT_MODULE` and falls back to a normal import
   ([#46]).
+- **The published Docker image ran with no pricing, no routing table and no
+  compliance policy.** `main.py` derived all three config paths from
+  `Path(__file__).parents[2]`. From a checkout that is the repo root
+  (`core/app/main.py` → `<repo>/config`), but the image drops the `core/`
+  directory, so the package sits at `/app/app/` and `parents[2]` resolves to
+  **`/`** — it looked for `/config/pricing.yaml`, which does not exist. The
+  Dockerfile had been copying the files to `/app/config/` all along; the `COPY`
+  was added and the lookup never was.
+
+  Every published container therefore reported **all costs as NULL**, had
+  **`model: auto` unable to resolve a tier**, and ran with the compliance audit
+  layer silently disabled. Those are precisely the symptoms recorded in
+  NAUTGATE-5 as "not self-contained" — the copy was fixed then, the path was not,
+  and the bug survived the fix.
+
+  Config lookup now checks both layouts. Verified in a clean-room `docker compose
+  up` of the published stack: `routing_table_loaded` (4 tiers),
+  `pricing_table_loaded` (46 models) and `compliance_policy_loaded` (CH-FADP,
+  EU-GDPR, EU-AI-Act) all appear, and `/v1/models` returns tier-tagged entries
+  where it previously returned none ([#47]).
 
 - **Every provider error came back as `200` with empty content.** Asking for any
   `claude-*` model on `/v1/chat/completions` returned HTTP 200, `content: ""`,
