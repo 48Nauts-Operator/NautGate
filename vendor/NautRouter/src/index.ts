@@ -709,6 +709,27 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
     body: JSON.stringify(anthropicBody),
   });
 
+  // An upstream error must never become a 200. Anthropic answers 400 for an
+  // exhausted credit balance and 401 for a bad key; feeding either body through
+  // the conversion below yields content:"", 0 tokens and finish_reason:"stop" —
+  // a silent empty success no caller can tell apart from a model that had
+  // nothing to say. Propagate the real status and message instead.
+  if (!resp.ok) {
+    const detail = await resp.text();
+    let message = detail.slice(0, 500);
+    try {
+      message = JSON.parse(detail)?.error?.message ?? message;
+    } catch {
+      // non-JSON upstream body — keep the truncated raw text
+    }
+    return new Response(
+      JSON.stringify({
+        error: { message, type: "upstream_error", provider: "anthropic", code: resp.status },
+      }),
+      { status: resp.status, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   if (!stream) {
     // Convert Anthropic response → OpenAI format
     const data = await resp.json() as any;
@@ -1225,7 +1246,11 @@ app.post("/v1/chat/completions", async (req, res) => {
       res.setHeader("X-Naut-Model", usedModel);
       res.setHeader("X-Naut-Tier", decision.tier);
       res.setHeader("X-Naut-Request-Id", requestId);
-      res.json(data);
+      // Carry the upstream status. res.json() alone defaults to 200, which
+      // turned every provider error — a 400 for an exhausted credit balance, a
+      // 401 for a bad key — into a silent success for the caller.
+      const upstreamOk = response.ok;
+      res.status(response.status).json(data);
 
       const latencyMs = Date.now() - requestStart;
       const inputTokens = data.usage?.prompt_tokens ?? Math.ceil(JSON.stringify(messages).length / 4);
@@ -1237,11 +1262,11 @@ app.post("/v1/chat/completions", async (req, res) => {
         type: "response_complete",
         request_id: requestId,
         timestamp: new Date().toISOString(),
-        data: { latency_ms: latencyMs, cost_usd: costUsd, tokens_consumed: inputTokens + outputTokens, success: true },
+        data: { latency_ms: latencyMs, cost_usd: costUsd, tokens_consumed: inputTokens + outputTokens, success: upstreamOk },
       });
 
-      updateProviderHealth(m.provider, true, latencyMs, costUsd);
-      addRequestRecord({ id: requestId, timestamp: new Date(), agent_id: agentId, profile, tier: decision.tier, provider: m.provider, model: usedModel, latency_ms: latencyMs, cost_usd: costUsd, input_tokens: inputTokens, output_tokens: outputTokens, success: true });
+      updateProviderHealth(m.provider, upstreamOk, latencyMs, costUsd);
+      addRequestRecord({ id: requestId, timestamp: new Date(), agent_id: agentId, profile, tier: decision.tier, provider: m.provider, model: usedModel, latency_ms: latencyMs, cost_usd: costUsd, input_tokens: inputTokens, output_tokens: outputTokens, success: upstreamOk });
       logCost(agentId, { ...decision, model: usedModel, costPer1MInput: m.inputPrice, costPer1MOutput: m.outputPrice }, inputTokens, outputTokens);
     }
   } catch (err: any) {

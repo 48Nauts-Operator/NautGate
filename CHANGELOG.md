@@ -53,6 +53,34 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **Every provider error came back as `200` with empty content.** Asking for any
+  `claude-*` model on `/v1/chat/completions` returned HTTP 200, `content: ""`,
+  0 tokens and `finish_reason: "stop"` — indistinguishable from a model that had
+  nothing to say. It cost hours to diagnose downstream (XNAUT-61) because nothing
+  anywhere reported an error.
+
+  Two independent defects in NautRouter, both of which had to be fixed:
+
+  1. The Anthropic call never checked `resp.ok`. Feeding an error body through
+     the Anthropic→OpenAI conversion produces exactly that empty shape, because
+     `data.content ?? []` is empty, `stop_reason` is undefined (defaulting to
+     `"stop"`) and `usage` is absent.
+  2. The handler then replied with `res.json(data)`, which **discards the
+     upstream status** and defaults to 200. This was provider-agnostic — *any*
+     upstream error, from any provider, was reported to the caller as success.
+
+  The underlying trigger here was an exhausted Anthropic credit balance: the API
+  key is valid and Anthropic answers `400 "Your credit balance is too low"`. That
+  is now surfaced verbatim with the real status, rather than swallowed.
+
+  Telemetry was recording these as `success: true`, so a failing provider still
+  counted as healthy and its cost was logged as if the call had worked. Provider
+  health and the request record now follow the actual outcome.
+
+  Note the earlier diagnosis in NAUTGATE-27 — an empty `ANTHROPIC_API_KEY` — was
+  measuring a second, unpublished sandbox container. The published router has a
+  valid key and still failed this way ([#45]).
+
 - **The savings figure was inflated roughly 3× by wrong prices — and the
   correction in [#41] repeated one of them.** Checked against Anthropic's own
   pricing page (2026-08-09) rather than inference:
@@ -218,4 +246,5 @@ reports what it cost.
 [#38]: https://github.com/48Nauts-Operator/NautGate/pull/38
 [#41]: https://github.com/48Nauts-Operator/NautGate/pull/41
 [#44]: https://github.com/48Nauts-Operator/NautGate/pull/44
+[#45]: https://github.com/48Nauts-Operator/NautGate/pull/45
 [#40]: https://github.com/48Nauts-Operator/NautGate/pull/40
