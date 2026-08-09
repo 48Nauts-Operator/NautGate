@@ -520,11 +520,18 @@ async def _process_chat_request(
     _router_headers = {"x-ng-provider-keys": json.dumps(_overrides)} if _overrides else None
     upstream_status = 200
     upstream_resp: dict | None = None
+    upstream_reason: str | None = None
     try:
         raw = await nautrouter.chat_completions(payload, headers=_router_headers)
     except httpx.HTTPStatusError as exc:
         upstream_status = exc.response.status_code
-        log.warning("nautrouter_status_error", status=upstream_status, decision_id=str(decision_id))
+        upstream_reason = _upstream_reason(exc.response)
+        log.warning(
+            "nautrouter_status_error",
+            status=upstream_status,
+            reason=upstream_reason,
+            decision_id=str(decision_id),
+        )
         raw = None
     except Exception as exc:
         upstream_status = 502
@@ -716,7 +723,14 @@ async def _process_chat_request(
         )
 
     if upstream_resp is None:
-        raise HTTPException(status_code=502, detail="upstream_failed")
+        # A bare "upstream_failed" told the caller nothing. The commonest cause on
+        # a fresh install is simply no provider key, which we DO know about — the
+        # router answers 401 "Missing Authentication header" — so say that instead
+        # of making the operator read our logs to discover it.
+        raise HTTPException(
+            status_code=502,
+            detail=_upstream_detail(upstream_status, upstream_reason, decision_provider),
+        )
 
     final = (
         response_translator(upstream_resp, decision_model) if response_translator else upstream_resp
@@ -947,6 +961,49 @@ def _streaming_response(
 # ============================================================================
 # OpenAI Chat
 # ============================================================================
+
+
+def _upstream_reason(response: httpx.Response) -> str | None:
+    """Pull a human-readable reason out of an upstream error body.
+
+    Providers disagree on shape: OpenAI-style nests under ``error.message``,
+    some return ``detail``, some return plain text. Try each, cap the length —
+    this ends up in an HTTP response, not a log file.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        text = (response.text or "").strip()
+        return text[:200] or None
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])[:200]
+        if isinstance(err, str) and err:
+            return err[:200]
+        if body.get("detail"):
+            return str(body["detail"])[:200]
+    return None
+
+
+def _upstream_detail(status: int, reason: str | None, provider: str | None) -> str:
+    """Turn an upstream failure into something the operator can act on.
+
+    A 401/403 from the router on a fresh install means no provider credential is
+    configured — by far the most common first-run failure, and the one a bare
+    "upstream_failed" hid completely.
+    """
+    if status in (401, 403):
+        where = f" for {provider}" if provider and provider != "passthrough" else ""
+        return (
+            f"no working provider credential{where} — the upstream rejected the call "
+            f"({status}). Set a provider key in Settings > Providers, or in the "
+            f"environment (e.g. OPENROUTER_API_KEY), then retry."
+            + (f" Upstream said: {reason}" if reason else "")
+        )
+    if reason:
+        return f"upstream_failed ({status}): {reason}"
+    return "upstream_failed"
 
 
 @router.post("/chat/completions")
