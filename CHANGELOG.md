@@ -15,6 +15,26 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Security
+
+- **The dashboard handed a working API key to anyone who could reach it.**
+  `NAUTGATE_LOCAL_ADMIN_TOKEN` is server-rendered into `/dashboard` as a
+  `<meta>` tag so the local operator skips manual key entry. The setting is
+  documented "local single-operator use only" — but *local* was never enforced,
+  and the server binds `0.0.0.0`.
+
+  So any peer on the LAN or tailnet could `GET /dashboard` with no credentials,
+  scrape the token out of the HTML, and drive the entire API with it: the audit
+  log, captured prompts, costs and key management. Confirmed by doing exactly
+  that against a live instance over its tailnet address — the scraped token
+  returned `200` from `/v1/stats`.
+
+  The token is now injected only for loopback callers. `X-Forwarded-For` is
+  deliberately ignored, since trusting a caller-supplied header would hand the
+  token to anyone willing to set it. Remote browsers enter a key manually, which
+  the dashboard already supported. Verified end to end: the meta tag is absent
+  over the tailnet address and present over `127.0.0.1` ([#54]).
+
 ### Added
 
 - **Model catalogue — 442 selectable models, up from ~8.** The Settings → Keys

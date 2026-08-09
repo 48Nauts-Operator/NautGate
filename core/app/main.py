@@ -27,7 +27,7 @@ except ImportError:
 import os as _os
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +49,16 @@ from app.settings import get_settings
 from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
+
+
+def _is_loopback(request: Request) -> bool:
+    """True only when the request came from this machine.
+
+    Proxy headers are deliberately ignored: X-Forwarded-For is caller-supplied
+    and trusting it here would hand the token to anyone willing to set it.
+    """
+    host = getattr(request.client, "host", None) if request.client else None
+    return host in ("127.0.0.1", "::1", "localhost")
 
 
 def _bundled_config(name: str) -> Path:
@@ -436,7 +446,7 @@ def create_app() -> FastAPI:
         _read_index()
 
         @app.get("/dashboard")
-        async def dashboard_index() -> HTMLResponse:
+        async def dashboard_index(request: Request) -> HTMLResponse:
             # Cache-bust the static assets by appending mtime-based query
             # strings. Without this the browser keeps serving stale CSS/JS
             # after each deploy and visual changes appear to "not land".
@@ -465,8 +475,16 @@ def create_app() -> FastAPI:
             # If a local admin token is configured, inject it into a <meta> tag
             # so the JS skips manual entry. Token is server-rendered into the
             # HTML body — never travels via URL or cookie.
+            #
+            # ONLY for loopback callers. The setting is documented "local
+            # single-operator use only", but that was never enforced: the server
+            # binds 0.0.0.0, so anyone on the LAN or tailnet could GET /dashboard,
+            # scrape this token out of the HTML and drive the whole API with it —
+            # the audit log, prompts, costs and key management. Verified by doing
+            # exactly that over the tailnet address. Remote browsers now enter a
+            # key manually, which the dashboard already supports.
             token_meta = ""
-            if settings.nautgate_local_admin_token:
+            if settings.nautgate_local_admin_token and _is_loopback(request):
                 t = settings.nautgate_local_admin_token.replace('"', "&quot;")
                 token_meta = f'\n  <meta name="nautgate-token" content="{t}">'
             html = html.replace(
