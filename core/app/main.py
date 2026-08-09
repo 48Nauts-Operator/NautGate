@@ -49,9 +49,31 @@ from app.settings import get_settings
 from app.spool import OutcomeSpool
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
-DEFAULT_ROUTING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "routing.yaml"
-DEFAULT_COMPLIANCE_CONFIG = Path(__file__).resolve().parents[2] / "config" / "compliance.yaml"
-DEFAULT_PRICING_CONFIG = Path(__file__).resolve().parents[2] / "config" / "pricing.yaml"
+
+
+def _bundled_config(name: str) -> Path:
+    """Locate a bundled config file in either layout we actually ship.
+
+    From a checkout the package sits at ``<repo>/core/app`` and the configs at
+    ``<repo>/config`` — two levels up. In the Docker image the package is at
+    ``/app/app`` and the configs at ``/app/config`` — only ONE level up, because
+    the image drops the ``core/`` directory. Hardcoding ``parents[2]`` resolved
+    to ``/config`` inside the image, which does not exist, so every published
+    container silently ran with no pricing (all costs NULL), no routing table
+    (``model: auto`` broken) and no compliance policy. Check both.
+    """
+    here = Path(__file__).resolve()
+    for base in (here.parents[2], here.parents[1]):
+        candidate = base / "config" / name
+        if candidate.exists():
+            return candidate
+    # Nothing found — return the checkout path so the failure names a real place.
+    return here.parents[2] / "config" / name
+
+
+DEFAULT_ROUTING_CONFIG = _bundled_config("routing.yaml")
+DEFAULT_COMPLIANCE_CONFIG = _bundled_config("compliance.yaml")
+DEFAULT_PRICING_CONFIG = _bundled_config("pricing.yaml")
 
 
 async def _bootstrap_first_run_key(pool) -> None:
