@@ -10,7 +10,9 @@ from app.routes.v1 import _upstream_detail, _upstream_reason
 
 
 def test_reason_from_openai_shaped_error():
-    r = httpx.Response(401, json={"error": {"message": "Missing Authentication header", "code": 401}})
+    r = httpx.Response(
+        401, json={"error": {"message": "Missing Authentication header", "code": 401}}
+    )
     assert _upstream_reason(r) == "Missing Authentication header"
 
 

@@ -69,6 +69,16 @@ regression we introduced, the entry says so.
   Other statuses keep the upstream reason (`upstream_failed (500): …`) instead of
   discarding it. The routing lane `passthrough` is never named as a provider,
   since it isn't something you can put a key in ([#48]).
+- **Streamed calls through OpenRouter, OpenAI and Gemini recorded no tokens, so
+  they cost $0 in the ledger.** OpenAI-compatible servers omit the usage block
+  from an SSE stream unless `stream_options.include_usage` is requested.
+  `forwardLMStudio` already did this — its comment spells out the exact
+  consequence — but the other three never did, so a streamed call produced real
+  output, recorded no usage, and silently contributed nothing to any spend
+  figure. 1,610 successful calls in the local database are affected.
+
+  Not the larger group of usage-less rows: 22,533 of those are 429/529/404
+  responses that consumed no tokens, where NULL is correct ([#50]).
 
 - **A private Tailscale IP was hardcoded across the codebase, and one use of it
   sent data by default.** a private Tailscale address appeared in 14 tracked files: core
