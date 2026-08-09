@@ -10,7 +10,7 @@ A real-time AI model routing visualizer that provides live insights into NautRou
 - 14-dimension scoring engine for request complexity analysis
 - 3 providers: Anthropic, LM Studio (local), Google Gemini
 - 3 profiles: eco (local-first), auto (smart routing), premium (tiered quality)
-- Cost logging to memory API: `http://100.71.163.122:8085/memories`
+- Cost logging to memory API: `http://engram.example.com:8085/memories`
 
 ## Technology Stack
 
@@ -770,7 +770,7 @@ app.get('/v1/stats', async (req, res) => {
   const since = getTimeRangeStart(range);
   
   // Query memory API for historical data
-  const response = await fetch(`http://100.71.163.122:8085/memories?category=cost&since=${since}`);
+  const response = await fetch(`http://engram.example.com:8085/memories?category=cost&since=${since}`);
   const memories = await response.json();
   
   const stats = aggregateStats(memories, range);
@@ -830,7 +830,7 @@ npx tailwindcss init -p
 # .env
 VITE_NAUTROUTER_HTTP_URL=http://localhost:8402
 VITE_NAUTROUTER_WS_URL=ws://localhost:8403
-VITE_MEMORY_API_URL=http://100.71.163.122:8085
+VITE_MEMORY_API_URL=http://engram.example.com:8085
 ```
 
 ### Development

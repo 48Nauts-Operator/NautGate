@@ -2,7 +2,10 @@
 //   node scripts/shoot-dashboard.mjs [baseUrl]
 // Playwright comes from the feature-demo skill rather than a devDependency here —
 // this runs by hand a few times a release, not in CI.
-import { chromium } from "/Users/cand0rian/.claude/skills/feature-demo/node_modules/playwright/index.mjs";
+// Playwright is not a devDependency (this runs by hand a few times a release).
+// Point PLAYWRIGHT_MODULE at an existing install rather than hardcoding one
+// person's path:  PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/shoot-dashboard.mjs
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 import { mkdirSync } from "node:fs";
 
 const BASE = process.argv[2] || "http://localhost:8090";

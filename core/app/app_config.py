@@ -21,7 +21,7 @@ import asyncpg
 _DEFAULTS: dict[str, Any] = {
     "sb_ingest": {
         "enabled": False,
-        "host": "100.71.163.122",
+        "host": "",
         "port": 5433,
         "database": "agents_memory",
         "user": "agents",

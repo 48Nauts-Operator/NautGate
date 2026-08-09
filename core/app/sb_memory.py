@@ -9,7 +9,7 @@ must never break a request.
 Config (env vars, matching FlowAI's names so existing deploys
 "just work"):
     NAUTGATE_SB_INGEST       'true' to enable (default off; opt-in)
-    MEMORY_DB_HOST           stargate Tailscale IP (default 100.71.163.122)
+    MEMORY_DB_HOST           Engram-OSS host (no default — set it in Settings)
     MEMORY_DB_PORT           5433
     MEMORY_DB_NAME           agents_memory
     MEMORY_DB_USER           agents
@@ -81,7 +81,7 @@ def config_cache_clear() -> None:
 def _dsn_from(cfg: dict) -> str:
     user = cfg.get("user") or "agents"
     pw = cfg.get("password") or ""
-    host = cfg.get("host") or "100.71.163.122"
+    host = cfg.get("host") or ""
     port = cfg.get("port") or 5433
     name = cfg.get("database") or "agents_memory"
     return f"postgres://{user}:{pw}@{host}:{port}/{name}"

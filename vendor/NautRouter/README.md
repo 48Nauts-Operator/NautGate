@@ -151,7 +151,7 @@ Weighted score maps to tiers: `<0.0` SIMPLE, `0.0–0.3` MEDIUM, `0.3–0.5` COM
 | `ANTHROPIC_API_KEY` | — | Yes | Anthropic API key |
 | `GEMINI_API_KEY` | — | Yes | Google Gemini API key |
 | `LMSTUDIO_URL` | `http://localhost:1238` | No | LM Studio endpoint |
-| `MEMORY_API` | `http://100.71.163.122:8085/memories` | No | Cost logging endpoint (Stargate) |
+| `MEMORY_API` | `http://engram.example.com:8085/memories` | No | Cost logging endpoint (Stargate) |
 | `NAUT_PORT` | `8402` | No | HTTP server port |
 | `NAUT_WS_PORT` | `8403` | No | WebSocket server port |
 | `NAUT_PROFILE` | `auto` | No | Default routing profile |

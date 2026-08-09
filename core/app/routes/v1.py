@@ -2548,7 +2548,7 @@ async def delete_provider_endpoint(provider: str, request: Request) -> Response:
 @router.put("/config")
 async def put_config_endpoint(request: Request) -> Response:
     """Patch runtime-tunable settings. Body: partial JSON like
-    ``{"sb_ingest": {"enabled": true, "host": "100.71.163.122"}}``.
+    ``{"sb_ingest": {"enabled": true, "host": "engram.example.com"}}``.
     """
     pool = getattr(request.app.state, "db", None)
     if pool is None:
