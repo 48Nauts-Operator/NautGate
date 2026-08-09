@@ -362,5 +362,9 @@ async def available_models(pool: asyncpg.Pool, pricing=None) -> list[str]:
             if q and usable(q):
                 targets.add(q)
     except Exception as exc:  # noqa: BLE001 - picker must not break the page
-        log.warning("bench_available_models_failed", error=str(exc))
+        log.warning(
+            "bench_available_models_failed",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
     return sorted(targets)

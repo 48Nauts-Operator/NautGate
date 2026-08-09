@@ -362,7 +362,9 @@ async def judge_pair(
             return None, telemetry
         payload = resp.json()
     except Exception as exc:
-        log.warning("shadow_judge_call_failed", error=str(exc))
+        log.warning(
+            "shadow_judge_call_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
         return None, telemetry
     usage = payload.get("usage") or {}
     telemetry["prompt_tokens"] = usage.get("prompt_tokens")

@@ -207,7 +207,11 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                 request_size_bytes=len(raw_body),
             )
         except Exception as exc:
-            log.warning("oauth_precapture_failed", error=str(exc))
+            log.warning(
+                "oauth_precapture_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
 
     fwd_headers = _build_forward_headers(request)
     url = f"https://{CHATGPT_HOST}{CHATGPT_PATH}"
@@ -248,7 +252,9 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
             await asyncio.sleep(delay)
     except httpx.HTTPError as exc:
         await client.aclose()
-        log.error("oauth_forward_failed", error=str(exc))
+        log.error(
+            "oauth_forward_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
+        )
         raise HTTPException(status_code=502, detail=f"chatgpt_unreachable: {exc}") from None
 
     # Strip hop-by-hop headers from the response on the way back.
@@ -336,7 +342,11 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                             ),
                         )
                     except Exception as exc:
-                        log.warning("oauth_quality_failed", error=str(exc))
+                        log.warning(
+                            "oauth_quality_failed",
+                            error=str(exc) or repr(exc),
+                            error_type=type(exc).__name__,
+                        )
                     # Brain layer — same rationale as the Anthropic forwarder:
                     # passthrough traffic must feed the scorecard. Waste stays
                     # notional; real cost accounting untouched.
@@ -351,7 +361,11 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                             actual_model="codex-subscription",
                         )
                     except Exception as exc:
-                        log.warning("oauth_brain_failed", error=str(exc))
+                        log.warning(
+                            "oauth_brain_failed",
+                            error=str(exc) or repr(exc),
+                            error_type=type(exc).__name__,
+                        )
                     # Engram-OSS / SecondBrain memory ingest — byte-by-byte
                     # parity with flow-memory-proxy's storeDelta:
                     #   - agent_id constant "codex" (matches proxy.js:138)
@@ -380,9 +394,17 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                             response_body=response_captured.body,
                         )
                     except Exception as exc:
-                        log.warning("oauth_engram_failed", error=str(exc))
+                        log.warning(
+                            "oauth_engram_failed",
+                            error=str(exc) or repr(exc),
+                            error_type=type(exc).__name__,
+                        )
                 except Exception as exc:
-                    log.warning("oauth_outcome_persist_failed", error=str(exc))
+                    log.warning(
+                        "oauth_outcome_persist_failed",
+                        error=str(exc) or repr(exc),
+                        error_type=type(exc).__name__,
+                    )
 
     return StreamingResponse(
         _relay(),

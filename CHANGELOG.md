@@ -53,6 +53,17 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **47 error logs could say nothing at all.** `log.error(..., error=str(exc))`
+  produces `error: ""` whenever the exception's message is empty, which is the
+  normal case for several common ones — `httpx.ReadTimeout` among them. The
+  record then shows a failure with no stated reason.
+
+  This cost real time twice: a 120 s read timeout looked identical to an upstream
+  outage, and the backup scheduler has been failing on a loop logging
+  `backup_scheduler_iteration_failed error=""`, which is unactionable. Every site
+  now logs `error_type` alongside, and falls back to `repr(exc)` when `str()` is
+  empty ([#51]).
+
 - **A fresh install's first call failed with `502 {"detail":"upstream_failed"}`
   and no hint why.** The commonest cause is the obvious one — no provider key
   configured yet — and the gateway already knew: it logged the router's

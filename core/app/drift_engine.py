@@ -332,7 +332,11 @@ async def _maybe_raise_alert(
                 metric_name=metric_name,
             )
         except Exception as exc:
-            log.warning("drift_invest_dispatch_failed", error=str(exc))
+            log.warning(
+                "drift_invest_dispatch_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
     else:
         # Update peak if this z is more extreme.
         if abs(z_score) > abs(float(open_alert["peak_z_score"])):

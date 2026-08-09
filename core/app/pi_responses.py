@@ -155,7 +155,11 @@ async def pi_responses(request: Request):
                 session_id=compute_session_id(agent_id, _as_messages(payload)),
             )
         except Exception as exc:
-            log.warning("pi_responses_precapture_failed", error=str(exc))
+            log.warning(
+                "pi_responses_precapture_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -239,7 +243,11 @@ async def pi_responses(request: Request):
                 was_empty=bool(status and 200 <= status < 300 and not ct),
             )
         except Exception as exc:
-            log.warning("pi_responses_outcome_failed", error=str(exc))
+            log.warning(
+                "pi_responses_outcome_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
 
     # --- Streaming passthrough ---
     if is_stream:
@@ -269,7 +277,11 @@ async def pi_responses(request: Request):
         upstream = await client.post(OPENAI_RESPONSES_URL, headers=headers, content=raw_body)
     except httpx.HTTPError as exc:
         await client.aclose()
-        log.warning("pi_responses_upstream_error", error=str(exc))
+        log.warning(
+            "pi_responses_upstream_error",
+            error=str(exc) or repr(exc),
+            error_type=type(exc).__name__,
+        )
         raise HTTPException(status_code=502, detail="openai_responses_unreachable") from None
     body = upstream.content
     await client.aclose()

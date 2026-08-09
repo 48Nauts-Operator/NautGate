@@ -303,5 +303,9 @@ async def run_scheduler(catalogue: ModelCatalogue, key_resolver, *, is_offline=N
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a scheduler must never die
-            log.warning("model_catalogue_refresh_failed", error=str(exc))
+            log.warning(
+                "model_catalogue_refresh_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
         await asyncio.sleep(tick)

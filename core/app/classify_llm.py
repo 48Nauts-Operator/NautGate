@@ -91,7 +91,7 @@ async def llm_confirm(
         log.info("classify_llm_timeout", timeout_s=timeout_s)
         return "none", None
     except Exception as exc:
-        log.info("classify_llm_error", error=str(exc))
+        log.info("classify_llm_error", error=str(exc) or repr(exc), error_type=type(exc).__name__)
         return "none", None
 
     if not isinstance(resp, dict):

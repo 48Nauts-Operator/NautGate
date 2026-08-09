@@ -58,7 +58,11 @@ async def run_scheduler(
                         targets=list(cfg["targets"]),
                     )
                 except Exception as exc:
-                    log.warning("scheduled_probe_failed", error=str(exc))
+                    log.warning(
+                        "scheduled_probe_failed",
+                        error=str(exc) or repr(exc),
+                        error_type=type(exc).__name__,
+                    )
                 planned = now + timedelta(hours=cfg["interval_hours"])
                 await pool.execute(
                     "UPDATE nautgate.llm_probe_config SET last_run_at=$1, next_run_at=$2 WHERE id=1",
@@ -69,5 +73,9 @@ async def run_scheduler(
             log.info("llm_probe_scheduler_cancelled")
             raise
         except Exception as exc:
-            log.error("llm_probe_scheduler_iteration_failed", error=str(exc))
+            log.error(
+                "llm_probe_scheduler_iteration_failed",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
         await asyncio.sleep(tick_seconds)
