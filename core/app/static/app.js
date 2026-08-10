@@ -6670,6 +6670,33 @@
     document.getElementById("firstrun-dismiss")?.addEventListener("click", (e) => {
       e.preventDefault(); overlay.hidden = true;
     });
+    // Copy the command. The box scrolls horizontally, so without this you
+    // cannot read the whole thing, let alone select it accurately.
+    // navigator.clipboard needs a secure context and is simply undefined when
+    // this dashboard is served over plain http on a LAN or tailnet address,
+    // which is the normal case here — hence the execCommand fallback.
+    document.getElementById("firstrun-copy")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const text = document.getElementById("firstrun-cmd")?.textContent ?? "";
+      let ok = false;
+      try {
+        if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); ok = true; }
+      } catch { /* fall through to the legacy path */ }
+      if (!ok) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand("copy"); } catch { ok = false; }
+        ta.remove();
+      }
+      btn.classList.toggle("copied", ok);
+      btn.title = ok ? "Copied" : "Press Cmd/Ctrl+C to copy";
+      setTimeout(() => { btn.classList.remove("copied"); btn.title = "Copy command"; }, 1600);
+    });
     show();
   })();
 

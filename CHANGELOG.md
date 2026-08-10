@@ -15,6 +15,16 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Added
+
+- **Copy button on the first-run activation screen.** The command it shows is
+  long enough to be clipped by its own box, so it could not be read in full, let
+  alone selected accurately. It now sits next to a copy button that survives the
+  common case here: `navigator.clipboard` is undefined without a secure context,
+  and this dashboard is routinely served over plain http on a LAN or tailnet
+  address, so there is an `execCommand` fallback and the button reports which
+  path succeeded ([#58]).
+
 ### Security
 
 - **The dashboard handed a working API key to anyone who could reach it.**
