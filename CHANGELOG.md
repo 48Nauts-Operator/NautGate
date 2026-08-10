@@ -15,6 +15,29 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Added
+
+- **`nautgate` command, and a Homebrew formula alongside the Docker stack.**
+  Docker stays the recommended path and is unchanged; this is for people who
+  would rather not run Docker for a gateway, and for `brew services` to
+  supervise it like any other daemon.
+
+  `nautgate serve` / `nautgate status` replace remembering the uvicorn
+  incantation. It binds **127.0.0.1** by default and warns when told to bind
+  every interface — a native install has no container boundary, and binding
+  `0.0.0.0` is exactly how the dashboard became readable from a whole tailnet.
+
+  Deliberately *not* declared as a `[project.scripts]` entry point: pyproject
+  sets `[tool.uv] package = false` and the image installs with
+  `--no-install-project`, so packaging the app to satisfy Homebrew would have
+  changed every contributor's sync and the image build for one wrapper the
+  formula writes itself.
+
+  The formula's 34 resource stanzas are generated from `uv.lock` by
+  `packaging/homebrew/gen_resources.py`, with a `--check` mode for CI.
+  `brew update-python-resources` cannot help here — it resolves the formula's
+  own package from PyPI, and NautGate is not published there ([#60]).
+
 ### Changed
 
 - **`mitmproxy` is now an optional extra, cutting the install by a third.** It
