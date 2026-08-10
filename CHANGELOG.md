@@ -15,6 +15,20 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Changed
+
+- **`mitmproxy` is now an optional extra, cutting the install by a third.** It
+  was a hard dependency, but the gateway never imports it — only the standalone
+  addon in `proxy/codex_capture.py` does, and the shipped nautproxy sidecar is
+  built `FROM mitmproxy/mitmproxy`, so it never needed the Python package
+  either. It accounted for **49 MB of a 150 MB virtualenv**, including an 18 MB
+  Rust extension and a 6 MB macOS-only binary that nobody running the gateway
+  ever loaded.
+
+  `uv sync` now produces an **89 MB** environment. Working on the capture proxy
+  needs `uv sync --extra proxy`, and `scripts/codex-proxy.sh` requests it
+  automatically ([#59]).
+
 ### Added
 
 - **Copy button on the first-run activation screen.** The command it shows is
