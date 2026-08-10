@@ -37,6 +37,25 @@ regression we introduced, the entry says so.
 
 ### Added
 
+- **Captured bodies are now dropped after a retention window** (default 90 days,
+  `NAUTGATE_BODY_RETENTION_DAYS`, `0` disables). `route_decisions` reached 13 GB
+  of a 14 GB database growing ~371 MB/day, and every nightly dump copied all of
+  it — ~8 GB per backup, seven minutes a run. The volume is entirely captured
+  prompt/response text; the metadata that makes it an audit log (who called what,
+  which model actually answered, cost, timings, attestation) is a rounding error
+  and is never touched. Rows are kept and their bodies nulled, so an old call
+  still tells you it happened and what it cost.
+
+  Two things worth knowing before choosing a window. Nulling shrinks *dumps*
+  immediately but does not return disk to the OS — Postgres reuses the freed
+  pages, and reclaiming the file needs a `VACUUM FULL`, which takes an exclusive
+  lock and belongs in a maintenance window. And at 371 MB/day the steady state is
+  roughly `window × 371 MB`: 90 days settles near 33 GB, 30 days near 11 GB,
+  14 days near 5 GB. On this instance a 90-day window frees only 69 MB today,
+  because the oldest row is 95 days old ([#55]).
+
+### Added
+
 - **Model catalogue — 442 selectable models, up from ~8.** The Settings → Keys
   picker only ever listed the models named in `config/routing.yaml`'s tiers,
   while OpenRouter, Anthropic and OpenAI between them serve hundreds. A
