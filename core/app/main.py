@@ -247,6 +247,7 @@ async def lifespan(app: FastAPI):
     # Background backup scheduler: ticks every minute, fires a backup when
     # backup_config.next_run_at has passed.
     app.state.backup_task = None
+    app.state.retention_task = None
     app.state.llm_probe_task = None
     app.state.heartbeat_task = None
     # Live provider-status heartbeat results, keyed by transport label.
@@ -270,6 +271,14 @@ async def lifespan(app: FastAPI):
         from app.backup import run_scheduler as _backup_scheduler
 
         app.state.backup_task = _asyncio.create_task(_backup_scheduler(app.state.db))
+
+        from app import retention as _retention
+
+        app.state.retention_task = _asyncio.create_task(
+            _retention.run_scheduler(
+                app.state.db, retention_days=settings.nautgate_body_retention_days
+            )
+        )
 
         # Both schedulers check app_config.is_offline() each tick and stand
         # down while offline, so the Settings toggle takes effect live — no
@@ -336,7 +345,13 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        for _tname in ("backup_task", "llm_probe_task", "heartbeat_task", "catalogue_task"):
+        for _tname in (
+            "backup_task",
+            "llm_probe_task",
+            "heartbeat_task",
+            "catalogue_task",
+            "retention_task",
+        ):
             _t = getattr(app.state, _tname, None)
             if _t is not None:
                 _t.cancel()

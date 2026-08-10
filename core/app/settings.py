@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # deployed origins here, comma-separated, or "*" to allow all.
     nautgate_cors_origins: str = ""
 
+    # Captured prompt/response bodies are dropped after this many days; the row,
+    # cost, model and attestation are kept forever. 0 disables pruning. Bodies
+    # are the entire size problem: route_decisions hit 13 GB of a 14 GB database.
+    nautgate_body_retention_days: int = 90
+
     # Read timeout for upstream model calls, in seconds. A long report or a
     # thinking model can legitimately run for many minutes, and the old
     # hard-coded 120s aborted work that was still in progress and reported it
