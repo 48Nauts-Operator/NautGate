@@ -73,6 +73,26 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **A backup dumped the wrong database, and the shipped schedule was a disk
+  bomb.** Three defaults compounded:
+
+  `_dump_cmd()`'s docker-exec fallback hardcoded `-d nautgate`, ignoring
+  `NAUTGATE_DB_URL`. Any instance configured against another database still
+  dumped `nautgate` — a sandbox pointed at a 10 MB scratch DB produced **8.3 GB
+  dumps of production** and filed the rows in the scratch DB, where production's
+  retention could never see them to delete. That is where 25 GB of the "orphaned"
+  backup files on this machine came from; they were never orphans, just tracked
+  somewhere else.
+
+  Meanwhile `backup_config` shipped `enabled=true, interval_hours=3,
+  retention_count=20`. On any instance whose dump runs to gigabytes that reaches
+  roughly 166 GB at steady state, and every fresh database inherited it.
+
+  The dump now targets the configured database, and the defaults become 24 hours
+  keeping 3. Migration `027` moves existing rows **only if they still sit on the
+  exact old defaults** — an operator who chose their own schedule keeps it
+  ([#56]).
+
 - **Retention could never delete a backup it had lost track of.**
   `_enforce_retention` deletes rows with `status='ok'` beyond the keep count and
   removes their files — so a dump that failed, was killed, or whose row was

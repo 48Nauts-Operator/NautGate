@@ -32,6 +32,7 @@ import time as _time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import asyncpg
 import structlog
@@ -68,12 +69,41 @@ def _dsn() -> str:
     return dsn
 
 
+def _dsn_database() -> str:
+    """Database name from NAUTGATE_DB_URL.
+
+    The docker-exec fallback used to hardcode ``-d nautgate``. That meant an
+    instance configured against any other database still dumped ``nautgate`` —
+    so a sandbox pointed at a 10 MB scratch DB produced 8 GB dumps of production
+    and filed the rows in the scratch DB, where production's retention could
+    never see them to clean up.
+    """
+    # The docker-exec fallback is reachable with no DSN configured at all, so
+    # this must never raise the way _dsn() does — fall back to the historical
+    # name rather than breaking the backup entirely.
+    try:
+        dsn = _dsn()
+    except RuntimeError:
+        return "nautgate"
+    return urlparse(dsn).path.lstrip("/") or "nautgate"
+
+
 def _dump_cmd() -> list[str]:
     """pg_dump argv. DSN form when the client is available, else docker exec."""
     args = ["--schema=nautgate", "--no-owner", "--no-privileges"]
     if _use_dsn():
         return ["pg_dump", _dsn(), *args]
-    return ["docker", "exec", _db_container(), "pg_dump", "-U", "nautgate", "-d", "nautgate", *args]
+    return [
+        "docker",
+        "exec",
+        _db_container(),
+        "pg_dump",
+        "-U",
+        "nautgate",
+        "-d",
+        _dsn_database(),
+        *args,
+    ]
 
 
 def _psql_cmd(extra: list[str]) -> list[str]:
