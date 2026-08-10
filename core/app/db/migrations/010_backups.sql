@@ -20,8 +20,11 @@ CREATE INDEX IF NOT EXISTS backups_ts_idx ON nautgate.backups (ts DESC);
 CREATE TABLE IF NOT EXISTS nautgate.backup_config (
     id              INT         PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     enabled         BOOLEAN     NOT NULL DEFAULT TRUE,
-    interval_hours  INT         NOT NULL DEFAULT 3,
-    retention_count INT         NOT NULL DEFAULT 20,
+    -- 24h/keep-3, not the original 3h/keep-20. A full pg_dump of a real
+    -- instance runs to gigabytes; 20 copies every 3 hours fills a disk on its
+    -- own, and every fresh database got that by default.
+    interval_hours  INT         NOT NULL DEFAULT 24,
+    retention_count INT         NOT NULL DEFAULT 3,
     last_run_at     TIMESTAMPTZ,
     next_run_at     TIMESTAMPTZ,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
