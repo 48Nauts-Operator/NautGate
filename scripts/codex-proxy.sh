@@ -16,6 +16,9 @@
 #   scripts/codex-proxy.sh logs
 set -euo pipefail
 
+# mitmproxy is an optional extra (it is ~49 MB and the gateway never imports it),
+# so `uv run --extra proxy` below installs it on first use.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/core"
 LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/logs"
@@ -39,7 +42,7 @@ start() {
         && NAUTGATE_INGEST_URL="$ingest_url" \
            NAUTGATE_INGEST_TOKEN="${NAUTGATE_INGEST_TOKEN:-}" \
            NAUTPROXY_AGENT_ID="${NAUTPROXY_AGENT_ID:-codex}" \
-           exec uv run mitmdump \
+           exec uv run --extra proxy mitmdump \
         -s proxy/codex_capture.py \
         --listen-host 127.0.0.1 --listen-port "$PORT" \
         --set stream_large_bodies=100m \
