@@ -1,5 +1,7 @@
 """Body retention must shrink the database without damaging the audit trail."""
 
+from datetime import timedelta
+
 import pytest
 
 from app.retention import prune_bodies
@@ -20,7 +22,11 @@ async def test_prunes_both_tables_and_reports_counts():
     pool = _Pool()
     assert await prune_bodies(pool, retention_days=90) == {"decisions": 3, "outcomes": 2}
     assert len(pool.calls) == 2
-    assert all(a[0] == "90 days" for _, a in pool.calls)
+    # Pin the TYPE, not just the value: asyncpg rejects a string for an
+    # interval parameter, and the original fake-pool test passed anyway.
+    for _, a in pool.calls:
+        assert isinstance(a[0], timedelta), f"interval must be a timedelta, got {type(a[0])}"
+        assert a[0] == timedelta(days=90)
 
 
 @pytest.mark.asyncio
