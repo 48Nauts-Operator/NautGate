@@ -92,6 +92,17 @@ regression we introduced, the entry says so.
 
 ### Fixed
 
+- **Body retention crashed on every tick and pruned nothing.** The interval was
+  passed to asyncpg as the string `"90 days"`; asyncpg binds `$1::interval` over
+  the binary protocol and requires a real `timedelta`, so each run raised
+  `DataError: 'str' object has no attribute 'days'` and retried an hour later,
+  forever.
+
+  It shipped because the tests used a fake pool that only recorded its
+  arguments — they asserted the *value* `"90 days"` and never saw a real type
+  check. The test now pins the type, and the pruner was exercised against the
+  live database: 527 decision rows and 315 outcome rows pruned ([#57]).
+
 - **A backup dumped the wrong database, and the shipped schedule was a disk
   bomb.** Three defaults compounded:
 

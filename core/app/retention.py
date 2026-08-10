@@ -21,6 +21,7 @@ background task.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import asyncpg
 import structlog
@@ -42,7 +43,11 @@ async def prune_bodies(pool: asyncpg.Pool, *, retention_days: int) -> dict[str, 
     if retention_days <= 0:
         return {"decisions": 0, "outcomes": 0}
 
-    cutoff = f"{int(retention_days)} days"
+    # asyncpg binds $1::interval over the binary protocol, so it requires a real
+    # timedelta — a "90 days" string raises DataError ('str' object has no
+    # attribute 'days'). The unit tests used a fake pool that only recorded
+    # arguments, so they never saw it; the assertion below now pins the type.
+    cutoff = timedelta(days=int(retention_days))
 
     decisions = await pool.execute(
         """
