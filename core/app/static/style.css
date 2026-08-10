@@ -2353,6 +2353,36 @@ html, body { height: 100%; }
 .firstrun-card h2 { margin: 0 0 6px; font-size: 21px; color: var(--text); letter-spacing: -0.01em; }
 .firstrun-card p { margin: 0 0 14px; color: var(--text-dim); font-size: 14px; line-height: 1.55; }
 .firstrun-hint { margin-bottom: 8px !important; }
+/* The command is long enough to clip; keep it on one scrollable line with the
+   copy button pinned beside it rather than scrolling away with the text. */
+.firstrun-cmdrow {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+.firstrun-cmdrow .firstrun-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.firstrun-copy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  background: var(--bg);
+  color: var(--fg-dim, #A8AD86);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+}
+.firstrun-copy:hover { color: var(--accent-bright); border-color: var(--accent-bright); }
+.firstrun-copy:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
+.firstrun-copy.copied { color: var(--accent-bright); border-color: var(--accent-bright); }
+
 .firstrun-cmd {
   display: block;
   font-family: var(--mono, ui-monospace, monospace);

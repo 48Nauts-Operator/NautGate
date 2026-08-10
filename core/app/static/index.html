@@ -875,7 +875,12 @@
       <h2 id="firstrun-title">Welcome to NautGate</h2>
       <p>The gateway is running. Activate this dashboard with your first-run API key.</p>
       <p class="firstrun-hint">NautGate printed one to the container log when it first started:</p>
-      <code class="firstrun-cmd">docker compose logs nautgate | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+'</code>
+      <div class="firstrun-cmdrow">
+        <code class="firstrun-cmd" id="firstrun-cmd">docker compose logs nautgate | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+'</code>
+        <button class="firstrun-copy" id="firstrun-copy" type="button" title="Copy command" aria-label="Copy command">
+          <svg viewBox="0 0 16 16" aria-hidden="true" width="14" height="14"><rect x="5.5" y="5.5" width="8" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 3.5H3.5a1 1 0 0 0-1 1v7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>
       <label class="firstrun-field" for="firstrun-token">Paste your key</label>
       <input id="firstrun-token" type="password" autocomplete="off" spellcheck="false" placeholder="ng_…" />
       <div class="firstrun-err" id="firstrun-err" role="alert"></div>
