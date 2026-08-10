@@ -88,6 +88,12 @@ docker compose up -d
 docker compose logs nautgate | grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+' | head -1
 ```
 
+Grab it before recreating the container: the key is minted **only when the
+database has no keys yet**, so `docker compose logs` on a rebuilt container will
+not show it again, and minting a new one needs a key you already have. Locked
+out? Set `NAUTGATE_LOCAL_ADMIN_TOKEN` in your `.env` and restart — the dashboard
+then authenticates with it, and you can mint a fresh key from **Settings → Keys**.
+
 Paste that key into the dashboard to activate it, then add your model-provider
 keys in **Settings → Providers** (encrypted at rest — no `.env` or master key to
 configure). Prefer files? Set `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, … in a
