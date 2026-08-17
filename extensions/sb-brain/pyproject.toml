@@ -2,6 +2,7 @@
 name = "sb-brain"
 version = "0.1.0"
 description = "NautGate extension: memory-aware routing hints (provider health, agent patterns, preferences)."
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

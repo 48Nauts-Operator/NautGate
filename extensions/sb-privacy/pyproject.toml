@@ -2,6 +2,7 @@
 name = "sb-privacy"
 version = "0.1.0"
 description = "NautGate extension: privacy-safe routing + tamper-evident audit chain for sensitive prompts."
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

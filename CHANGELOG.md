@@ -19,6 +19,12 @@ regression we introduced, the entry says so.
 
 ### Added
 
+- **Public contribution and licensing metadata are complete for the v0.2.0
+  source release.** Every shipped component now declares
+  `AGPL-3.0-or-later`, pull requests record explicit acceptance of the existing
+  contributor license terms, and the vendored uPlot dashboard asset ships its
+  required MIT notice. This does not change runtime behaviour.
+
 - **`nautgate` command, and a Homebrew formula alongside the Docker stack.**
   Docker stays the recommended path and is unchanged; this is for people who
   would rather not run Docker for a gateway, and for `brew services` to

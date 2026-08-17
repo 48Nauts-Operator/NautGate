@@ -2,6 +2,7 @@
   "name": "naut-router",
   "version": "1.0.0",
   "description": "Smart LLM routing proxy for 21nauts fleet — OpenAI-compatible",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
