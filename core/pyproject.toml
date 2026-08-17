@@ -2,6 +2,7 @@
 name = "nautgate-core"
 version = "0.2.0"
 description = "NautGate — memory-aware LLM gateway core"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

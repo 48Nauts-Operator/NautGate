@@ -3,10 +3,19 @@
 Thanks for considering it. NautGate is small and opinionated — the fastest way
 to get a PR merged is to open an issue first and agree the shape.
 
+## Where development happens
+
+Maintainer development is coordinated on a private Forgejo instance. GitHub is
+the supported public home for releases, issues, discussions, and outside
+contributions. Open pull requests against `main`; accepted changes land on the
+public release lineage with their authorship preserved.
+
 ## Ground rules
 
 - **Discuss before building.** For anything beyond a bug fix, open an issue.
   A rejected 500-line PR wastes your evening, not ours.
+- **Credit borrowed mechanisms.** Name the source project, file or symbol and
+  its license in the file header. Code copied without attribution is not merged.
 - **Small, focused PRs.** One concern per PR. If the description needs the word
   "also", it's probably two PRs.
 - **Match the surrounding code.** Don't reformat files you're not changing.
@@ -137,8 +146,8 @@ you agree to the following:
    to submit it. If your employer has rights to work you produce, you have their
    permission to contribute it.
 
-2. **You license it to the project under AGPL-3.0**, the same license as the
-   rest of NautGate.
+2. **You license it to the project under AGPL-3.0-or-later**, the same license
+   as the rest of NautGate.
 
 3. **You additionally grant 48Nauts a perpetual, worldwide, irrevocable,
    royalty-free license** to use, reproduce, modify, sublicense and distribute

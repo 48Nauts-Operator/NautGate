@@ -1,7 +1,7 @@
 # NautGate
 
 [![CI](https://github.com/48Nauts-Operator/NautGate/actions/workflows/ci.yml/badge.svg)](https://github.com/48Nauts-Operator/NautGate/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-6b7233.svg)](LICENSE)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-6b7233.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-nautgate.dev-6b7233.svg)](https://docs.nautgate.dev)
 [![Release](https://img.shields.io/github/v/release/48Nauts-Operator/NautGate?color=6b7233&label=release)](https://github.com/48Nauts-Operator/NautGate/releases)
 
@@ -152,9 +152,10 @@ Found a security problem? Please don't open a public issue — see
 
 ## License
 
-[AGPL-3.0](LICENSE). Use, modify and self-host NautGate freely. If you run a
-modified version as a network service, the AGPL requires you to publish your
-changes.
+Copyright © 2026 André Wolke, 48Nauts. NautGate is licensed under
+[AGPL-3.0-or-later](LICENSE). Use, modify and self-host it freely. If you run a
+modified version as a network service, the AGPL requires you to offer its
+corresponding source to users of that service.
 
 A separate commercial license is available for anyone who wants NautGate without
 AGPL obligations — <hello@48nauts.com>. Contributions are accepted under the
