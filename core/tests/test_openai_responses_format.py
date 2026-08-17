@@ -132,7 +132,7 @@ def test_response_handles_empty_content():
 
 
 @pytest.fixture
-async def responses_app(monkeypatch):
+async def responses_app(monkeypatch, empty_db_pool):
     pre, out = [], []
 
     async def fake_precapture(pool, **kw):
@@ -171,7 +171,7 @@ async def responses_app(monkeypatch):
 
     application = create_app()
     async with LifespanManager(application):
-        application.state.db = AsyncMock()
+        application.state.db = empty_db_pool
         mock = AsyncMock()
         application.state.nautrouter = mock
         yield application, {"precapture": pre, "outcome": out, "mock": mock}

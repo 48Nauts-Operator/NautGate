@@ -216,7 +216,7 @@ def test_stream_translator_finish_emits_terminators_if_needed():
 
 
 @pytest.fixture
-async def messages_app(monkeypatch):
+async def messages_app(monkeypatch, empty_db_pool):
     precapture_calls: list[dict] = []
     outcome_calls: list[dict] = []
 
@@ -257,7 +257,7 @@ async def messages_app(monkeypatch):
 
     application = create_app()
     async with LifespanManager(application):
-        application.state.db = AsyncMock()
+        application.state.db = empty_db_pool
         mock = AsyncMock()
         application.state.nautrouter = mock
         yield application, {"precapture": precapture_calls, "outcome": outcome_calls, "mock": mock}
