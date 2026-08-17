@@ -76,9 +76,11 @@ reporting trustworthy.
   </tr>
 </table>
 
-## Quickstart
+## Install
 
-Requires Docker. Pull the published stack — no clone, no build:
+### Docker — full stack (recommended on macOS and Linux)
+
+Requires Docker with Compose v2. Pull the published stack — no clone, no build:
 
 ```bash
 curl -fsSL https://nautgate.dev/compose.yml -o docker-compose.yml
@@ -99,8 +101,36 @@ keys in **Settings → Providers** (encrypted at rest — no `.env` or master ke
 configure). Prefer files? Set `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, … in a
 `.env` next to the compose instead. Building from source? See [Development](#development).
 
-**Updating:** `docker compose pull && docker compose up -d` pulls the latest
+**Update Docker:** `docker compose pull && docker compose up -d` pulls the latest
 image and recreates — your data (DB volume) is kept.
+
+### Homebrew — native gateway (macOS)
+
+Homebrew installs the gateway without Docker. PostgreSQL is a dependency but
+its database needs to be created once:
+
+```bash
+brew install 48nauts-operator/tap/nautgate
+brew services start postgresql@16
+"$(brew --prefix postgresql@16)/bin/createdb" nautgate
+brew services start nautgate
+
+# Copy the first-run key printed on the initial start:
+grep -oE 'ng_[a-f0-9]{32}_[A-Za-z0-9_-]+' \
+  "$(brew --prefix)/var/log/nautgate.log" | head -1
+```
+
+Check it with `nautgate status`, then open
+<http://127.0.0.1:8090/dashboard>. The service binds to loopback by default.
+
+The formula installs the native NautGate core, not the NautRouter sidecar.
+Direct provider and passthrough traffic works; `model: auto` and tier routing
+need a separately running NautRouter. Use Docker above when you want the complete
+stack with routing included.
+
+**Update Homebrew:** `brew update && brew upgrade nautgate`.
+
+### Connect a client
 
 Point a client at it:
 

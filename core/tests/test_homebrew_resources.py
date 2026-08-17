@@ -32,3 +32,13 @@ def test_formula_generated_section_is_exactly_current():
     current = generator.FORMULA.read_text()
     expected = generator.replace_generated_resources(current, generated + "\n")
     assert current == expected
+
+
+def test_formula_service_has_a_persistent_default_database_url():
+    formula = _generator().FORMULA.read_text()
+
+    assert (
+        'NAUTGATE_DB_URL="${NAUTGATE_DB_URL:-postgres://$(id -un)@localhost:5432/nautgate}"'
+        in formula
+    )
+    assert '"$(brew --prefix postgresql@16)/bin/createdb" nautgate' in formula
