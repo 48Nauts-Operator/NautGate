@@ -15,6 +15,22 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`brew services start nautgate` now keeps its database configuration after
+  the shell exits.** Launchd does not inherit the interactive shell that started
+  a Homebrew service, so the documented `export NAUTGATE_DB_URL=…` disappeared
+  and NautGate started without persistence. The installed wrapper now defaults
+  to the local `nautgate` database for both foreground and service runs, while
+  still honoring an explicit override.
+
+### Documentation
+
+- **The README now presents both supported installation shapes.** Docker remains
+  the complete macOS/Linux stack; Homebrew is documented as a native macOS core
+  install, including database creation, first-run key retrieval, updates, and
+  the explicit limitation that automatic tier routing needs NautRouter.
+
 ## [0.2.0] — 2026-08-17
 
 ### Added
