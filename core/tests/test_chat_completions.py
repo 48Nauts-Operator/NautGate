@@ -6,7 +6,7 @@ from asgi_lifespan import LifespanManager
 
 
 @pytest.fixture
-async def chat_app(monkeypatch):
+async def chat_app(monkeypatch, empty_db_pool):
     """App with DB queries mocked and a fake NautRouterClient injected.
 
     Returns (app, calls) where calls is a dict with two lists:
@@ -54,7 +54,7 @@ async def chat_app(monkeypatch):
     application = create_app()
     async with LifespanManager(application):
         # Inject post-lifespan: a mock DB pool and a mock NautRouter client.
-        application.state.db = AsyncMock()
+        application.state.db = empty_db_pool
         mock = AsyncMock()
         application.state.nautrouter = mock
         yield application, {"precapture": precapture_calls, "outcome": outcome_calls, "mock": mock}

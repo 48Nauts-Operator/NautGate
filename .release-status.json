@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "public_target": true,
+  "artifacts": [
+    {
+      "name": "Published Docker Compose",
+      "url": "https://nautgate.dev/compose.yml",
+      "path": "deploy/compose.published.yml",
+      "required": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "Go-live Docker smoke",
+      "command": ["bash", "scripts/smoke-golive.sh"],
+      "kind": "smoke",
+      "run_when": "smoke",
+      "timeout_ms": 900000
+    }
+  ]
+}

@@ -157,7 +157,7 @@ def test_parse_anthropic_stream():
 
 
 @pytest.fixture
-async def streaming_app(monkeypatch):
+async def streaming_app(monkeypatch, empty_db_pool):
     precapture_calls: list[dict] = []
     outcome_calls: list[dict] = []
 
@@ -198,7 +198,7 @@ async def streaming_app(monkeypatch):
 
     application = create_app()
     async with LifespanManager(application):
-        application.state.db = AsyncMock()
+        application.state.db = empty_db_pool
         mock = AsyncMock()
         application.state.nautrouter = mock
         yield (

@@ -48,3 +48,8 @@ logs/
 
 # Separate project that lives in this dir — not part of NautGate
 gitvm-extension/
+.gitvm/
+
+# Local agent worktrees and generated repository index
+.claude/worktrees/
+.codebase-memory/

@@ -43,7 +43,7 @@ def _routing_table():
 
 
 @pytest.fixture
-async def app_with_brain(monkeypatch):
+async def app_with_brain(monkeypatch, empty_db_pool):
     """App where the plugin registry is replaced with a stub returning canned hints."""
     precapture: list[dict] = []
 
@@ -83,7 +83,7 @@ async def app_with_brain(monkeypatch):
 
     application = create_app()
     async with LifespanManager(application):
-        application.state.db = AsyncMock()
+        application.state.db = empty_db_pool
         nr_mock = AsyncMock()
         nr_mock.chat_completions.return_value = {
             "choices": [
