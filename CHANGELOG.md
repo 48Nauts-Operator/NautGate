@@ -15,6 +15,8 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-17
+
 ### Added
 
 - **`nautgate` command, and a Homebrew formula alongside the Docker stack.**
@@ -33,8 +35,8 @@ regression we introduced, the entry says so.
   changed every contributor's sync and the image build for one wrapper the
   formula writes itself.
 
-  The formula's 30 Python 3.12/macOS resource stanzas are generated from `uv.lock` by
-  `packaging/homebrew/gen_resources.py`, with a `--check` mode for CI.
+  The formula's 30 Python 3.12/macOS resource stanzas are generated from
+  `uv.lock` by `packaging/homebrew/gen_resources.py`, with a `--check` mode for CI.
   `brew update-python-resources` cannot help here — it resolves the formula's
   own package from PyPI, and NautGate is not published there ([#60]).
 
