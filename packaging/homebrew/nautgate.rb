@@ -35,6 +35,7 @@ class Nautgate < Formula
   # Left explicit rather than a plausible-looking placeholder, which would only
   # surface as a checksum mismatch on someone else's machine.
   sha256 "0" * 64
+  revision 1
   license "AGPL-3.0-or-later"
   head "https://github.com/48Nauts-Operator/NautGate.git", branch: "main"
 
