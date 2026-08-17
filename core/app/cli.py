@@ -15,7 +15,7 @@ import argparse
 import os
 import sys
 
-__version__ = "0.1.0"
+from app.version import get_version
 
 # A native install has no container boundary around it. Binding every interface
 # by default is how a dashboard ends up readable from the whole LAN, so the
@@ -65,7 +65,7 @@ def _status(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nautgate", description="NautGate LLM gateway")
-    parser.add_argument("--version", action="version", version=f"nautgate {__version__}")
+    parser.add_argument("--version", action="version", version=f"nautgate {get_version()}")
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="run the gateway")

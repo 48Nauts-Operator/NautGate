@@ -11,13 +11,14 @@ import sys
 import pytest
 
 from app import cli
+from app.version import get_version
 
 
 def test_version_is_reported(capsys):
     with pytest.raises(SystemExit) as e:
         cli.main(["--version"])
     assert e.value.code == 0
-    assert "nautgate" in capsys.readouterr().out
+    assert capsys.readouterr().out.strip() == f"nautgate {get_version()}"
 
 
 def test_no_command_prints_help_and_fails(capsys):

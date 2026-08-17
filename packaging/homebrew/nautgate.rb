@@ -30,7 +30,7 @@ class Nautgate < Formula
 
   desc "Memory-aware LLM gateway — routes, records and prices every model call"
   homepage "https://nautgate.dev"
-  url "https://github.com/48Nauts-Operator/NautGate/archive/refs/tags/v0.1.0.tar.gz"
+  url "https://github.com/48Nauts-Operator/NautGate/archive/refs/tags/v0.2.0.tar.gz"
   # TODO(release): real digest — `shasum -a 256` of the release tarball.
   # Left explicit rather than a plausible-looking placeholder, which would only
   # surface as a checksum mismatch on someone else's machine.
@@ -45,14 +45,15 @@ class Nautgate < Formula
   depends_on "python@3.12"
 
   # Resources are GENERATED, never hand-edited:
-  #   python packaging/homebrew/gen_resources.py
-  #   python packaging/homebrew/gen_resources.py --check   # in CI
+  #   uv run --project core python packaging/homebrew/gen_resources.py --write
+  #   uv run --project core python packaging/homebrew/gen_resources.py --check
   # brew update-python-resources cannot help here — it resolves the formula's
   # own package from PyPI and NautGate is not published there, so uv.lock is the
   # source of truth. A stale list installs old dependencies silently.
   # mitmproxy is deliberately absent: an optional extra, and a third of the
   # install.
 
+  # BEGIN GENERATED PYTHON RESOURCES
   resource "annotated-doc" do
     url "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz"
     sha256 "fbcda96e87e9c92ad167c2e53839e57503ecfda18804ea28102353485033faa4"
@@ -96,11 +97,6 @@ class Nautgate < Formula
   resource "click" do
     url "https://files.pythonhosted.org/packages/bb/63/f9e1ea081ce35720d8b92acde70daaedace594dc93b693c869e0d5910718/click-8.3.3.tar.gz"
     sha256 "398329ad4837b2ff7cbe1dd166a4c0f8900c3ca3a218de04466f38f6497f18a2"
-  end
-
-  resource "colorama" do
-    url "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz"
-    sha256 "08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"
   end
 
   resource "cryptography" do
@@ -148,19 +144,9 @@ class Nautgate < Formula
     sha256 "dc280f0982fbda6c38fada4e476dc0a4f3aeaf9c6ad4c28df68a666ec3c61423"
   end
 
-  resource "pydantic" do
-    url "https://files.pythonhosted.org/packages/d9/e4/40d09941a2cebcb20609b86a559817d5b9291c49dd6f8c87e5feffbe703a/pydantic-2.13.3.tar.gz"
-    sha256 "af09e9d1d09f4e7fe37145c1f577e1d61ceb9a41924bf0094a36506285d0a84d"
-  end
-
   resource "pydantic-core" do
     url "https://files.pythonhosted.org/packages/ad/88/5f2260bdfae97aabf98f1778d43f69574390ad787afb646292a638c923d4/pydantic_core-2.33.2.tar.gz"
     sha256 "7cb8bc3605c29176e1b105350d2e6474142d7c1bd1d9327c4a9bdb46bf827acc"
-  end
-
-  resource "pydantic-core" do
-    url "https://files.pythonhosted.org/packages/2a/ef/f7abb56c49382a246fd2ce9c799691e3c3e7175ec74b14d99e798bcddb1a/pydantic_core-2.46.3.tar.gz"
-    sha256 "41c178f65b8c29807239d47e6050262eb6bf84eb695e41101e62e38df4a5bc2c"
   end
 
   resource "pydantic-settings" do
@@ -193,11 +179,6 @@ class Nautgate < Formula
     sha256 "8676b788e32f02ab42d9e7c61324048ae4c6d844a399eebace3d4979d75ceef4"
   end
 
-  resource "typing-extensions" do
-    url "https://files.pythonhosted.org/packages/72/94/1a15dd82efb362ac84269196e94cf00f187f7ed21c242792a923cdb1c61f/typing_extensions-4.15.0.tar.gz"
-    sha256 "0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466"
-  end
-
   resource "typing-inspection" do
     url "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz"
     sha256 "ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464"
@@ -222,6 +203,8 @@ class Nautgate < Formula
     url "https://files.pythonhosted.org/packages/04/24/4b2031d72e840ce4c1ccb255f693b15c334757fc50023e4db9537080b8c4/websockets-16.0.tar.gz"
     sha256 "5f6261a5e56e8d5c42a4497b364ea24d94d9563e8fbd44e78ac40879c60179b5"
   end
+
+  # END GENERATED PYTHON RESOURCES
 
   def install
     # Ship the source tree, not an installed package (see the header).

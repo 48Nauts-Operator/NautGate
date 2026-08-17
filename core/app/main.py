@@ -47,6 +47,7 @@ from app.scoring import load_routing_table
 from app.services.nautrouter import NautRouterClient
 from app.settings import get_settings
 from app.spool import OutcomeSpool
+from app.version import get_version
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "db" / "migrations"
 
@@ -400,7 +401,7 @@ def _redacted_host(url: str) -> str:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="NautGate",
-        version="0.1.0",
+        version=get_version(),
         description="Memory-aware LLM gateway",
         lifespan=lifespan,
     )
