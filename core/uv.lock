@@ -830,6 +830,7 @@ proxy = [
 [package.dev-dependencies]
 dev = [
     { name = "asgi-lifespan" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -854,6 +855,7 @@ provides-extras = ["proxy"]
 [package.metadata.requires-dev]
 dev = [
     { name = "asgi-lifespan", specifier = ">=2.1" },
+    { name = "packaging", specifier = ">=26.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.5" },
