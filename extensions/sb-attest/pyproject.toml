@@ -1,0 +1,29 @@
+[project]
+name = "sb-attest"
+version = "0.1.0"
+description = "Hardware attestation for NautGate: signs digests with a Securosys HSM key"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "asyncpg>=0.29",
+]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "httpx", "asgi-lifespan", "ruff"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
