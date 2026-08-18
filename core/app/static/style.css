@@ -2178,6 +2178,14 @@ html, body { height: 100%; }
 .prov-down { background: rgba(229,72,77,0.05); border-color: rgba(229,72,77,0.35); }
 .prov-down .prov-detail { color: var(--bad); }
 
+/* Agent streams on Overview — compact model/provider and route-mix cells. */
+.stream-models { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 220px; }
+.stream-model { display: flex; align-items: center; gap: 8px; max-width: 100%; font-size: 12px; }
+.stream-model .v2-provider { color: var(--text-dim); }
+.stream-model-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.stream-model-calls { color: var(--label); font-family: var(--mono); font-size: 10.5px; }
+.stream-lanes { display: flex; flex-wrap: wrap; gap: 5px; min-width: 130px; }
+
 /* drift compact callouts */
 .dr-callouts { display: flex; gap: 14px; flex-wrap: wrap; }
 .dr-callout {

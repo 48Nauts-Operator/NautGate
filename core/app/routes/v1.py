@@ -167,6 +167,7 @@ def _resolve_pricing_provider(
     _NOT_A_PRICING_PROVIDER = (
         "passthrough",
         "chatgpt-oauth",
+        "chatgpt-subscription",
         "override",
         "openai-responses",
     )
@@ -407,6 +408,26 @@ async def _process_chat_request(
             payload["model"] = normalized
             decision_reason = f"explicit:{model_requested}->{normalized}"
 
+    # An ordinary ng_ client can explicitly select a model covered by the
+    # operator's ChatGPT plan.  Claim the subscription lane here so the request
+    # never reaches NautRouter's metered OPENAI_API_KEY forwarder.
+    subscription_client = getattr(request.app.state, "chatgpt_subscription", None)
+    subscription_enabled = bool(
+        settings and getattr(settings, "nautgate_chatgpt_subscription_cli", False)
+    )
+    if subscription_enabled:
+        from app.chatgpt_subscription import is_chatgpt_subscription_model
+
+        # Only when the CLIENT named the model. The comment above says
+        # "explicitly select" and the code claimed auto-routed picks too, which
+        # hijacked tier routing's gpt-4o-mini onto the codex websocket
+        # (test_auto_routes_short_prompt_to_fast went 502).
+        if is_chatgpt_subscription_model(decision_model) and decision_reason.startswith("explicit"):
+            if subscription_client is None:
+                raise HTTPException(status_code=503, detail="chatgpt_subscription_unavailable")
+            decision_provider = "chatgpt-subscription"
+            decision_reason += ":codex-cli"
+
     captured = capture_prompt(messages, classification.sensitivity)
     captured_tools = capture_tools(payload.get("tools"), classification.sensitivity)
 
@@ -497,6 +518,16 @@ async def _process_chat_request(
         "X-Nautgate-Inbound-Format": inbound_format,
     }
 
+    # The subscription lane (Codex CLI) cannot stream. A 501 here surfaced as
+    # "Could not answer" in every streaming client the moment routing picked
+    # this lane (NautBot chat, 2026-08-18). Downgrade to a pseudo-stream
+    # instead: run the request non-streaming and deliver the finished answer
+    # as one SSE chunk. The content arrives all at once, which beats an error.
+    pseudo_stream = False
+    if payload.get("stream") and decision_provider == "chatgpt-subscription":
+        payload.pop("stream", None)
+        pseudo_stream = True
+
     if payload.get("stream"):
         return _streaming_response(
             request=request,
@@ -524,7 +555,10 @@ async def _process_chat_request(
     upstream_resp: dict | None = None
     upstream_reason: str | None = None
     try:
-        raw = await nautrouter.chat_completions(payload, headers=_router_headers)
+        if decision_provider == "chatgpt-subscription":
+            raw = await subscription_client.chat_completions(payload)
+        else:
+            raw = await nautrouter.chat_completions(payload, headers=_router_headers)
     except httpx.HTTPStatusError as exc:
         upstream_status = exc.response.status_code
         upstream_reason = _upstream_reason(exc.response)
@@ -537,6 +571,7 @@ async def _process_chat_request(
         raw = None
     except Exception as exc:
         upstream_status = 502
+        upstream_reason = str(exc) or type(exc).__name__
         # str() on an httpx timeout is the empty string, so logging only the
         # message produced `error: ""` and told us nothing — a 120s read timeout
         # looked identical to a hard upstream failure. Always log the type.
@@ -595,7 +630,7 @@ async def _process_chat_request(
     actual_model = upstream_resp.get("model") if isinstance(upstream_resp, dict) else None
     actual_provider = upstream_resp.get("provider") if isinstance(upstream_resp, dict) else None
     cost_provider = _resolve_pricing_provider(decision_provider, actual_provider, decision_model)
-    cost_usd = (
+    computed_cost = (
         pricing.compute_cost(
             cost_provider,
             decision_model,
@@ -607,6 +642,9 @@ async def _process_chat_request(
         if pricing is not None
         else None
     )
+    is_subscription = decision_provider == "chatgpt-subscription"
+    cost_usd = 0.0 if is_subscription and upstream_resp is not None else computed_cost
+    notional_cost_usd = computed_cost if is_subscription else None
     await persist_outcome(
         pool,
         spool,
@@ -627,6 +665,7 @@ async def _process_chat_request(
         tool_calls_made=tool_calls_made,
         actual_model=actual_model,
         actual_provider=actual_provider,
+        notional_cost_usd=notional_cost_usd,
     )
     # Brain layer — fire-and-forget. Compute bloat findings + update scorecard.
     # Wrapped in try/except so a brain failure never breaks the request path.
@@ -751,6 +790,34 @@ async def _process_chat_request(
                 "duration_ms": duration_ms,
             }
         )
+
+    if pseudo_stream:
+        chunk = {
+            "id": final.get("id", f"chatcmpl-{decision_id}"),
+            "object": "chat.completion.chunk",
+            "created": final.get("created"),
+            "model": final.get("model", decision_model),
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": (final.get("choices") or [{}])[0].get("message", {}),
+                    "finish_reason": (final.get("choices") or [{}])[0].get("finish_reason", "stop"),
+                }
+            ],
+            "usage": final.get("usage"),
+        }
+        raw = f"data: {json.dumps(chunk)}\n\n".encode()
+        # /v1/responses speaks a different event vocabulary. Its translator is
+        # already built for this request, so feed the pseudo-chunk through it
+        # rather than handing a responses client chat-completion events.
+        if stream_translator is not None:
+            parts = list(stream_translator(raw))
+            if stream_translator_finish is not None:
+                parts.extend(stream_translator_finish())
+            body = b"".join(parts).decode("utf-8", "replace")
+        else:
+            body = f"{raw.decode()}data: [DONE]\n\n"
+        return Response(content=body, media_type="text/event-stream", headers=headers)
 
     return JSONResponse(content=final, headers=headers)
 
@@ -1573,6 +1640,7 @@ _PROVIDER_LABELS = {
     "anthropic": "Anthropic",
     "openrouter": "OpenRouter",
     "chatgpt-oauth": "Codex",
+    "chatgpt-subscription": "GPT (Max)",
     "passthrough": "Passthrough",
 }
 _STATUS_RANK = {"up": 0, "ok": 0, "no-data": 1, "no-cred": 1, "degraded": 2, "down": 3}

@@ -325,6 +325,108 @@ async def get_cost_summary(
             else []
         )
 
+        # Overview "streams": one agent with the models/providers it actually
+        # used.  Keep this linked at query time; combining the independent
+        # by_agent + by_model lists in the browser cannot tell which agent used
+        # which model and produced a misleading cost view.
+        stream_rows = await conn.fetch(
+            f"""
+            SELECT d.agent_id AS agent_id,
+                   COALESCE(o.actual_provider, d.decision_provider) AS provider,
+                   COALESCE(o.actual_model, d.decision_model) AS model,
+                   COUNT(*) AS calls,
+                   SUM(o.cost_usd)::FLOAT AS cost_usd,
+                   SUM(o.notional_cost_usd)::FLOAT AS notional_cost_usd,
+                   SUM(o.prompt_tokens)::BIGINT AS prompt_tokens,
+                   SUM(o.completion_tokens)::BIGINT AS completion_tokens,
+                   MAX(d.ts) AS last_seen_at,
+                   SUM(CASE
+                         WHEN COALESCE(o.cost_usd, 0) > 0 THEN 1 ELSE 0
+                       END) AS metered_calls,
+                   SUM(CASE
+                         WHEN COALESCE(o.cost_usd, 0) = 0
+                          AND COALESCE(o.notional_cost_usd, 0) > 0
+                         THEN 1 ELSE 0
+                       END) AS subscription_calls,
+                   SUM(CASE
+                         WHEN COALESCE(o.actual_provider, d.decision_provider) = 'lmstudio'
+                           OR COALESCE(o.actual_model, d.decision_model) LIKE 'lmstudio/%'
+                         THEN 1 ELSE 0
+                       END) AS local_calls
+              FROM nautgate.route_decisions d
+              LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
+             WHERE {where}
+             GROUP BY d.agent_id,
+                      COALESCE(o.actual_provider, d.decision_provider),
+                      COALESCE(o.actual_model, d.decision_model)
+             ORDER BY MAX(d.ts) DESC
+            """,
+            *base_params,
+        )
+
+        streams_by_agent: dict[str, dict] = {}
+        for r in stream_rows:
+            agent = r["agent_id"] or "unknown"
+            stream = streams_by_agent.setdefault(
+                agent,
+                {
+                    "agent_id": agent,
+                    "calls": 0,
+                    "cost_usd": 0.0,
+                    "notional_cost_usd": 0.0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "metered_calls": 0,
+                    "subscription_calls": 0,
+                    "local_calls": 0,
+                    "last_seen_at": None,
+                    "models": [],
+                },
+            )
+            calls = int(r["calls"] or 0)
+            cost = float(r["cost_usd"] or 0)
+            notional = float(r["notional_cost_usd"] or 0)
+            stream["calls"] += calls
+            stream["cost_usd"] += cost
+            stream["notional_cost_usd"] += notional
+            stream["prompt_tokens"] += int(r["prompt_tokens"] or 0)
+            stream["completion_tokens"] += int(r["completion_tokens"] or 0)
+            stream["metered_calls"] += int(r["metered_calls"] or 0)
+            stream["subscription_calls"] += int(r["subscription_calls"] or 0)
+            stream["local_calls"] += int(r["local_calls"] or 0)
+            seen = r["last_seen_at"]
+            if seen and (stream["last_seen_at"] is None or seen > stream["last_seen_at"]):
+                stream["last_seen_at"] = seen
+            stream["models"].append(
+                {
+                    "provider": r["provider"],
+                    "model": r["model"],
+                    "calls": calls,
+                    "cost_usd": cost,
+                    "notional_cost_usd": notional,
+                }
+            )
+
+        by_stream = list(streams_by_agent.values())
+        for stream in by_stream:
+            seen = stream["last_seen_at"]
+            if seen:
+                stream["last_seen_at"] = seen.isoformat()
+            stream["models"].sort(key=lambda m: m["calls"], reverse=True)
+            classified = (
+                stream["metered_calls"]
+                + stream["subscription_calls"]
+                + stream["local_calls"]
+            )
+            stream["unpriced_calls"] = max(0, stream["calls"] - classified)
+        by_stream.sort(
+            key=lambda r: (
+                r["cost_usd"] + r["notional_cost_usd"],
+                r["calls"],
+            ),
+            reverse=True,
+        )
+
     return {
         "agent_id": "*" if is_all else agent_id,
         "project_id": project_id or "*",
@@ -341,6 +443,7 @@ async def get_cost_summary(
         "by_tier": by_tier,
         "by_agent": by_agent,
         "by_project": by_project,
+        "by_stream": by_stream,
     }
 
 

@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NautGate — Go-live</title>
+<style>
+  :root{
+    --brand:#808000;--lift:#C3CE1F;--mid:#A3AB00;
+    --ground:#000000;--surface:#0a0a08;--line:#2A2E14;
+    --paper:#F0F0E4;--body:#A8AD86;--faint:#7E8748;
+    --good:#3FB950;--warn:#D6A100;--bad:#E5484D;--info:#4C8DFF;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--ground);color:var(--body);font-family:var(--sans);
+       font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
+       background-image:radial-gradient(120% 60% at 50% -10%, color-mix(in srgb,var(--brand) 9%, transparent), transparent 70%);}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 80px}
+  a{color:var(--lift)}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint)}
+  h1{font-family:var(--sans);font-weight:800;font-size:clamp(30px,5vw,44px);line-height:1.02;
+     letter-spacing:-.02em;color:var(--paper);margin:10px 0 6px;text-wrap:balance}
+  .tagline{margin:0;color:var(--body)}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:14px;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+  .meta .rep{border:1px solid var(--line);border-radius:20px;padding:3px 11px;color:var(--body)}
+
+  /* summary */
+  .summary{margin:30px 0 8px;padding:22px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+  .bar{height:10px;border-radius:6px;background:color-mix(in srgb,var(--line) 60%,transparent);overflow:hidden}
+  .bar>span{display:block;height:100%;border-radius:6px;
+            background:linear-gradient(90deg,var(--brand),var(--lift));transition:width .6s ease}
+  .sumtop{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+  .pct{font-family:var(--sans);font-weight:800;font-size:34px;color:var(--paper);letter-spacing:-.02em;
+       font-variant-numeric:tabular-nums}
+  .pct small{font-size:14px;font-weight:500;color:var(--faint);margin-left:8px;letter-spacing:0}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .legend b{color:var(--body);font-weight:400}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:6px;vertical-align:1px}
+
+  /* groups */
+  .grp{margin-top:34px}
+  .ghead{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--line);padding-bottom:10px}
+  .ghead h2{font-family:var(--sans);font-weight:700;font-size:17px;letter-spacing:-.01em;color:var(--paper);margin:0}
+  .gcount{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .gnote{margin:10px 0 0;font-size:13.5px;color:var(--faint)}
+
+  .items{list-style:none;margin:6px 0 0;padding:0}
+  .item{display:flex;align-items:flex-start;gap:14px;padding:13px 4px 13px 14px;
+        border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);position:relative}
+  .item::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:transparent}
+  .item.done::before{background:var(--good)}
+  .item.wip::before{background:var(--info)}
+  .item.blocked::before{background:var(--warn)}
+  .item.na{opacity:.5}
+  .mark{flex:0 0 auto;width:20px;height:20px;margin-top:1px;display:grid;place-items:center;
+        font-family:var(--mono);font-size:13px;border-radius:6px;border:1px solid var(--line);color:var(--faint)}
+  .item.done .mark{color:var(--good);border-color:color-mix(in srgb,var(--good) 45%,var(--line))}
+  .item.wip .mark{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,var(--line))}
+  .item.blocked .mark{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+  .itxt{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .ilabel{color:var(--paper);font-size:14.5px}
+  .item.done .ilabel{color:var(--body)}
+  .idetail{font-size:12.5px;color:var(--faint);line-height:1.45}
+  .imeta{flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .id,.owner{font-family:var(--mono);font-size:10.5px;color:var(--faint);border:1px solid var(--line);
+             border-radius:5px;padding:2px 7px;white-space:nowrap}
+  .owner{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.1em;font-weight:600;white-space:nowrap;
+        color:var(--c);border:1px solid color-mix(in srgb,var(--c) 45%,var(--line));
+        background:color-mix(in srgb,var(--c) 12%,transparent);border-radius:20px;padding:3px 10px}
+
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
+         font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+  @media (max-width:600px){
+    .item{flex-wrap:wrap}
+    .imeta{width:100%;justify-content:flex-start;padding-left:34px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">Go-live checklist</p>
+    <h1>NautGate</h1>
+    <p class="tagline">What's missing before strangers can use it</p>
+    <div class="meta">
+      <span class="rep">48Nauts-Operator/NautGate</span>
+      <span>generated 2026-08-08</span>
+    </div>
+
+    <div class="summary">
+      <div class="sumtop">
+        <div class="pct">34%<small>12 of 35 done</small></div>
+      </div>
+      <div class="bar"><span style="width:34%"></span></div>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--good)"></span>done <b>12</b></span>
+        <span><span class="dot" style="background:var(--info)"></span>in progress <b>6</b></span>
+        <span><span class="dot" style="background:var(--faint)"></span>todo <b>10</b></span>
+        <span><span class="dot" style="background:var(--warn)"></span>on you <b>7</b></span>
+      </div>
+    </div>
+
+    
+    <section class="grp">
+      <header class="ghead">
+        <h2>Blocking — the documented install does not work today</h2>
+        <span class="gcount">0/3</span>
+      </header>
+      <p class="gnote">nautgate.dev/compose.yml is live and public. It tells people to pull images they cannot pull. Anyone following the README right now gets a denied pull, not a gateway.</p>
+      <ul class="items">
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">GHCR images pullable by an anonymous stranger</span>
+          <span class="idetail">MEASURED: anonymous token + tags/list against ghcr.io returns not-pullable for all three of nautgate, nautrouter, nautproxy. GHCR package visibility is set per-package and does NOT follow the repo flipping public — it is a separate switch you must throw for each image.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Repo flipped public</span>
+          <span class="idetail">gh repo view reports visibility: PRIVATE. The v0.1.0 release, the AGPL licence and the docs all exist behind it.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">Fresh-install smoke actually proves the public path</span>
+          <span class="idetail">Go-live smoke workflow is green, but it runs inside the repo with its credentials — it can pull images a stranger cannot. A green run here does not prove the public install works, and today it demonstrably does not. Needs one unauthenticated pull in CI.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Blocking — correctness a new user would hit on day one</h2>
+        <span class="gcount">0/7</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">claude-* via /v1/chat/completions returns an empty 200</span>
+          <span class="idetail">High priority, still sitting in inbox — untriaged. An empty 200 on the primary documented endpoint is the worst failure mode: it looks like success. This is the single most likely thing to make a first-time user close the tab.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-27</span>
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">Cost + savings figures are right out of the box</span>
+          <span class="idetail">PR #41 open, adds the Claude 5 family — Opus 5 priced as NULL, so 10,585 calls / 12.9M tokens counted as $0. Still unpriced beyond that PR: chatgpt-oauth/gpt-5.6-sol (4,128 calls) and claude-sonnet-4-6 (2,970). A gateway whose headline number is silently wrong is worse than one that shows nothing.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">Browser clients can reach the API (CORS)</span>
+          <span class="idetail">PR #40 open. Gateway sent no Access-Control-* headers at all and answered preflight with 405, so any browser-based client got an unexplained 'unreachable'. Verified fixed on the branch; unmerged.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">Backups work inside the published container</span>
+          <span class="idetail">In review. Current path shells out to docker exec, which does not exist for someone running the published image. Stateful product — this is a data-loss gap, not a nicety.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-7</span>
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">Passthrough traffic is not analytics-blind</span>
+          <span class="idetail">In review. classify + drift never run on OAuth traffic — for a subscription-first user that is most of their traffic, so the dashboard under-reports on the default path.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-1</span>
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">Translator preserves tool_use / tool_result history</span>
+          <span class="idetail">In review. Dropping it derails agentic loops on routed models — silent wrong behaviour rather than an error.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-2</span>
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">22,421 outcomes carry no usage counts at all</span>
+          <span class="idetail">Found while diagnosing the savings number. Separate from any pricing gap: all four token counts are NULL, so cost cannot be computed for those calls even with a correct price table. Root cause not yet investigated.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Distribution — the brew one-liner</h2>
+        <span class="gcount">1/4</span>
+      </header>
+      <p class="gnote">Asked directly. Honest answer: not started. No formula, no cask, no ticket.</p>
+      <ul class="items">
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Homebrew tap exists</span>
+          <span class="idetail">48Nauts-Operator/homebrew-tap is public and live — but contains exactly one item, Casks/xnaut.rb. Nothing for NautGate.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">brew install for NautGate</span>
+          <span class="idetail">Needs a shape decision first: a cask wrapping the Docker stack still requires Docker and inherits every image problem above; a formula running the Python gateway natively avoids Docker but needs Postgres as a dependency and a brew services / launchd story. No ticket exists yet.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">setup.sh one-command capture onboarding</span>
+          <span class="idetail">In progress. Also needs serving from nautgate.dev so it is curl-able.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-23</span>
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">setup.ps1 for native Windows</span>
+          <span class="idetail">Explicitly asked for (Windows + Linux). Not started.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-23</span>
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Quality — the human pass, not just CI</h2>
+        <span class="gcount">0/4</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">Pre-launch QA sweep: spelling, docs accuracy, mobile, cross-browser</span>
+          <span class="idetail">Ready, not started. Docs accuracy matters most here — verify claims against the CURRENT shipping code, not the README.</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-14</span>
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">In-app help covers every tab</span>
+          <span class="idetail">4 tabs still uncovered (Decisions among them).</span>
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-20</span>
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">Dependabot Updates job is green</span>
+          <span class="idetail">MEASURED: latest run failed (5 of the last 6 runs failing). Cosmetic for users, but it is the one red badge on the repo a visitor sees.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">Dependency PR backlog triaged</span>
+          <span class="idetail">14 open dependabot PRs, some non-trivial: python 3.12→3.14 base image, fastapi 0.136→0.139, typescript 5→7. Merging these AFTER launch means doing it under public scrutiny.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Already true — verified, not assumed</h2>
+        <span class="gcount">11/11</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">AGPL-3.0 LICENSE present</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">README + quickstart docs</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Dependencies pinned (uv.lock committed)</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Dockerfile with HEALTHCHECK + .dockerignore</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">config/ is copied into the image</span>
+          <span class="idetail">NAUTGATE-5's headline defect (config/ missing → NULL costs, broken model:auto) is fixed in the current Dockerfile. Re-verified today; earlier notes saying otherwise were stale.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">CI green on main</span>
+          <span class="idetail">Latest CI run: success. Go-live smoke: success. Docker publish: success.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">No secrets or key material tracked in git</span>
+          <span class="idetail">Checked for .env, *.pem, *.key, *_rsa — none tracked.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">v0.1.0 release cut</span>
+          <span class="idetail">Tagged 2026-07-23, 'first public release'.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">nautgate.dev + docs.nautgate.dev live</span>
+          <span class="idetail">Both 200, and /compose.yml serves.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">First-run key minting from the dashboard</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">In-app provider key management</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Switches only you can throw</h2>
+        <span class="gcount">0/6</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Merge PR #40 (CORS) and #41 (Claude 5 pricing)</span>
+          
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Restart :8090 after merging so the new config loads</span>
+          <span class="idetail">I am blocked from restarting it by the permission classifier.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Decide on the historical pricing backfill</span>
+          <span class="idetail">Dry run ready: 13,930 rows, +$2,948.47 recovered. Writes to the live DB, so it waits on you.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Confirm the fable-5 rate</span>
+          <span class="idetail">Configured $50/M in, $250 out; OpenRouter publishes $10/$50. The $50 is attributed to you in a code comment. If OpenRouter is right, fable-5 inflates savings 5×.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">CLA bot (cla-assistant)</span>
+          <span class="idetail">Carried over from the GitHub community setup; still outstanding.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">Amend GitHub Sponsors profile for NautGate</span>
+          
+        </span>
+        <span class="imeta">
+          <span class="id">NAUTGATE-19</span>
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li></ul>
+    </section>
+
+    <footer>
+      <span>NautGate · go-live-checker</span>
+      <span>12/35 complete · 34%</span>
+    </footer>
+  </main>
+</body>
+</html>

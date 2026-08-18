@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NautGate — Go-live</title>
+<style>
+  :root{
+    --brand:#808000;--lift:#C3CE1F;--mid:#A3AB00;
+    --ground:#000000;--surface:#0a0a08;--line:#2A2E14;
+    --paper:#F0F0E4;--body:#A8AD86;--faint:#7E8748;
+    --good:#3FB950;--warn:#D6A100;--bad:#E5484D;--info:#4C8DFF;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--ground);color:var(--body);font-family:var(--sans);
+       font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
+       background-image:radial-gradient(120% 60% at 50% -10%, color-mix(in srgb,var(--brand) 9%, transparent), transparent 70%);}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 80px}
+  a{color:var(--lift)}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint)}
+  h1{font-family:var(--sans);font-weight:800;font-size:clamp(30px,5vw,44px);line-height:1.02;
+     letter-spacing:-.02em;color:var(--paper);margin:10px 0 6px;text-wrap:balance}
+  .tagline{margin:0;color:var(--body)}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:14px;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+  .meta .rep{border:1px solid var(--line);border-radius:20px;padding:3px 11px;color:var(--body)}
+
+  /* summary */
+  .summary{margin:30px 0 8px;padding:22px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+  .bar{height:10px;border-radius:6px;background:color-mix(in srgb,var(--line) 60%,transparent);overflow:hidden}
+  .bar>span{display:block;height:100%;border-radius:6px;
+            background:linear-gradient(90deg,var(--brand),var(--lift));transition:width .6s ease}
+  .sumtop{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+  .pct{font-family:var(--sans);font-weight:800;font-size:34px;color:var(--paper);letter-spacing:-.02em;
+       font-variant-numeric:tabular-nums}
+  .pct small{font-size:14px;font-weight:500;color:var(--faint);margin-left:8px;letter-spacing:0}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .legend b{color:var(--body);font-weight:400}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:6px;vertical-align:1px}
+
+  /* groups */
+  .grp{margin-top:34px}
+  .ghead{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--line);padding-bottom:10px}
+  .ghead h2{font-family:var(--sans);font-weight:700;font-size:17px;letter-spacing:-.01em;color:var(--paper);margin:0}
+  .gcount{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .gnote{margin:10px 0 0;font-size:13.5px;color:var(--faint)}
+
+  .items{list-style:none;margin:6px 0 0;padding:0}
+  .item{display:flex;align-items:flex-start;gap:14px;padding:13px 4px 13px 14px;
+        border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);position:relative}
+  .item::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:transparent}
+  .item.done::before{background:var(--good)}
+  .item.wip::before{background:var(--info)}
+  .item.blocked::before{background:var(--warn)}
+  .item.na{opacity:.5}
+  .mark{flex:0 0 auto;width:20px;height:20px;margin-top:1px;display:grid;place-items:center;
+        font-family:var(--mono);font-size:13px;border-radius:6px;border:1px solid var(--line);color:var(--faint)}
+  .item.done .mark{color:var(--good);border-color:color-mix(in srgb,var(--good) 45%,var(--line))}
+  .item.wip .mark{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,var(--line))}
+  .item.blocked .mark{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+  .itxt{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .ilabel{color:var(--paper);font-size:14.5px}
+  .item.done .ilabel{color:var(--body)}
+  .idetail{font-size:12.5px;color:var(--faint);line-height:1.45}
+  .imeta{flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .id,.owner{font-family:var(--mono);font-size:10.5px;color:var(--faint);border:1px solid var(--line);
+             border-radius:5px;padding:2px 7px;white-space:nowrap}
+  .owner{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.1em;font-weight:600;white-space:nowrap;
+        color:var(--c);border:1px solid color-mix(in srgb,var(--c) 45%,var(--line));
+        background:color-mix(in srgb,var(--c) 12%,transparent);border-radius:20px;padding:3px 10px}
+
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
+         font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+  @media (max-width:600px){
+    .item{flex-wrap:wrap}
+    .imeta{width:100%;justify-content:flex-start;padding-left:34px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">Go-live checklist</p>
+    <h1>NautGate</h1>
+    <p class="tagline">State of play — 10 Aug. 19 PRs merged, 0 open, 2 launch blockers left</p>
+    <div class="meta">
+      <span class="rep">48Nauts-Operator/NautGate</span>
+      <span>generated 2026-08-10</span>
+    </div>
+
+    <div class="summary">
+      <div class="sumtop">
+        <div class="pct">58%<small>15 of 26 done</small></div>
+      </div>
+      <div class="bar"><span style="width:58%"></span></div>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--good)"></span>done <b>15</b></span>
+        <span><span class="dot" style="background:var(--info)"></span>in progress <b>3</b></span>
+        <span><span class="dot" style="background:var(--faint)"></span>todo <b>3</b></span>
+        <span><span class="dot" style="background:var(--warn)"></span>on you <b>5</b></span>
+      </div>
+    </div>
+
+    
+    <section class="grp">
+      <header class="ghead">
+        <h2>Needs deploying — merged but not live</h2>
+        <span class="gcount">2/3</span>
+      </header>
+      <p class="gnote">Everything below is on main. The live gateway still runs the code from before these landed.</p>
+      <ul class="items">
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">#57 — retention pruner was failing every tick</span>
+          <span class="idetail">Body retention shipped enabled and pruned nothing: the interval reached asyncpg as the string &quot;90 days&quot; and every run raised DataError, retrying hourly forever. It got through because the tests used a fake pool that asserted the VALUE and never a type. Test now pins the type; the pruner was run against the live DB — 527 decision rows and 315 outcome rows pruned. MERGED — deploy is tracked separately below.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">#58 — copy button on the first-run screen</span>
+          <span class="idetail">The activation command was clipped by its own box — unreadable and unselectable. Copy button pinned beside it, with an execCommand fallback because navigator.clipboard is undefined over plain http, which is exactly how this screen gets reached on a LAN or tailnet. Verified with a real click in Chrome. MERGED — deploy is tracked separately below.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Deploy step: git pull, then restart</span>
+          <span class="idetail">This session is worktree-isolated, so it cannot move the live checkout's HEAD — deliberately, since a running service loads from there. The pull needs a separate terminal; the rebuild and restart I can do.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Blocking a public launch — yours</h2>
+        <span class="gcount">0/4</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Repo + GHCR packages public</span>
+          <span class="idetail">Worth retrying now. The last attempt failed because the CONTAINER was broken — it found none of its config files (#47) — not because of package visibility. Visibility is UI-only; GitHub exposes no REST API, so #49 detects the problem rather than fixing it.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Anthropic account has no credit</span>
+          <span class="idetail">Key is valid, balance empty, so Anthropic answers 400. Metered Anthropic now fails loudly rather than returning an empty 200. The subscription lane is unaffected.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Body retention window</span>
+          <span class="idetail">Shipped at 90 days as chosen, but measured: 90d frees 69 MB today and settles near 33 GB — larger than the 22 GB of bodies stored now, because the oldest row is only 95 days old. 30d settles near 11 GB, 14d near 5 GB. One env var: NAUTGATE_BODY_RETENTION_DAYS.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li>
+      <li class="item blocked">
+        <span class="mark" aria-hidden="true">★</span>
+        <span class="itxt">
+          <span class="ilabel">Decide the brew shape</span>
+          <span class="idetail">Not started, no ticket. Cask wrapping Docker vs native formula needing Postgres and brew services.</span>
+        </span>
+        <span class="imeta">
+          
+          <span class="owner">Andre</span>
+          <span class="chip" style="--c:#D6A100">ON YOU</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Next in my queue</h2>
+        <span class="gcount">0/6</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">NAUTGATE-7 — backups broken in the published container</span>
+          <span class="idetail">In review. Shells out to docker exec, which does not exist inside the shipped image. Adjacent to work already done this session on the same file.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">NAUTGATE-1 — passthrough traffic is analytics-blind</span>
+          <span class="idetail">In review. classify + drift never run on OAuth traffic, which is most traffic for a subscription-first user.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item wip">
+        <span class="mark" aria-hidden="true">→</span>
+        <span class="itxt">
+          <span class="ilabel">NAUTGATE-2 — translator drops tool_use/tool_result history</span>
+          <span class="idetail">In review. Derails agentic loops on routed models — wrong behaviour rather than an error.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#4C8DFF">IN PROGRESS</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">First-run screen still gives wrong instructions</span>
+          <span class="idetail">It says the key was printed to the container log. That is wrong for a non-Docker install and useless after a rebuild, since the key is only ever printed once. It never mentions NAUTGATE_LOCAL_ADMIN_TOKEN, which is the actual answer for a remote browser.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">NAUTGATE-14 QA sweep</span>
+          <span class="idetail">Docs-accuracy half done — pricing pages quote no hardcoded rates, so this session's corrections did not invalidate them. Spelling, mobile and cross-browser still open.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li>
+      <li class="item todo">
+        <span class="mark" aria-hidden="true">·</span>
+        <span class="itxt">
+          <span class="ilabel">Dependabot red, 14 dependency PRs queued</span>
+          <span class="idetail">Includes python 3.12→3.14 base image, fastapi, typescript 5→7. Merging these after launch means doing it in public.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#7E8748">TODO</span>
+        </span>
+      </li></ul>
+    </section>
+    <section class="grp">
+      <header class="ghead">
+        <h2>Done this session</h2>
+        <span class="gcount">13/13</span>
+      </header>
+      
+      <ul class="items">
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Published image found none of its config files (#47)</span>
+          <span class="idetail">THE reason the install failed. Every published container ran with costs NULL, model:auto dead and compliance off. NAUTGATE-5 had added the COPY and stopped there, so the bug outlived its own fix.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Dashboard leaked a working API key to the network (#54)</span>
+          <span class="idetail">Proven by scraping the token over the tailnet address with no credentials and calling /v1/stats — 200. Now loopback-only; verified live.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Provider errors no longer become an empty 200 (#45)</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Pricing verified against Anthropic's published rates (#44)</span>
+          <span class="idetail">Fable 5 was 5x high; Opus 4.7/4.8 3x high, aliased to a RETIRED model's price. $29,640.89 of reported savings never existed.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Historical repricing applied</span>
+          <span class="idetail">56,407 rows rewritten. All-time $41,368 → $15,438. Snapshot kept in nautgate.notional_backup_20260809.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Streamed calls recorded no tokens (#50)</span>
+          <span class="idetail">OpenRouter/OpenAI/Gemini never requested stream_options.include_usage, so streamed calls cost $0 in the ledger.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">47 log sites could emit error:&quot;&quot; (#51)</span>
+          <span class="idetail">Paid for itself within minutes of deploy — it is what made #57 a seconds-long diagnosis.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Backups: sandbox dumped production, schedule was a disk bomb (#52, #56)</span>
+          <span class="idetail">Dump target was hardcoded to `nautgate` regardless of config; defaults were every 3h keeping 20. Now 24h/keep-3, and retention reaps files it lost track of. 55 GB → 30 GB on disk.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Tailscale IP and default telemetry removed (#46)</span>
+          <span class="idetail">Was in 14 files. NautRouter defaulted MEMORY_API to a private host and POSTed usage on every routed call.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">CHANGELOG and the standard that keeps it honest (#42, #43)</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">CORS (#40), 442-model catalogue (#38), first-run error message (#48)</span>
+          
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">CI now pulls the images with no credentials (#49)</span>
+          <span class="idetail">The smoke test runs with repo credentials, so it stayed green through a completely broken public install.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li>
+      <li class="item done">
+        <span class="mark" aria-hidden="true">✓</span>
+        <span class="itxt">
+          <span class="ilabel">Recovered the stack after the crash</span>
+          <span class="idetail">Colima was left Broken with stale sockets. Force-stop cleared them; VM and its 20 GiB disk intact. Deliberately avoided colima delete, which would have taken the database.</span>
+        </span>
+        <span class="imeta">
+          
+          
+          <span class="chip" style="--c:#3FB950">DONE</span>
+        </span>
+      </li></ul>
+    </section>
+
+    <footer>
+      <span>NautGate · go-live-checker</span>
+      <span>15/26 complete · 58%</span>
+    </footer>
+  </main>
+</body>
+</html>

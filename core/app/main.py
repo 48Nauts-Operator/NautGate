@@ -151,6 +151,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.db = None
     app.state.nautrouter = None
+    app.state.chatgpt_subscription = None
     app.state.outcome_spool = OutcomeSpool(settings.nautgate_outcome_spool_path)
     app.state.health_tracker = ProviderHealthTracker()
     app.state.plugins = PluginRegistry.from_config(settings.nautgate_config_path)
@@ -243,6 +244,30 @@ async def lifespan(app: FastAPI):
             timeout_s=settings.nautgate_upstream_timeout_s,
         )
         log.info("nautrouter_client_ready", base_url=settings.nautrouter_base_url)
+
+    if settings.nautgate_chatgpt_subscription_cli:
+        try:
+            from app.chatgpt_subscription import CodexSubscriptionClient
+
+            app.state.chatgpt_subscription = CodexSubscriptionClient(
+                executable=settings.nautgate_codex_cli_path,
+                codex_home=settings.nautgate_codex_home,
+                workdir=settings.nautgate_subscription_workdir,
+                timeout_s=settings.nautgate_upstream_timeout_s,
+            )
+            log.info(
+                "chatgpt_subscription_ready",
+                transport="codex-cli",
+                codex_home_configured=bool(settings.nautgate_codex_home),
+            )
+        except Exception as exc:
+            # Fail closed at startup: a missing CLI must not cause explicit GPT
+            # traffic to leak into the metered NautRouter OpenAI provider.
+            log.error(
+                "chatgpt_subscription_unavailable",
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
 
     # Quality-eval judge client. Direct httpx to OpenAI (or LMStudio when
     # the operator picks that in Settings) — intentionally bypasses

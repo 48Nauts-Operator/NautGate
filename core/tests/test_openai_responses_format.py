@@ -172,6 +172,16 @@ async def responses_app(monkeypatch, empty_db_pool):
     application = create_app()
     async with LifespanManager(application):
         application.state.db = empty_db_pool
+        # The operator's own NAUTGATE_CHATGPT_SUBSCRIPTION_CLI is loaded into the
+        # process at startup, and with the lane on, any explicitly-named gpt
+        # model bypasses the mocked nautrouter below and shells out to the real
+        # Codex CLI (exit 1 -> 502). Setting the env var is not enough: settings
+        # are resolved once and cached, so an earlier test in the suite fixes the
+        # value before this fixture runs. Pin the resolved objects instead.
+        # These tests cover the responses FORMAT, not provider selection.
+        if getattr(application.state, "settings", None) is not None:
+            application.state.settings.nautgate_chatgpt_subscription_cli = False
+        application.state.chatgpt_subscription = None
         mock = AsyncMock()
         application.state.nautrouter = mock
         yield application, {"precapture": pre, "outcome": out, "mock": mock}

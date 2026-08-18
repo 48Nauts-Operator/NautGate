@@ -753,25 +753,93 @@
     // (e.g. before a session is added, or while the first fetch is in flight).
     const kpisEl = document.getElementById("overview-kpis");
     if (kpisEl && !kpisEl.children.length) {
-      NG.statRow(kpisEl, ["Requests", "Empty rate", "p50 latency", "p95 latency"].map(
+      NG.statRow(kpisEl, ["Requests", "Metered spend", "Subscription covered", "Tokens", "p95 latency"].map(
         (label) => NG.statCard({ label, value: "—" })));
       renderOverviewBars("overview-tier-card", "Requests by tier", null);
     }
     try {
-      const s = await api("/v1/stats?hours=" + overviewWindow.hours);
+      const [s, cost] = await Promise.all([
+        api("/v1/stats?hours=" + overviewWindow.hours),
+        api(`/v1/cost/summary?hours=${overviewWindow.hours}&agent_id=*`),
+      ]);
       const kpis = document.getElementById("overview-kpis");
       const total = s.requests_total ?? 0;
+      const tokenTotal = (cost.total_prompt_tokens || 0) + (cost.total_completion_tokens || 0);
       if (kpis) NG.statRow(kpis, [
-        NG.statCard({ label: "Requests", value: total.toLocaleString() }),
-        NG.statCard({ label: "Empty rate", value: pct(s.empty_rate), sub: `${s.empty_count || 0} of ${total.toLocaleString()} calls` }),
-        NG.statCard({ label: "p50 latency", value: ms(s.latency_ms?.p50 ?? s.latency_ms?.avg) }),
+        NG.statCard({ label: "Requests", value: total.toLocaleString(), sub: `${s.empty_count || 0} empty · ${pct(s.empty_rate)}` }),
+        NG.statCard({ label: "Metered spend", value: usd(cost.total_cost_usd), sub: "paid API usage" }),
+        NG.statCard({ label: "Subscription covered", value: usd(cost.subscription_savings_usd), sub: "notional value on plans", highlight: true }),
+        NG.statCard({ label: "Tokens", value: fmtNum(tokenTotal), sub: `${fmtNum(cost.total_prompt_tokens || 0)} in · ${fmtNum(cost.total_completion_tokens || 0)} out` }),
         NG.statCard({ label: "p95 latency", value: ms(s.latency_ms?.p95) }),
       ]);
+      renderOverviewStreams(cost.by_stream || []);
       renderOverviewBars("overview-tier-card", "Requests by tier", s.requests_by_tier);
       renderOverviewRequestsChart();
     } catch (e) {
-      // Silently leave dashes; auth state above will explain.
+      const streams = document.getElementById("overview-streams-card");
+      if (streams) streams.innerHTML = '<div class="v2-card"><p class="hint">Agent stream costs are unavailable.</p></div>';
     }
+  }
+
+  function renderOverviewStreams(rows) {
+    const mount = document.getElementById("overview-streams-card");
+    if (!mount) return;
+    const streamRows = rows || [];
+    NG.DataTable(mount, {
+      title: "Agent streams",
+      meta: "what each agent is using · actual spend vs subscription-covered value",
+      countLabel: (n) => `${n} stream${n === 1 ? "" : "s"}`,
+      search: streamRows.length > 8,
+      searchPlaceholder: "Filter agents or models…",
+      columnsMenu: false,
+      defaultSort: { key: "activity", dir: "desc" },
+      emptyText: "No agent traffic in this window.",
+      rows: streamRows,
+      columns: [
+        {
+          key: "agent", label: "Agent stream",
+          render: (r) => {
+            const w = NG.el("div", { class: "v2-cell-stack" });
+            w.appendChild(NG.el("span", { class: "v2-strong" }, r.agent_id || "unknown"));
+            w.appendChild(NG.el("span", { class: "v2-cell-sub" }, r.last_seen_at ? `active ${fmtAge(r.last_seen_at)}` : "no recent outcome"));
+            return w;
+          },
+          sortValue: (r) => r.agent_id || "",
+        },
+        {
+          key: "models", label: "Using", sortable: false,
+          render: (r) => {
+            const w = NG.el("div", { class: "stream-models" });
+            (r.models || []).slice(0, 3).forEach((m) => {
+              const item = NG.el("span", { class: "stream-model" });
+              item.appendChild(NG.providerTag(m.provider || "—"));
+              item.appendChild(NG.el("span", { class: "stream-model-name", title: m.model || "" }, shortModelName(m.model || "—")));
+              item.appendChild(NG.el("span", { class: "stream-model-calls" }, `×${(m.calls || 0).toLocaleString()}`));
+              w.appendChild(item);
+            });
+            if ((r.models || []).length > 3) w.appendChild(NG.chip(`+${r.models.length - 3} more`, "neutral"));
+            return w;
+          },
+          sortValue: (r) => (r.models || []).map((m) => m.model || "").join(" "),
+        },
+        {
+          key: "lanes", label: "Route mix", sortable: false,
+          render: (r) => {
+            const w = NG.el("div", { class: "stream-lanes" });
+            if (r.subscription_calls) w.appendChild(NG.chip(`${r.subscription_calls} plan`, "good"));
+            if (r.metered_calls) w.appendChild(NG.chip(`${r.metered_calls} API`, "warn"));
+            if (r.local_calls) w.appendChild(NG.chip(`${r.local_calls} local`, "info"));
+            if (r.unpriced_calls) w.appendChild(NG.chip(`${r.unpriced_calls} unpriced`, "neutral"));
+            return w;
+          },
+        },
+        { key: "calls", label: "Calls", align: "right", render: (r) => (r.calls || 0).toLocaleString(), sortValue: (r) => r.calls || 0 },
+        { key: "tokens", label: "Tokens", align: "right", render: (r) => fmtNum((r.prompt_tokens || 0) + (r.completion_tokens || 0)), sortValue: (r) => (r.prompt_tokens || 0) + (r.completion_tokens || 0) },
+        { key: "spend", label: "API spend", align: "right", render: (r) => usd(r.cost_usd), sortValue: (r) => r.cost_usd || 0 },
+        { key: "covered", label: "Plan value", align: "right", render: (r) => r.notional_cost_usd ? usd(r.notional_cost_usd) : "—", sortValue: (r) => r.notional_cost_usd || 0 },
+        { key: "activity", label: "Last active", align: "right", render: (r) => r.last_seen_at ? tsShort(r.last_seen_at) : "—", sortValue: (r) => r.last_seen_at || "" },
+      ],
+    });
   }
 
   // Requests-over-time area chart, derived by summing per-provider call

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NautGate release status — 2026-08-16</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#f4f5f1; --card:#fff; --ink:#20231f; --muted:#687066; --line:#d8ddd3; --good:#217a4a; --warn:#9a6500; --bad:#a5362d; --accent:#596640; --soft:#edf0e7; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#171a17; --card:#20241f; --ink:#edf0e9; --muted:#aeb6aa; --line:#3c4439; --good:#75d69b; --warn:#edc264; --bad:#ff9488; --accent:#b4c486; --soft:#293027; } }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { width:min(1120px,calc(100% - 32px)); margin:38px auto 72px; }
+    header { margin-bottom:24px; }
+    .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.1em; text-transform:uppercase; font-size:12px; }
+    h1 { font-size:clamp(34px,6vw,64px); line-height:1; letter-spacing:-.045em; margin:10px 0 16px; }
+    h2 { margin:0 0 14px; font-size:20px; letter-spacing:-.015em; }
+    h3 { margin:0 0 7px; font-size:15px; }
+    p { margin:0 0 12px; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.92em; }
+    .lede { max-width:760px; font-size:18px; color:var(--muted); }
+    .state { display:inline-flex; gap:8px; align-items:center; margin-top:18px; padding:8px 12px; border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line)); border-radius:999px; color:var(--warn); background:color-mix(in srgb,var(--warn) 8%,transparent); font-weight:750; }
+    .state::before { content:""; width:9px; height:9px; border-radius:50%; background:currentColor; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:26px 0; }
+    .tile,.card { background:var(--card); border:1px solid var(--line); border-radius:16px; }
+    .tile { padding:18px; min-height:130px; }
+    .tile strong { display:block; font-size:29px; line-height:1.1; letter-spacing:-.03em; }
+    .tile span { display:block; margin-top:8px; color:var(--muted); }
+    .card { padding:22px; margin-top:14px; }
+    .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .risk { display:grid; grid-template-columns:110px 1fr; gap:16px; padding:15px 0; border-top:1px solid var(--line); }
+    .risk:first-of-type { border-top:0; padding-top:0; }
+    .pill { width:max-content; height:max-content; padding:4px 9px; border-radius:999px; font-weight:800; font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+    .warn { color:var(--warn); background:color-mix(in srgb,var(--warn) 11%,transparent); }
+    .bad { color:var(--bad); background:color-mix(in srgb,var(--bad) 10%,transparent); }
+    .good { color:var(--good); background:color-mix(in srgb,var(--good) 10%,transparent); }
+    ul { margin:6px 0 0; padding-left:20px; }
+    li + li { margin-top:7px; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:10px 8px; text-align:left; border-top:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .meta { color:var(--muted); font-size:13px; }
+    .verdict { border-left:5px solid var(--warn); }
+    footer { margin-top:22px; color:var(--muted); font-size:13px; }
+    @media (max-width:820px) { .grid { grid-template-columns:1fr 1fr; } .cols { grid-template-columns:1fr; } }
+    @media (max-width:520px) { main { width:min(100% - 20px,1120px); margin-top:22px; } .grid { grid-template-columns:1fr; } .risk { grid-template-columns:1fr; gap:7px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">NautGate · release evidence</div>
+    <h1>Release status</h1>
+    <p class="lede">NautGate has substantial unreleased work after <code>v0.1.0</code>, including security, cost-accounting, retention, backup, model-catalogue, and onboarding changes. It is not currently possible to call the next release ready: the checkout is behind its last-known remote-tracking state, the version is not advanced, and the release gates were not run in this inspection.</p>
+    <div class="state">Needs attention before release</div>
+  </header>
+
+  <section class="grid" aria-label="Release headline metrics">
+    <div class="tile"><strong>0.1.0</strong><span>Declared version; unchanged from latest local tag</span></div>
+    <div class="tile"><strong>77</strong><span>Commit objects reachable after <code>v0.1.0</code> from local <code>HEAD</code></span></div>
+    <div class="tile"><strong>50</strong><span>Tracked test files detected; not executed in this run</span></div>
+    <div class="tile"><strong>2</strong><span>Commit objects local <code>main</code> trails last-known <code>origin/main</code></span></div>
+  </section>
+
+  <section class="card verdict">
+    <h2>Bottom line</h2>
+    <p><strong>Development is healthy-looking but release readiness is unproven.</strong> The repository describes itself as actively developed, in daily use, pre-1.0. The unreleased changelog is extensive and contains several high-impact production fixes. Before cutting a release, update the checkout, choose/bump the target version, run the standard tests and lint, run the isolated go-live smoke, and verify that the public Compose file and all three GHCR images work anonymously.</p>
+  </section>
+
+  <section class="card">
+    <h2>What appears to be in the next release</h2>
+    <div class="cols">
+      <div>
+        <h3>Product additions</h3>
+        <ul>
+          <li>Provider model catalogue with hundreds of selectable models.</li>
+          <li>Compliance audit traces per call.</li>
+          <li><code>nautproxy</code> universal capture for clients that ignore base-URL overrides.</li>
+          <li>Retention controls for captured prompt/response bodies.</li>
+          <li>First-run activation copy support.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Reliability and security fixes</h3>
+        <ul>
+          <li>Loopback-only injection of the local dashboard admin token.</li>
+          <li>Backup database targeting, schedule defaults, and orphan cleanup.</li>
+          <li>Real upstream error propagation instead of false HTTP 200 success.</li>
+          <li>Streaming token usage and pricing corrections.</li>
+          <li>Container config-path correction for routing, pricing, and compliance data.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Blockers and risks</h2>
+    <div class="risk">
+      <span class="pill bad">Blocker</span>
+      <div><h3>Release gates not executed</h3><p>Neither <code>just test</code>, <code>just lint</code>, nor <code>scripts/smoke-golive.sh</code> was run. This inspection was explicitly constrained to no shell commands. Existing pytest cache data is from July and is not release evidence.</p></div>
+    </div>
+    <div class="risk">
+      <span class="pill bad">Blocker</span>
+      <div><h3>Public installability is unknown</h3><p>The public target requires <code>https://nautgate.dev/compose.yml</code> to match <code>deploy/compose.published.yml</code> and all referenced GHCR images to pull anonymously. No live comparison or anonymous pull was possible.</p></div>
+    </div>
+    <div class="risk">
+      <span class="pill warn">Attention</span>
+      <div><h3>Version has not moved beyond the shipped tag</h3><p><code>core/pyproject.toml</code> declares <code>0.1.0</code>, matching the latest local tag <code>v0.1.0</code>, while 77 commit objects are reachable after that tag.</p></div>
+    </div>
+    <div class="risk">
+      <span class="pill warn">Attention</span>
+      <div><h3>Checkout is not at its last-known remote state</h3><p>Local <code>main</code> is <code>90fcb04</code>. The locally stored <code>origin/main</code> is <code>bc23e93</code> and contains two additional commit objects: the optional-mitmproxy change and its merge PR #59. This remote-tracking evidence was last updated on 2026-08-10 and may itself be stale.</p></div>
+    </div>
+    <div class="risk">
+      <span class="pill warn">Attention</span>
+      <div><h3>Working tree has local state</h3><p><code>.gitignore</code> is modified by adding <code>.gitvm/</code>. The release profile, generated reports, codebase-memory files, brand build files, and four Claude worktrees are untracked. No tracked product source file was detected as modified.</p></div>
+    </div>
+    <div class="risk">
+      <span class="pill warn">Unknown</span>
+      <div><h3>Hosted repository state is unavailable</h3><p>The GitHub repository is private or unavailable to the current browser session. Current CI conclusions, open pull requests, open issues, GitHub release objects, repository visibility, and package visibility are unknown.</p></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Validation inventory</h2>
+    <table>
+      <thead><tr><th>Gate</th><th>Detected configuration</th><th>Status in this inspection</th></tr></thead>
+      <tbody>
+        <tr><td>Unit/integration tests</td><td><code>just test</code> → <code>uv run pytest</code>; 50 tracked test files</td><td><span class="pill warn">Not run</span></td></tr>
+        <tr><td>Lint and format</td><td><code>just lint</code> → Ruff check + format check</td><td><span class="pill warn">Not run</span></td></tr>
+        <tr><td>CI</td><td>Install locked dependencies, lint, test on pushes to <code>main</code> and PRs</td><td><span class="pill warn">Unknown</span></td></tr>
+        <tr><td>Go-live smoke</td><td>Builds isolated stack; checks health, config, first-run key, backups, restore, provider keys</td><td><span class="pill warn">Not run</span></td></tr>
+        <tr><td>Public install check</td><td>Scheduled anonymous pulls for <code>nautgate</code>, <code>nautrouter</code>, <code>nautproxy</code></td><td><span class="pill warn">Unknown</span></td></tr>
+        <tr><td>Release markers</td><td>Tracked-file scan for release/launch blockers</td><td><span class="pill good">None found</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Measured repository state</h2>
+    <table>
+      <tbody>
+        <tr><th>Branch</th><td><code>main</code></td></tr>
+        <tr><th>Local head</th><td><code>90fcb044b3e92dce596020e0eeac15181716104b</code> — merge PR #58, 2026-08-10</td></tr>
+        <tr><th>Last-known origin</th><td><code>bc23e9376acf8f4e07a84439763e60c7b2eb5ba4</code> — merge PR #59, 2026-08-10</td></tr>
+        <tr><th>Latest local tag</th><td><code>v0.1.0</code> at <code>38c088f</code>, 2026-07-23</td></tr>
+        <tr><th>Declared version</th><td><code>core/pyproject.toml: 0.1.0</code></td></tr>
+        <tr><th>Release target</th><td>Public, per local <code>.release-status.json</code> (currently untracked)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Recommended release sequence</h2>
+    <ol>
+      <li>Reconcile local <code>main</code> with the current remote and preserve the unrelated local files.</li>
+      <li>Choose the next version and update canonical version/release notes.</li>
+      <li>Run locked dependency installation, lint, and the full test suite.</li>
+      <li>Run the isolated go-live Docker smoke profile.</li>
+      <li>Compare the published Compose file and anonymously pull all referenced images.</li>
+      <li>Review current CI, PRs, issues, and any release-specific ticket list before tagging.</li>
+    </ol>
+  </section>
+
+  <footer>
+    Generated by @codex on 2026-08-16 from read-only filesystem inspection. No shell commands, tests, smoke checks, deployment actions, package pulls, repository mutations, or release actions were performed. Hosted GitHub data and live distribution data are explicitly unknown.
+  </footer>
+</main>
+</body>
+</html>

@@ -37,6 +37,14 @@ class Settings(BaseSettings):
 
     nautrouter_base_url: str = "http://localhost:8404"
 
+    # Optional flat-rate ChatGPT/Codex subscription provider for ordinary
+    # NautGate ng_ clients. Matching GPT models execute through the locally
+    # authenticated Codex CLI and fail closed instead of touching OPENAI_API_KEY.
+    nautgate_chatgpt_subscription_cli: bool = False
+    nautgate_codex_cli_path: str = "codex"
+    nautgate_codex_home: str | None = None
+    nautgate_subscription_workdir: str = "/tmp/nautgate-subscription"  # noqa: S108
+
     # Model catalogue: fetch each provider's own model list so the picker
     # offers everything they actually serve, and refresh it on a timer so new
     # models appear without anyone editing a hardcoded list.

@@ -53,3 +53,7 @@ gitvm-extension/
 # Local agent worktrees and generated repository index
 .claude/worktrees/
 .codebase-memory/
+
+# Local sandbox + worktree scratch, never part of the repo
+.gitvm.json
+.worktrees/
