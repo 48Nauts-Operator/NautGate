@@ -59,6 +59,19 @@ def _parse_retry_after(value: str | None) -> float | None:
         return None
 
 
+def _retry_delay(attempt: int, retry_after: float | None) -> float:
+    """Backoff before the next overload retry.
+
+    Retry-After can only ever LENGTHEN the wait. Anthropic answers some 529s
+    with `retry-after: 0`, and honouring that verbatim fired all four attempts
+    inside two seconds, straight back into the same overload window, so the
+    client saw a 529 the retry loop was supposed to absorb (2026-08-18: every
+    retry in the burst logged delay_s 0.0).
+    """
+    backoff = min(_RETRY_CAP_S, _RETRY_BASE_S * (2**attempt)) + 0.05 * attempt
+    return backoff if retry_after is None else max(backoff, retry_after)
+
+
 ANTHROPIC_HOST = "api.anthropic.com"
 # Marker prefix Anthropic uses for OAuth Access Tokens (vs sk-ant-api03 for
 # metered API keys). Detected case-insensitively via the bearer parser below.
@@ -351,11 +364,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             if upstream.status_code == 529:
                 overload_retries += 1
             await upstream.aclose()  # drain the failed response before retrying
-            delay = (
-                retry_after
-                if retry_after is not None
-                else min(_RETRY_CAP_S, _RETRY_BASE_S * (2**_attempt)) + 0.05 * _attempt
-            )
+            delay = _retry_delay(_attempt, retry_after)
             log.info(
                 "anthropic_oauth_retry",
                 status=upstream.status_code,
