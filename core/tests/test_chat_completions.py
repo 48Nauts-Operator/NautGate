@@ -386,3 +386,65 @@ async def test_upstream_failure_returns_502_and_logs_outcome(chat_client):
     # Outcome row was still written (to record the failure).
     assert len(calls["outcome"]) == 1
     assert calls["outcome"][0]["status_code"] == 502
+
+
+@pytest.mark.asyncio
+async def test_tools_request_skips_the_subscription_lane(chat_app):
+    """A tool call must never be claimed by the Codex CLI lane.
+
+    That lane has no function calling, so claiming it answers
+    `502 tool calls are not supported by this transport` and the caller sees an
+    agent that talks instead of acting. Between 2026-08-18 22:30 and 08-19 this
+    disabled every xNAUT agent: no profile changed, the route underneath did.
+    """
+    app, calls = chat_app
+    app.state.settings.nautgate_chatgpt_subscription_cli = True
+    app.state.chatgpt_subscription = AsyncMock()
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    tools = [{
+        "type": "function",
+        "function": {"name": "ping", "parameters": {"type": "object", "properties": {}}},
+    }]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "tools": tools},
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-provider"] != "chatgpt-subscription"
+    # It went to NautRouter's metered key, tools intact.
+    app.state.chatgpt_subscription.chat_completions.assert_not_awaited()
+    forwarded = calls["mock"].chat_completions.call_args.args[0]
+    assert forwarded["tools"] == tools
+
+
+@pytest.mark.asyncio
+async def test_same_request_without_tools_still_uses_the_subscription(chat_app):
+    """The guard must be about tools, not about the model. Widening it to skip
+    the lane entirely would silently start billing the metered key for every
+    request the ChatGPT plan already covers."""
+    app, calls = chat_app
+    app.state.settings.nautgate_chatgpt_subscription_cli = True
+    app.state.chatgpt_subscription = AsyncMock()
+    app.state.chatgpt_subscription.chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-provider"] == "chatgpt-subscription"

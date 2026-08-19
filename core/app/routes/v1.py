@@ -422,7 +422,18 @@ async def _process_chat_request(
         # "explicitly select" and the code claimed auto-routed picks too, which
         # hijacked tier routing's gpt-4o-mini onto the codex websocket
         # (test_auto_routes_short_prompt_to_fast went 502).
-        if is_chatgpt_subscription_model(decision_model) and decision_reason.startswith("explicit"):
+        # A request carrying tools must NOT be claimed. The lane runs the Codex
+        # CLI, which has no function calling, so claiming it turns every tool
+        # call into `502 tool calls are not supported by this transport`
+        # (chatgpt_subscription.py:134). That is what silently disabled every
+        # xNAUT agent from 2026-08-18 22:30 until it was found on 08-19: the
+        # profile never changed, the route underneath it did. Falling through
+        # sends the request to NautRouter's metered OpenAI key, which can.
+        if (
+            is_chatgpt_subscription_model(decision_model)
+            and decision_reason.startswith("explicit")
+            and not payload.get("tools")
+        ):
             if subscription_client is None:
                 raise HTTPException(status_code=503, detail="chatgpt_subscription_unavailable")
             decision_provider = "chatgpt-subscription"
