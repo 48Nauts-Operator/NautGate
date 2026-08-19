@@ -523,6 +523,10 @@ async def _process_chat_request(
         "X-Nautgate-Decision-Id": str(decision_id),
         "X-Nautgate-Provider": decision_provider,
         "X-Nautgate-Model": str(decision_model),
+        "X-Nautgate-Requested-Model": str(model_requested or ""),
+        "X-Nautgate-Substituted": (
+            "true" if model_requested not in (None, "auto", decision_model) else "false"
+        ),
         "X-Nautgate-Tier": tier,
         "X-Nautgate-Score": f"{score_vector.aggregate:.4f}",
         "X-Nautgate-Brain-Used": "false",
@@ -782,6 +786,10 @@ async def _process_chat_request(
         raise HTTPException(
             status_code=502,
             detail=_upstream_detail(upstream_status, upstream_reason, decision_provider),
+            headers={
+                **common_headers,
+                "X-Nautgate-Upstream-Status": str(upstream_status),
+            },
         )
 
     final = (
@@ -789,6 +797,10 @@ async def _process_chat_request(
     )
 
     headers = dict(common_headers)
+    if actual_model:
+        headers["X-Nautgate-Observed-Model"] = str(actual_model)
+        if model_requested not in (None, "auto", actual_model):
+            headers["X-Nautgate-Substituted"] = "true"
     headers["X-Nautgate-Latency-Ms"] = str(duration_ms)
     headers["X-Nautgate-Was-Empty"] = "true" if was_empty else "false"
 

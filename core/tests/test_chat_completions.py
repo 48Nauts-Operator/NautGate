@@ -132,6 +132,8 @@ async def test_round_trip_returns_response_and_writes_rows(chat_client):
     assert resp.headers.get("x-nautgate-latency-ms")
     assert resp.headers.get("x-nautgate-provider") == "passthrough"
     assert resp.headers.get("x-nautgate-model") == "claude-haiku-4.5"
+    assert resp.headers.get("x-nautgate-requested-model") == "claude-haiku-4.5"
+    assert resp.headers.get("x-nautgate-substituted") == "false"
     assert resp.headers.get("x-nautgate-was-empty") == "false"
 
     # PRECAPTURE row was written before forward.
@@ -206,6 +208,53 @@ async def test_not_empty_when_content_present(chat_client):
     assert resp.status_code == 200
     assert resp.headers["x-nautgate-was-empty"] == "false"
     assert calls["outcome"][0]["was_empty"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_reported_model_substitution_is_returned_to_caller(chat_client):
+    c, calls = chat_client
+    calls["mock"].chat_completions.return_value = {
+        "model": "claude-haiku-4-5",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    resp = await c.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer ng_test"},
+        json={"model": "claude-opus-5", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-requested-model"] == "claude-opus-5"
+    assert resp.headers["x-nautgate-observed-model"] == "claude-haiku-4-5"
+    assert resp.headers["x-nautgate-substituted"] == "true"
+    assert resp.headers["x-nautgate-decision-id"]
+
+
+@pytest.mark.asyncio
+async def test_upstream_failure_returns_decision_receipt_headers(chat_client):
+    c, calls = chat_client
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "model is unavailable"}},
+        request=httpx.Request("POST", "http://nautrouter.test/v1/chat/completions"),
+    )
+    calls["mock"].chat_completions.side_effect = httpx.HTTPStatusError(
+        "bad request", request=response.request, response=response
+    )
+
+    resp = await c.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer ng_test"},
+        json={"model": "claude-opus-5", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert resp.status_code == 502
+    assert resp.headers["x-nautgate-decision-id"]
+    assert resp.headers["x-nautgate-requested-model"] == "claude-opus-5"
+    assert resp.headers["x-nautgate-upstream-status"] == "400"
+    assert "model is unavailable" in resp.json()["detail"]
 
 
 # --- Day 5b: model:auto routing --------------------------------------------
