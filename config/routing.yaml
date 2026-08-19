@@ -9,18 +9,27 @@
 # Note: the `auto` tier is deliberately kept off Anthropic/OpenAI models by a
 # code-level guard (scoring.py `is_subscription_owned`) so that anyone holding a
 # Claude Max or ChatGPT subscription doesn't pay per-token for the same models
-# via OpenRouter — explicit `claude-*` / `gpt-*` requests still flow through the
-# OAuth passthrough lanes and use the subscription. If you have no such
-# subscription and want auto to reach Claude/GPT directly, that guard is the
-# thing to relax (tracked separately).
+# via OpenRouter. Explicit `gpt-*` reaches the ChatGPT plan via the Codex CLI
+# lane (routes/v1.py), but ONLY without tools: that lane has no function
+# calling. Explicit `claude-*` does NOT reach the Max plan unless the CLIENT
+# presents its own `sk-ant-oat01-…` token, because
+# anthropic_oauth_forwarder.py:112 matches on the header and never the body, so
+# an `ng_` client falls through to the metered Anthropic key. The old text here
+# claimed both lanes worked for everyone; corrected 2026-08-19, gap is
+# NAUTGATE-36.
 #
 # Cost reference (per million tokens, in/out):
 #   deepseek-v4-flash   $0.14 / $0.28   (1M ctx)
 #   deepseek-v4-pro     $0.43 / $0.87   (1M ctx)
 #   kimi-k2-thinking    $0.60 / $2.50   (262k ctx, strong reasoning)
 #   kimi-k2.6           $0.75 / $3.50   (262k ctx, strong agentic + code)
-#   gemini-flash        $0.15 / $0.60   (1M ctx)
-#   gemini-pro          $1.25 / $5.00   (1M ctx, strong reasoning)
+#   gemini-3.7-flash    $0.38 / $1.88   (1M ctx)
+#   gemini-3.1-pro-prev $2.00 / $12.00  (1M ctx, strong reasoning)
+#
+# Fallback ids corrected 2026-08-19: `google/gemini-flash` and
+# `google/gemini-pro` are not OpenRouter model ids and never were. Every tier's
+# fallback 404'd, so a primary failure had nowhere to go. Verified against the
+# live /v1/models list (415 models, neither id present).
 #
 # Pinned models — no openrouter/auto hop, no surprise cost.
 
@@ -29,21 +38,20 @@ tiers:
     # Chitchat / one-liners. DeepSeek V4 Flash beats Gemini Flash on code at
     # the same price, with 1M context. Gemini stays as fallback.
     primary:  { provider: openrouter, model: openrouter/deepseek/deepseek-v4-flash }
-    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
+    fallback: { provider: openrouter, model: openrouter/google/gemini-3.7-flash }
   balanced:
     # Pi's typical "list these files / read this / write that" lands here.
-    # Swapped off DeepSeek V4 Pro 2026-06-09: per-call avg was $1.30
-    # (9.4% of total spend) — Kimi K2 Thinking averages cheaper in practice.
-    primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2-thinking }
-    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
+    # Kimi K2 Thinking held this tier from 2026-06-09 until 2026-08-19, when it
+    # was pulled from balanced, deep AND expert at once: one model answering
+    # every auto request is a single point of quality, not just of failure.
+    primary:  { provider: openrouter, model: openrouter/google/gemini-3.7-flash }
+    fallback: { provider: openrouter, model: openrouter/deepseek/deepseek-v4-flash }
   deep:
     # Code-heavy or programming-domain prose (iOS, frameworks, etc.).
-    # Kimi K2 Thinking is the cheapest strong-reasoning model on the market.
-    primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2-thinking }
-    fallback: { provider: openrouter, model: openrouter/google/gemini-flash }
+    primary:  { provider: openrouter, model: openrouter/z-ai/glm-5.2 }
+    fallback: { provider: openrouter, model: openrouter/google/gemini-3.7-flash }
   expert:
-    # Hardest tier. Kimi K2.6 → Gemini Pro fallback. NO Anthropic/OpenAI.
-    # If Claude is truly needed, the caller should request claude-opus-4-7
-    # explicitly so it routes via the OAuth passthrough (Max subscription).
-    primary:  { provider: openrouter, model: openrouter/moonshotai/kimi-k2.6 }
-    fallback: { provider: openrouter, model: openrouter/google/gemini-pro }
+    # Hardest tier. NO Anthropic/OpenAI: if Claude is truly needed the caller
+    # should name claude-* explicitly so it routes via the OAuth passthrough.
+    primary:  { provider: openrouter, model: openrouter/google/gemini-3.1-pro-preview }
+    fallback: { provider: openrouter, model: openrouter/z-ai/glm-5.2 }
