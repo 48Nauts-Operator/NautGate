@@ -113,9 +113,7 @@ def sign(cfg: TsbConfig, payload: bytes) -> str:
     failure for an attestation.
     """
     body = json.dumps(build_request(cfg, payload)).encode("utf-8")
-    req = urllib.request.Request(
-        cfg.endpoint(), data=body, headers=cfg.headers(), method="POST"
-    )
+    req = urllib.request.Request(cfg.endpoint(), data=body, headers=cfg.headers(), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))

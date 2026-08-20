@@ -287,6 +287,7 @@ async def lifespan(app: FastAPI):
     app.state.llm_probe_task = None
     app.state.heartbeat_task = None
     app.state.audit_checkpoint_task = None
+    app.state.audit_signer_task = None
     # Live provider-status heartbeat results, keyed by transport label.
     app.state.provider_status = {}
     # NAUTGATE_OFFLINE=1 — air-gapped deployments (on-prem, local models only).
@@ -330,6 +331,25 @@ async def lifespan(app: FastAPI):
                     tick_seconds=settings.nautgate_audit_tick_s,
                 )
             )
+            if settings.nautgate_audit_attest_url and settings.nautgate_audit_attest_token:
+                from app.audit_signer import run_scheduler as _audit_signer_scheduler
+
+                app.state.audit_signer_task = _asyncio.create_task(
+                    _audit_signer_scheduler(
+                        app.state.db,
+                        sidecar_url=settings.nautgate_audit_attest_url,
+                        internal_token=settings.nautgate_audit_attest_token,
+                        expected_key_id=settings.nautgate_audit_signing_key_id,
+                        expected_fingerprint=settings.nautgate_audit_public_key_fingerprint,
+                        max_attempts=settings.nautgate_audit_sign_max_attempts,
+                        tick_seconds=settings.nautgate_audit_tick_s,
+                    )
+                )
+            else:
+                log.warning(
+                    "verified_audit_signer_not_configured",
+                    hint="set NAUTGATE_AUDIT_ATTEST_URL and NAUTGATE_AUDIT_ATTEST_TOKEN",
+                )
 
         # Both schedulers check app_config.is_offline() each tick and stand
         # down while offline, so the Settings toggle takes effect live — no
@@ -403,6 +423,7 @@ async def lifespan(app: FastAPI):
             "catalogue_task",
             "retention_task",
             "audit_checkpoint_task",
+            "audit_signer_task",
         ):
             _t = getattr(app.state, _tname, None)
             if _t is not None:

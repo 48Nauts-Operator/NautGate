@@ -23,3 +23,19 @@ jobs:
         run: uv run --project core python packaging/homebrew/gen_resources.py --check
       - name: Test
         run: just test
+
+  sb-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install extension dependencies
+        run: uv sync --project extensions/sb-attest --locked
+      - name: Lint extension
+        run: uv run --project extensions/sb-attest ruff check extensions/sb-attest
+      - name: Check extension formatting
+        run: uv run --project extensions/sb-attest ruff format --check extensions/sb-attest
+      - name: Test extension
+        run: uv run --project extensions/sb-attest pytest extensions/sb-attest/tests -q

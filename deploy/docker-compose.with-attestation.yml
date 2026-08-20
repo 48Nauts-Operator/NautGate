@@ -1,0 +1,50 @@
+# Optional Verified Audit Trail overlay.
+#
+# Required environment:
+#   SB_ATTEST_TSB_URL, SB_ATTEST_KEY_NAME, SB_ATTEST_INTERNAL_TOKEN
+#   SB_ATTEST_PUBLIC_KEY_PEM, SB_ATTEST_PUBLIC_KEY_FINGERPRINT
+#   and one of SB_ATTEST_API_KEY / SB_ATTEST_JWT
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.with-attestation.yml --profile full up -d
+
+services:
+  sb-attest:
+    build:
+      context: ../extensions/sb-attest
+    container_name: sb-attest
+    depends_on:
+      nautgate-db:
+        condition: service_healthy
+    environment:
+      SB_ATTEST_PRODUCTION: "true"
+      SB_ATTEST_DB_URL: postgres://nautgate:nautgate@nautgate-db:5432/nautgate
+      SB_ATTEST_TSB_URL: ${SB_ATTEST_TSB_URL:?set SB_ATTEST_TSB_URL}
+      SB_ATTEST_KEY_NAME: ${SB_ATTEST_KEY_NAME:?set SB_ATTEST_KEY_NAME}
+      SB_ATTEST_API_KEY: ${SB_ATTEST_API_KEY:-}
+      SB_ATTEST_JWT: ${SB_ATTEST_JWT:-}
+      SB_ATTEST_INTERNAL_TOKEN: ${SB_ATTEST_INTERNAL_TOKEN:?set SB_ATTEST_INTERNAL_TOKEN}
+      SB_ATTEST_PUBLIC_KEY_PEM: ${SB_ATTEST_PUBLIC_KEY_PEM:?set SB_ATTEST_PUBLIC_KEY_PEM}
+      SB_ATTEST_ALGORITHM: SHA256_WITH_RSA
+    ports:
+      - "127.0.0.1:8004:8004"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+  nautgate-core:
+    depends_on:
+      sb-attest:
+        condition: service_healthy
+    environment:
+      NAUTGATE_VERIFIED_AUDIT_TRAIL: "true"
+      NAUTGATE_AUDIT_INSTANCE_ID: ${NAUTGATE_AUDIT_INSTANCE_ID:-default}
+      NAUTGATE_AUDIT_SIGNING_KEY_ID: ${SB_ATTEST_KEY_NAME:?set SB_ATTEST_KEY_NAME}
+      NAUTGATE_AUDIT_ATTEST_URL: http://sb-attest:8004
+      NAUTGATE_AUDIT_ATTEST_TOKEN: ${SB_ATTEST_INTERNAL_TOKEN:?set SB_ATTEST_INTERNAL_TOKEN}
+      NAUTGATE_AUDIT_PUBLIC_KEY_FINGERPRINT: ${SB_ATTEST_PUBLIC_KEY_FINGERPRINT:?set SB_ATTEST_PUBLIC_KEY_FINGERPRINT}

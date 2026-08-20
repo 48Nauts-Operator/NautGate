@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     nautgate_audit_batch_size: int = 1000
     nautgate_audit_batch_max_age_s: float = 60.0
     nautgate_audit_tick_s: float = 5.0
+    nautgate_audit_attest_url: str | None = None
+    nautgate_audit_attest_token: str | None = None
+    nautgate_audit_public_key_fingerprint: str | None = None
+    nautgate_audit_sign_max_attempts: int = 10
 
     # Day 5a/b: tier → provider/model table for `model: "auto"`.
     # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys

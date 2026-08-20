@@ -59,7 +59,12 @@ def test_both_credentials_are_optional_and_either_alone_is_enough(api_key, jwt, 
 
 @pytest.mark.parametrize(
     "url",
-    ["https://x.test/tsb", "https://x.test/tsb/", "https://x.test/tsb/v1", "https://x.test/tsb/v1/synchronousSign"],
+    [
+        "https://x.test/tsb",
+        "https://x.test/tsb/",
+        "https://x.test/tsb/v1",
+        "https://x.test/tsb/v1/synchronousSign",
+    ],
 )
 def test_the_endpoint_is_the_same_however_the_url_was_written(url):
     # A route is not a base: appending /v1/synchronousSign to a URL that
@@ -69,15 +74,29 @@ def test_the_endpoint_is_the_same_however_the_url_was_written(url):
 
 def test_real_tsb_errors_keep_their_reason_code():
     # Captured from the engineering demo, so the mapping is not invented.
-    not_found = _parse_error(404, json.dumps(
-        {"errorCode": 650, "reason": "res.error.key.not.existent",
-         "message": "Key with name NOPE not found"}).encode())
+    not_found = _parse_error(
+        404,
+        json.dumps(
+            {
+                "errorCode": 650,
+                "reason": "res.error.key.not.existent",
+                "message": "Key with name NOPE not found",
+            }
+        ).encode(),
+    )
     assert not_found.reason == "res.error.key.not.existent"
     assert "NOPE" in str(not_found)
 
-    hsm = _parse_error(500, json.dumps(
-        {"errorCode": 701, "reason": "res.error.in.hsm",
-         "message": "KEY_FUNCTION_NOT_PERMITTED"}).encode())
+    hsm = _parse_error(
+        500,
+        json.dumps(
+            {
+                "errorCode": 701,
+                "reason": "res.error.in.hsm",
+                "message": "KEY_FUNCTION_NOT_PERMITTED",
+            }
+        ).encode(),
+    )
     assert hsm.status == 500
     assert "KEY_FUNCTION_NOT_PERMITTED" in str(hsm)
 
