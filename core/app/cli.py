@@ -63,6 +63,38 @@ def _status(args: argparse.Namespace) -> int:
         return 1
 
 
+def _receipt_verify(args: argparse.Namespace) -> int:
+    import json
+
+    from app.audit_verify import VerificationError, verify_bundle_file
+
+    try:
+        report = verify_bundle_file(
+            args.bundle,
+            args.public_key,
+            expected_key_id=args.key_id,
+            expected_fingerprint=args.fingerprint,
+        )
+    except VerificationError as exc:
+        if args.json:
+            print(json.dumps({"verified": False, "error": str(exc)}, separators=(",", ":")))
+        else:
+            print(f"verification failed — {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report.to_dict(), separators=(",", ":")))
+    else:
+        print("verified")
+        print(f"  receipt:    {report.receipt_id}")
+        print(f"  decision:   {report.decision_id}")
+        print(f"  checkpoint: {report.checkpoint_id}")
+        print(f"  sequence:   {report.evidence_sequence}")
+        print(f"  key:        {report.key_id}")
+        print(f"  fingerprint:{report.public_key_fingerprint}")
+        print(f"  claim:      {report.claim}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nautgate", description="NautGate LLM gateway")
     parser.add_argument("--version", action="version", version=f"nautgate {get_version()}")
@@ -78,6 +110,16 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("--host", help=f"address to probe (default {DEFAULT_HOST})")
     status.add_argument("--port", type=int, help=f"port to probe (default {DEFAULT_PORT})")
     status.set_defaults(func=_status)
+
+    receipt = sub.add_parser("receipt", help="work with Verified Audit Trail receipts")
+    receipt_sub = receipt.add_subparsers(dest="receipt_command")
+    verify = receipt_sub.add_parser("verify", help="verify an evidence bundle offline")
+    verify.add_argument("bundle", help="path to evidence-bundle JSON")
+    verify.add_argument("--public-key", required=True, help="trusted PEM public key or certificate")
+    verify.add_argument("--key-id", help="required signing key ID")
+    verify.add_argument("--fingerprint", help="required SHA-256 public-key fingerprint")
+    verify.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    verify.set_defaults(func=_receipt_verify)
 
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):

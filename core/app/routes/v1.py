@@ -4606,3 +4606,25 @@ async def compliance_mark_reviewed(decision_id: str, request: Request) -> Respon
     if not ok:
         raise HTTPException(status_code=404, detail="trace_not_found")
     return JSONResponse({"ok": True, "decision_id": decision_id, "reviewed_by": who})
+
+
+@router.get("/audit/receipts/{receipt_id}/bundle")
+async def audit_evidence_bundle(receipt_id: str, request: Request) -> Response:
+    """Export a portable bundle only after its checkpoint signature is verified."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    try:
+        parsed_receipt_id = uuid.UUID(receipt_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="receipt_id must be a uuid") from None
+    bundle = await queries.export_evidence_bundle(
+        pool,
+        receipt_id=parsed_receipt_id,
+        agent_id=agent_id,
+    )
+    if bundle is None:
+        # Do not reveal whether another agent owns the receipt or evidence is pending.
+        raise HTTPException(status_code=404, detail="verified_evidence_bundle_not_found")
+    return JSONResponse(bundle)

@@ -2381,3 +2381,50 @@ async def mark_compliance_reviewed(pool: asyncpg.Pool, decision_id: UUID, who: s
         who,
     )
     return res.endswith(" 1")
+
+
+async def export_evidence_bundle(
+    pool: asyncpg.Pool,
+    *,
+    receipt_id: UUID | str,
+    agent_id: str | None = None,
+) -> dict | None:
+    """Return one independently verifiable bundle, scoped to its owner."""
+    rid = receipt_id if isinstance(receipt_id, UUID) else UUID(str(receipt_id))
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT r.canonical_receipt, r.receipt_hash, r.merkle_leaf_index,
+                   r.merkle_proof, c.canonical_checkpoint, c.algorithm,
+                   c.signature, c.key_id, c.public_key_fingerprint
+              FROM nautgate.audit_receipts r
+              JOIN nautgate.audit_checkpoints c ON c.checkpoint_id = r.checkpoint_id
+              JOIN nautgate.route_decisions d ON d.id = r.decision_id
+             WHERE r.receipt_id = $1
+               AND r.status = 'verified' AND c.status = 'verified'
+               AND ($2::text IS NULL OR d.agent_id = $2)
+            """,
+            rid,
+            agent_id,
+        )
+    if row is None:
+        return None
+
+    def parsed(value):
+        return json.loads(value) if isinstance(value, str) else value
+
+    return {
+        "bundle_schema": "dev.nautgate.evidence-bundle/v1",
+        "receipt": parsed(row["canonical_receipt"]),
+        "receipt_hash": bytes(row["receipt_hash"]).hex(),
+        "leaf_index": row["merkle_leaf_index"],
+        "merkle_proof": parsed(row["merkle_proof"]),
+        "checkpoint": parsed(row["canonical_checkpoint"]),
+        "signature": {
+            "algorithm": row["algorithm"],
+            "encoding": "base64-der",
+            "value": row["signature"],
+            "key_id": row["key_id"],
+            "public_key_fingerprint": row["public_key_fingerprint"],
+        },
+    }

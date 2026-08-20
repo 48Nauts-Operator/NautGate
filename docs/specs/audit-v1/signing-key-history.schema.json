@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nautgate.dev/schemas/signing-key-history-v1.json",
+  "title": "NautGate Audit Signing Key History v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "keys"],
+  "properties": {
+    "schema": {"const": "dev.nautgate.signing-key-history/v1"},
+    "keys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_id", "purpose", "algorithm", "public_key_fingerprint", "valid_from", "status", "public_key_pem"],
+        "properties": {
+          "key_id": {"type": "string", "minLength": 1},
+          "purpose": {"const": "nautgate-audit-checkpoint-v1"},
+          "algorithm": {"const": "SHA256_WITH_RSA"},
+          "public_key_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "valid_from": {"type": "string", "format": "date-time"},
+          "valid_until": {"type": ["string", "null"], "format": "date-time"},
+          "status": {"enum": ["active", "retired", "revoked"]},
+          "public_key_pem": {"type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----"}
+        }
+      }
+    }
+  }
+}
