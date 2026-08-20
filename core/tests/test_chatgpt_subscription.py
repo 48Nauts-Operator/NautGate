@@ -53,8 +53,6 @@ def test_parse_codex_jsonl_returns_final_message_and_usage():
 
 
 def test_parse_codex_jsonl_raises_without_answer():
-    body = json.dumps(
-        {"type": "turn.failed", "error": {"message": "Not logged in"}}
-    ).encode()
+    body = json.dumps({"type": "turn.failed", "error": {"message": "Not logged in"}}).encode()
     with pytest.raises(SubscriptionTransportError, match="Not logged in"):
         parse_codex_jsonl(body)

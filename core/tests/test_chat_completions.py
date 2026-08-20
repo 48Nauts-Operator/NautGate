@@ -454,16 +454,22 @@ async def test_tools_request_skips_the_subscription_lane(chat_app):
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
 
-    tools = [{
-        "type": "function",
-        "function": {"name": "ping", "parameters": {"type": "object", "properties": {}}},
-    }]
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "ping", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
         resp = await c.post(
             "/v1/chat/completions",
             headers={"Authorization": "Bearer ng_test"},
-            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "tools": tools},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": tools,
+            },
         )
 
     assert resp.status_code == 200

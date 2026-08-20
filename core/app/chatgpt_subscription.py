@@ -91,13 +91,10 @@ def parse_codex_jsonl(stdout: bytes) -> tuple[str, dict]:
                 "prompt_tokens": raw_usage.get("input_tokens"),
                 "completion_tokens": raw_usage.get("output_tokens"),
                 "total_tokens": (
-                    (raw_usage.get("input_tokens") or 0)
-                    + (raw_usage.get("output_tokens") or 0)
+                    (raw_usage.get("input_tokens") or 0) + (raw_usage.get("output_tokens") or 0)
                 )
                 or None,
-                "prompt_tokens_details": {
-                    "cached_tokens": raw_usage.get("cached_input_tokens")
-                },
+                "prompt_tokens_details": {"cached_tokens": raw_usage.get("cached_input_tokens")},
             }
         elif event.get("type") == "turn.failed":
             err = event.get("error") or {}

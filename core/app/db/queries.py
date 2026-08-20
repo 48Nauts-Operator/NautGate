@@ -414,9 +414,7 @@ async def get_cost_summary(
                 stream["last_seen_at"] = seen.isoformat()
             stream["models"].sort(key=lambda m: m["calls"], reverse=True)
             classified = (
-                stream["metered_calls"]
-                + stream["subscription_calls"]
-                + stream["local_calls"]
+                stream["metered_calls"] + stream["subscription_calls"] + stream["local_calls"]
             )
             stream["unpriced_calls"] = max(0, stream["calls"] - classified)
         by_stream.sort(

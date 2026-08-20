@@ -46,7 +46,7 @@ type ScoringResult = {
 
 type RoutingDecision = {
   model: string;
-  provider: "anthropic" | "lmstudio" | "gemini";
+  provider: Provider;
   tier: Tier;
   confidence: number;
   reasoning: string;
@@ -55,9 +55,11 @@ type RoutingDecision = {
 };
 
 // ── Provider model definitions ──
+type Provider = "anthropic" | "lmstudio" | "gemini" | "openrouter" | "openai";
+
 type ModelDef = {
   id: string; // what we send to the provider
-  provider: "anthropic" | "lmstudio" | "gemini";
+  provider: Provider;
   inputPrice: number; // per 1M tokens
   outputPrice: number;
   contextWindow: number;

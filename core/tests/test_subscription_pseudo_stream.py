@@ -16,11 +16,13 @@ def _pseudo_chunk(final: dict, decision_model: str, decision_id: str) -> str:
         "object": "chat.completion.chunk",
         "created": final.get("created"),
         "model": final.get("model", decision_model),
-        "choices": [{
-            "index": 0,
-            "delta": (final.get("choices") or [{}])[0].get("message", {}),
-            "finish_reason": (final.get("choices") or [{}])[0].get("finish_reason", "stop"),
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "delta": (final.get("choices") or [{}])[0].get("message", {}),
+                "finish_reason": (final.get("choices") or [{}])[0].get("finish_reason", "stop"),
+            }
+        ],
         "usage": final.get("usage"),
     }
     return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
@@ -37,14 +39,16 @@ def test_the_501_is_gone_and_pseudo_stream_exists():
 
 def test_chunk_shape_is_an_openai_stream_event():
     final = {
-        "id": "chatcmpl-x", "created": 1, "model": "gpt-5",
+        "id": "chatcmpl-x",
+        "created": 1,
+        "model": "gpt-5",
         "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
     body = _pseudo_chunk(final, "gpt-5", "d1")
     events = [e for e in body.split("\n\n") if e.startswith("data: ")]
     assert events[-1] == "data: [DONE]"
-    parsed = json.loads(events[0][len("data: "):])
+    parsed = json.loads(events[0][len("data: ") :])
     assert parsed["object"] == "chat.completion.chunk"
     assert parsed["choices"][0]["delta"]["content"] == "hi"
     assert parsed["choices"][0]["finish_reason"] == "stop"
@@ -58,6 +62,10 @@ def test_a_responses_client_gets_responses_events_not_chat_chunks():
     stream, parses nothing, and shows an empty answer.
     """
     src = open("app/routes/v1.py").read()
-    block = src[src.index("    if pseudo_stream:"):src.index("    return JSONResponse(content=final")]
+    block = src[
+        src.index("    if pseudo_stream:") : src.index("    return JSONResponse(content=final")
+    ]
     assert "stream_translator(raw)" in block, "pseudo-stream ignores the responses translator"
-    assert "stream_translator_finish()" in block, "translator is never flushed, so terminator events never fire"
+    assert "stream_translator_finish()" in block, (
+        "translator is never flushed, so terminator events never fire"
+    )

@@ -15,7 +15,47 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-20
+
+### Added
+
+- **Ordinary NautGate clients can use the operator's ChatGPT subscription for
+  explicitly requested GPT models.** Requests authenticated with an `ng_` key
+  previously always reached a metered API transport, even when the operator
+  already paid for ChatGPT Max or Plus. When the local Codex subscription
+  transport is enabled, explicit supported models without tool calls now use
+  that flat-rate lane; streaming clients receive a compatible pseudo-stream and
+  the audit log records the notional subscription saving.
+
+- **Securosys Transaction Security Broker attestation extension.** The optional
+  `sb-attest` sidecar can now bind a signed TSB receipt to a NautGate decision,
+  adding independently verifiable evidence without putting hardware-signing
+  latency in the synchronous routing path.
+
+- **Routing receipts now reach API clients on both success and failure.**
+  Responses expose the requested, selected and provider-observed model, whether
+  substitution occurred, and the upstream status on failures. Clients such as
+  xNaut can therefore show what actually answered instead of inferring it from
+  the request body.
+
 ### Fixed
+
+- **ChatGPT subscription routing no longer claims requests containing tools.**
+  The Codex subscription transport does not implement function calling; the
+  initial subscription-lane release nevertheless selected it for tool-bearing
+  requests, turning otherwise valid agent calls into `502` failures. Those
+  requests now remain on a tool-capable transport.
+
+- **Every automatic-routing fallback now names a real OpenRouter model.** The
+  previous `google/gemini-flash` and `google/gemini-pro` identifiers do not
+  exist in OpenRouter's catalogue, so a primary failure immediately became a
+  second `404`. The fallback table now uses verified catalogue identifiers and
+  spreads tiers across distinct model families.
+
+- **Anthropic Max overload retries no longer collapse into one burst.** Some
+  `529` responses carry `Retry-After: 0`; treating that value as authoritative
+  fired every retry back into the same capacity window. Exponential backoff is
+  now the minimum delay, while a longer upstream delay is still honored.
 
 - **`brew services start nautgate` now keeps its database configuration after
   the shell exits.** Launchd does not inherit the interactive shell that started
