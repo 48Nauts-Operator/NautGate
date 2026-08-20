@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nautgate.dev/schemas/audit-checkpoint-v1.json",
+  "title": "NautGate Audit Checkpoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "checkpoint_id", "instance_id", "first_sequence", "last_sequence", "receipt_count", "merkle_algorithm", "merkle_root", "opened_at", "closed_at", "previous_checkpoint_sha256", "signing_key_id"],
+  "properties": {
+    "schema": {"const": "dev.nautgate.audit-checkpoint/v1"},
+    "checkpoint_id": {"type": "string", "format": "uuid"},
+    "instance_id": {"type": "string", "minLength": 1},
+    "first_sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "last_sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "receipt_count": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "merkle_algorithm": {"const": "sha256-binary-v1"},
+    "merkle_root": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "opened_at": {"type": "string", "format": "date-time"},
+    "closed_at": {"type": "string", "format": "date-time"},
+    "previous_checkpoint_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "signing_key_id": {"type": "string", "minLength": 1}
+  }
+}

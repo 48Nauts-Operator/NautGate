@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nautgate.dev/schemas/decision-receipt-v1.json",
+  "title": "NautGate Decision Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "receipt_id", "decision_id", "sequence", "started_at", "completed_at", "client", "request", "classification", "routing", "result", "tool_evidence", "runtime"],
+  "properties": {
+    "schema": {"const": "dev.nautgate.decision-receipt/v1"},
+    "receipt_id": {"type": "string", "format": "uuid"},
+    "decision_id": {"type": "string", "format": "uuid"},
+    "sequence": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "client": {"$ref": "#/$defs/client"},
+    "request": {"$ref": "#/$defs/request"},
+    "classification": {"$ref": "#/$defs/classification"},
+    "routing": {"$ref": "#/$defs/routing"},
+    "result": {"$ref": "#/$defs/result"},
+    "tool_evidence": {"$ref": "#/$defs/toolEvidence"},
+    "runtime": {"$ref": "#/$defs/runtime"}
+  },
+  "$defs": {
+    "nullableString": {"type": ["string", "null"]},
+    "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "client": {"type": "object", "additionalProperties": false, "required": ["agent_id", "nautgate_key_id", "protocol"], "properties": {"agent_id": {"type": "string"}, "nautgate_key_id": {"type": "string"}, "protocol": {"type": "string"}}},
+    "request": {"type": "object", "additionalProperties": false, "required": ["body_sha256", "upstream_body_sha256", "prompt_sha256", "tools_sha256", "requested_model", "stream"], "properties": {"body_sha256": {"$ref": "#/$defs/sha256"}, "upstream_body_sha256": {"$ref": "#/$defs/sha256"}, "prompt_sha256": {"$ref": "#/$defs/sha256"}, "tools_sha256": {"$ref": "#/$defs/sha256"}, "requested_model": {"type": "string"}, "stream": {"type": "boolean"}}},
+    "classification": {"type": "object", "additionalProperties": false, "required": ["sensitivity", "signals_sha256", "policy_version", "policy_sha256"], "properties": {"sensitivity": {"type": "string"}, "signals_sha256": {"$ref": "#/$defs/sha256"}, "policy_version": {"$ref": "#/$defs/nullableString"}, "policy_sha256": {"$ref": "#/$defs/sha256"}}},
+    "routing": {"type": "object", "additionalProperties": false, "required": ["selected_provider", "selected_transport", "selected_model", "observed_provider", "observed_model", "substituted", "fallback_attempts", "reason_code"], "properties": {"selected_provider": {"$ref": "#/$defs/nullableString"}, "selected_transport": {"$ref": "#/$defs/nullableString"}, "selected_model": {"$ref": "#/$defs/nullableString"}, "observed_provider": {"$ref": "#/$defs/nullableString"}, "observed_model": {"$ref": "#/$defs/nullableString"}, "substituted": {"type": "boolean"}, "fallback_attempts": {"type": "array", "items": {"type": "string"}}, "reason_code": {"type": "string"}}},
+    "result": {"type": "object", "additionalProperties": false, "required": ["status", "upstream_status", "response_sha256", "finish_reason", "input_tokens", "output_tokens", "cost_microusd", "error_code"], "properties": {"status": {"enum": ["success", "error", "denied"]}, "upstream_status": {"type": ["integer", "null"], "minimum": 100, "maximum": 599}, "response_sha256": {"$ref": "#/$defs/sha256"}, "finish_reason": {"$ref": "#/$defs/nullableString"}, "input_tokens": {"type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991}, "output_tokens": {"type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991}, "cost_microusd": {"type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991}, "error_code": {"$ref": "#/$defs/nullableString"}}},
+    "toolEvidence": {"type": "object", "additionalProperties": false, "required": ["calls_observed", "executions_observed", "events_sha256"], "properties": {"calls_observed": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "executions_observed": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "events_sha256": {"$ref": "#/$defs/sha256"}}},
+    "runtime": {"type": "object", "additionalProperties": false, "required": ["nautgate_version", "instance_id", "config_sha256", "build_digest"], "properties": {"nautgate_version": {"type": "string"}, "instance_id": {"type": "string"}, "config_sha256": {"$ref": "#/$defs/sha256"}, "build_digest": {"$ref": "#/$defs/nullableString"}}}
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "canonicalization": {
+    "value": {
+      "z": null,
+      "a": ["Grüezi", true, -7],
+      "🧭": "compass",
+      "": "private-use"
+    },
+    "canonical": "{\"a\":[\"Grüezi\",true,-7],\"z\":null,\"🧭\":\"compass\",\"\":\"private-use\"}"
+  },
+  "receipts": [
+    {
+      "name": "success",
+      "value": {
+        "schema": "dev.nautgate.decision-receipt/v1",
+        "receipt_id": "00000000-0000-7000-8000-000000000001",
+        "sequence": 1,
+        "status": "success"
+      },
+      "receipt_hash": "0dd01e3efce3370eaec4a161c0ad6119701277d1d1cf7df11b0e1875c076e853"
+    },
+    {
+      "name": "unicode",
+      "value": {
+        "schema": "dev.nautgate.decision-receipt/v1",
+        "receipt_id": "00000000-0000-7000-8000-000000000002",
+        "sequence": 2,
+        "status": "success",
+        "agent": "agent-🧭"
+      },
+      "receipt_hash": "349f6e7d66e42eceada79cef32bd5c887dd6995a0abfb3004d15523d6cec5d58"
+    },
+    {
+      "name": "failure",
+      "value": {
+        "schema": "dev.nautgate.decision-receipt/v1",
+        "receipt_id": "00000000-0000-7000-8000-000000000003",
+        "sequence": 3,
+        "status": "error",
+        "error_code": "credit_balance_low"
+      },
+      "receipt_hash": "6864046cd978fce09c94a3e4e78f74196f85392d8c594d92e1cfc611e15b5c05"
+    }
+  ],
+  "merkle": [
+    {"leaf_count": 1, "root": "e18fbb020ff0e454f001dbb134397b9cec18453f3a8832922e30221e35744946"},
+    {"leaf_count": 2, "root": "65af8c710511156f2f2433c7206255a5570c5db24ec51127c428e550599aa6a1"},
+    {"leaf_count": 3, "root": "ac91dce5165c458a0745a4d873156f0f445ffe36abb58734ce64e9e1e121fd67"}
+  ],
+  "checkpoint": {
+    "value": {
+      "schema": "dev.nautgate.audit-checkpoint/v1",
+      "checkpoint_id": "00000000-0000-7000-8000-000000000010",
+      "instance_id": "nautgate-test",
+      "first_sequence": 1,
+      "last_sequence": 3,
+      "receipt_count": 3,
+      "merkle_algorithm": "sha256-binary-v1",
+      "merkle_root": "ac91dce5165c458a0745a4d873156f0f445ffe36abb58734ce64e9e1e121fd67",
+      "opened_at": "2026-08-20T10:11:00.000000Z",
+      "closed_at": "2026-08-20T10:12:00.000000Z",
+      "previous_checkpoint_sha256": null,
+      "signing_key_id": "nautgate-attestation-v1"
+    },
+    "payload_hex": "4e415554474154452d41554449542d434845434b504f494e542d5631007b22636865636b706f696e745f6964223a2230303030303030302d303030302d373030302d383030302d303030303030303030303130222c22636c6f7365645f6174223a22323032362d30382d32305431303a31323a30302e3030303030305a222c2266697273745f73657175656e6365223a312c22696e7374616e63655f6964223a226e617574676174652d74657374222c226c6173745f73657175656e6365223a332c226d65726b6c655f616c676f726974686d223a227368613235362d62696e6172792d7631222c226d65726b6c655f726f6f74223a2261633931646365353136356334353861303734356134643837333135366630663434356666653336616262353837333463653634653965316531323166643637222c226f70656e65645f6174223a22323032362d30382d32305431303a31313a30302e3030303030305a222c2270726576696f75735f636865636b706f696e745f736861323536223a6e756c6c2c22726563656970745f636f756e74223a332c22736368656d61223a226465762e6e617574676174652e61756469742d636865636b706f696e742f7631222c227369676e696e675f6b65795f6964223a226e617574676174652d6174746573746174696f6e2d7631227d"
+  }
+}

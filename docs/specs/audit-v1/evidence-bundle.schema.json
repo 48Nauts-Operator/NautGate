@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nautgate.dev/schemas/evidence-bundle-v1.json",
+  "title": "NautGate Evidence Bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle_schema", "receipt", "receipt_hash", "leaf_index", "merkle_proof", "checkpoint", "signature"],
+  "properties": {
+    "bundle_schema": {"const": "dev.nautgate.evidence-bundle/v1"},
+    "receipt": {"$ref": "decision-receipt.schema.json"},
+    "receipt_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "leaf_index": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "merkle_proof": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["side", "hash"], "properties": {"side": {"enum": ["left", "right"]}, "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
+    "checkpoint": {"$ref": "audit-checkpoint.schema.json"},
+    "signature": {"type": "object", "additionalProperties": false, "required": ["algorithm", "encoding", "value", "key_id", "public_key_fingerprint"], "properties": {"algorithm": {"type": "string"}, "encoding": {"const": "base64-der"}, "value": {"type": "string", "contentEncoding": "base64"}, "key_id": {"type": "string"}, "public_key_fingerprint": {"type": "string"}}}
+  }
+}
