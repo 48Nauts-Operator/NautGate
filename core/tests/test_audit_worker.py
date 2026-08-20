@@ -69,6 +69,26 @@ async def test_worker_stages_contiguous_receipts_atomically():
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_timestamps_are_bound_as_datetimes():
+    # asyncpg binds by type, so the canonical ISO strings the checkpoint carries
+    # are rejected by a timestamptz column and the whole staging transaction
+    # fails. Nothing is ever signed, and the only sign of it is a DataError in
+    # the log every tick.
+    rows = [_row(1)]
+    pool, conn = _pool(
+        pending={"count": 1, "oldest": rows[0]["created_at"]}, previous=None, rows=rows
+    )
+    await stage_checkpoint_once(pool, instance_id="test", signing_key_id="key-v1", force=True)
+    insert = next(
+        call
+        for call in conn.execute.await_args_list
+        if "INSERT INTO nautgate.audit_checkpoints" in call.args[0]
+    )
+    opened_at, closed_at = insert.args[13], insert.args[14]
+    assert isinstance(opened_at, datetime) and isinstance(closed_at, datetime)
+
+
+@pytest.mark.asyncio
 async def test_worker_records_gap_and_does_not_stage_checkpoint():
     rows = [_row(3)]
     pool, conn = _pool(

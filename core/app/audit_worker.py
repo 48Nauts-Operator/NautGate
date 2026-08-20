@@ -24,6 +24,15 @@ class StageResult:
     observed_sequence: int | None = None
 
 
+def _as_datetime(value: str) -> datetime:
+    """The checkpoint carries ISO strings; the columns are timestamptz.
+
+    asyncpg binds by type, not by string, so handing it the canonical text
+    fails the whole staging transaction and no receipt is ever signed.
+    """
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 async def stage_checkpoint_once(
     pool,
     *,
@@ -135,8 +144,8 @@ async def stage_checkpoint_once(
                 checkpoint_hash,
                 previous_hash,
                 signing_key_id,
-                checkpoint["opened_at"],
-                checkpoint["closed_at"],
+                _as_datetime(checkpoint["opened_at"]),
+                _as_datetime(checkpoint["closed_at"]),
             )
             for index, (row, proof) in enumerate(zip(material, proofs, strict=True)):
                 await conn.execute(
