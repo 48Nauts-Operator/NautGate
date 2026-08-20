@@ -138,7 +138,8 @@ async def test_outcome_receipt_and_outbox_share_one_transaction():
     transaction.__aenter__.assert_awaited_once()
     transaction.__aexit__.assert_awaited_once()
     assert conn.fetchrow.await_count == 2  # outcome RETURNING + joined decision
-    assert conn.fetchval.await_count == 1  # monotonic evidence sequence
+    assert conn.fetchval.await_count == 1  # transactional, gapless evidence sequence
+    assert "UPDATE nautgate.audit_state" in conn.fetchval.await_args.args[0]
     assert conn.execute.await_count == 2  # receipt + outbox
     receipt_insert = conn.execute.await_args_list[0].args
     assert "INSERT INTO nautgate.audit_receipts" in receipt_insert[0]

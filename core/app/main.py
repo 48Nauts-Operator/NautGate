@@ -286,6 +286,7 @@ async def lifespan(app: FastAPI):
     app.state.retention_task = None
     app.state.llm_probe_task = None
     app.state.heartbeat_task = None
+    app.state.audit_checkpoint_task = None
     # Live provider-status heartbeat results, keyed by transport label.
     app.state.provider_status = {}
     # NAUTGATE_OFFLINE=1 — air-gapped deployments (on-prem, local models only).
@@ -315,6 +316,20 @@ async def lifespan(app: FastAPI):
                 app.state.db, retention_days=settings.nautgate_body_retention_days
             )
         )
+
+        if settings.nautgate_verified_audit_trail:
+            from app.audit_worker import run_scheduler as _audit_checkpoint_scheduler
+
+            app.state.audit_checkpoint_task = _asyncio.create_task(
+                _audit_checkpoint_scheduler(
+                    app.state.db,
+                    instance_id=settings.nautgate_audit_instance_id,
+                    signing_key_id=settings.nautgate_audit_signing_key_id,
+                    max_receipts=settings.nautgate_audit_batch_size,
+                    max_age_seconds=settings.nautgate_audit_batch_max_age_s,
+                    tick_seconds=settings.nautgate_audit_tick_s,
+                )
+            )
 
         # Both schedulers check app_config.is_offline() each tick and stand
         # down while offline, so the Settings toggle takes effect live — no
@@ -387,6 +402,7 @@ async def lifespan(app: FastAPI):
             "heartbeat_task",
             "catalogue_task",
             "retention_task",
+            "audit_checkpoint_task",
         ):
             _t = getattr(app.state, _tname, None)
             if _t is not None:

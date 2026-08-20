@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     # Container deploys override this via NAUTGATE_OUTCOME_SPOOL_PATH=/var/lib/nautgate/spool/...
     nautgate_outcome_spool_path: str = "/tmp/nautgate/outcomes.ndjson"  # noqa: S108
 
+    # Verified Audit Trail: receipt capture is always transactional with the
+    # outcome; enabling this worker batches pending receipts into checkpoints.
+    nautgate_verified_audit_trail: bool = False
+    nautgate_audit_instance_id: str = "default"
+    nautgate_audit_signing_key_id: str = "nautgate-attestation-v1"
+    nautgate_audit_batch_size: int = 1000
+    nautgate_audit_batch_max_age_s: float = 60.0
+    nautgate_audit_tick_s: float = 5.0
+
     # Day 5a/b: tier → provider/model table for `model: "auto"`.
     # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys
     # override via NAUTGATE_ROUTING_CONFIG_PATH=/etc/nautgate/routing.yaml.

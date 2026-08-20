@@ -183,7 +183,17 @@ async def write_outcome(
             )
             if decision_row is None:
                 raise RuntimeError(f"route decision disappeared before outcome: {decision_id}")
-            sequence = await conn.fetchval("SELECT nextval('nautgate.audit_receipt_sequence')")
+            # A row counter, unlike nextval(), rolls back with this transaction.
+            # Evidence sequence numbers therefore describe committed receipts
+            # without manufacturing gaps after a failed outcome write.
+            sequence = await conn.fetchval(
+                """
+                UPDATE nautgate.audit_state
+                   SET next_sequence = next_sequence + 1
+                 WHERE singleton = TRUE
+                RETURNING next_sequence - 1
+                """
+            )
             receipt_id = uuid4()
             outcome = {
                 "ts": outcome_row["ts"],

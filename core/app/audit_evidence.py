@@ -124,6 +124,53 @@ def merkle_root(receipt_digests: Sequence[bytes]) -> bytes:
     return level[0]
 
 
+def merkle_proof(receipt_digests: Sequence[bytes], leaf_index: int) -> list[dict[str, str]]:
+    """Return the ordered sibling path for one receipt digest."""
+    if not receipt_digests:
+        raise EvidenceFormatError("a Merkle tree requires at least one receipt")
+    if leaf_index < 0 or leaf_index >= len(receipt_digests):
+        raise EvidenceFormatError("leaf index is outside the Merkle tree")
+    level = [merkle_leaf(digest) for digest in receipt_digests]
+    index = leaf_index
+    proof: list[dict[str, str]] = []
+    while len(level) > 1:
+        sibling = index - 1 if index % 2 else index + 1
+        if sibling < len(level):
+            proof.append(
+                {
+                    "side": "left" if sibling < index else "right",
+                    "hash": level[sibling].hex(),
+                }
+            )
+        next_level: list[bytes] = []
+        for offset in range(0, len(level), 2):
+            next_level.append(
+                level[offset]
+                if offset + 1 == len(level)
+                else merkle_parent(level[offset], level[offset + 1])
+            )
+        level = next_level
+        index //= 2
+    return proof
+
+
+def verify_merkle_proof(receipt_digest: bytes, proof: Sequence[Mapping[str, str]]) -> bytes:
+    """Apply a v1 inclusion proof and return its calculated root."""
+    current = merkle_leaf(receipt_digest)
+    for item in proof:
+        try:
+            sibling = bytes.fromhex(item["hash"])
+            side = item["side"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise EvidenceFormatError("invalid Merkle proof item") from exc
+        if len(sibling) != 32 or side not in ("left", "right"):
+            raise EvidenceFormatError("invalid Merkle proof sibling")
+        current = (
+            merkle_parent(sibling, current) if side == "left" else merkle_parent(current, sibling)
+        )
+    return current
+
+
 def checkpoint_payload(checkpoint: Mapping[str, Any]) -> bytes:
     """Return the exact bytes submitted to TSB for a v1 checkpoint."""
     if checkpoint.get("schema") != CHECKPOINT_SCHEMA:
