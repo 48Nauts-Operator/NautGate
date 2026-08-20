@@ -133,6 +133,7 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
     Cache miss: looks up api_keys by id, verifies argon2id, caches the result.
     """
     raw = _extract_token_from_request(request)
+    key_id, secret = _split_token(raw)
 
     now = time.monotonic()
     cached = _cache_get(raw, now=now)
@@ -141,9 +142,8 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
         request.state.agent_id = agent_id
         request.state.project_id = project_id
         request.state.override_model = override_model
+        request.state.nautgate_key_id = key_id.hex
         return agent_id
-
-    key_id, secret = _split_token(raw)
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -186,4 +186,5 @@ async def authenticate(pool: asyncpg.Pool, request: Request) -> str:
     request.state.agent_id = agent_id
     request.state.project_id = project_id
     request.state.override_model = override_model
+    request.state.nautgate_key_id = key_id.hex
     return agent_id

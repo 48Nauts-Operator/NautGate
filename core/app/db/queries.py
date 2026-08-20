@@ -11,6 +11,8 @@ from uuid import UUID
 
 import asyncpg
 
+from app.audit_receipt import finalized_receipt
+
 
 async def precapture(
     pool: asyncpg.Pool,
@@ -120,11 +122,13 @@ async def write_outcome(
     notional_cost_usd: float | None = None,
     rate_limited_429: bool = False,
     upstream_overload_retries: int = 0,
+    evidence: dict | None = None,
 ) -> None:
     tool_calls_json = json.dumps(tool_calls_made) if tool_calls_made else None
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
+        async with conn.transaction():
+            outcome_row = await conn.fetchrow(
+                """
             INSERT INTO nautgate.route_outcomes
                 (decision_id, status_code, duration_ms, first_byte_ms,
                  prompt_tokens, completion_tokens, reasoning_tokens,
@@ -137,34 +141,90 @@ async def write_outcome(
                  notional_cost_usd, rate_limited_429, upstream_overload_retries)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
                     $18, $19, $20, $21::jsonb, $22, $23, $24, $25, $26)
+            RETURNING ts
             """,
-            decision_id,
-            status_code,
-            duration_ms,
-            first_byte_ms,
-            prompt_tokens,
-            completion_tokens,
-            reasoning_tokens,
-            cache_read_tokens,
-            cache_write_tokens,
-            prefix_hash,
-            cost_usd,
-            was_empty,
-            used_fallback,
-            fallback_count,
-            client_disconnected,
-            was_truncated,
-            truncated_at_byte,
-            response_body,
-            response_body_truncated_at_byte,
-            response_size_bytes,
-            tool_calls_json,
-            actual_model,
-            actual_provider,
-            notional_cost_usd,
-            rate_limited_429,
-            upstream_overload_retries,
-        )
+                decision_id,
+                status_code,
+                duration_ms,
+                first_byte_ms,
+                prompt_tokens,
+                completion_tokens,
+                reasoning_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                prefix_hash,
+                cost_usd,
+                was_empty,
+                used_fallback,
+                fallback_count,
+                client_disconnected,
+                was_truncated,
+                truncated_at_byte,
+                response_body,
+                response_body_truncated_at_byte,
+                response_size_bytes,
+                tool_calls_json,
+                actual_model,
+                actual_provider,
+                notional_cost_usd,
+                rate_limited_429,
+                upstream_overload_retries,
+            )
+            decision_row = await conn.fetchrow(
+                """
+                SELECT id, ts, agent_id, inbound_format, model_requested,
+                       classified_sensitivity, classified_signals,
+                       decision_provider, decision_model, decision_reason,
+                       fallback_chain, stream_flag
+                  FROM nautgate.route_decisions
+                 WHERE id = $1
+                """,
+                decision_id,
+            )
+            if decision_row is None:
+                raise RuntimeError(f"route decision disappeared before outcome: {decision_id}")
+            sequence = await conn.fetchval("SELECT nextval('nautgate.audit_receipt_sequence')")
+            receipt_id = UUID(bytes=__import__("os").urandom(16), version=4)
+            outcome = {
+                "ts": outcome_row["ts"],
+                "status_code": status_code,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": cost_usd,
+                "actual_model": actual_model,
+                "actual_provider": actual_provider,
+                "tool_calls_made": tool_calls_made,
+            }
+            receipt, canonical, digest = finalized_receipt(
+                sequence=sequence,
+                receipt_id=receipt_id,
+                decision=dict(decision_row),
+                outcome=outcome,
+                evidence=evidence,
+            )
+            await conn.execute(
+                """
+                INSERT INTO nautgate.audit_receipts
+                    (receipt_id, decision_id, evidence_sequence, schema_version,
+                     canonical_receipt, canonical_bytes, receipt_hash)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+                """,
+                receipt_id,
+                decision_id,
+                sequence,
+                receipt["schema"],
+                json.dumps(receipt, ensure_ascii=False, separators=(",", ":")),
+                canonical,
+                digest,
+            )
+            await conn.execute(
+                """
+                INSERT INTO nautgate.audit_outbox (receipt_id, evidence_sequence)
+                VALUES ($1, $2)
+                """,
+                receipt_id,
+                sequence,
+            )
 
 
 async def get_routing_preferences(pool: asyncpg.Pool, *, agent_id: str) -> dict:

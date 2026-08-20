@@ -10,6 +10,7 @@ shape before forwarding to NautRouter, then translate the response back as neede
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.audit import build_audit
 from app.audit_meta import extract as extract_meta
 from app.audit_meta import extract_source
+from app.audit_receipt import content_hash
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.classify import assemble_user_text, classify
@@ -221,6 +223,7 @@ async def _process_chat_request(
         raise HTTPException(status_code=503, detail="db_unavailable")
 
     agent_id = await authenticate(pool, request)
+    inbound_body_sha256 = hashlib.sha256(await request.body()).hexdigest()
 
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
@@ -543,6 +546,17 @@ async def _process_chat_request(
         payload.pop("stream", None)
         pseudo_stream = True
 
+    evidence = {
+        "body_sha256": inbound_body_sha256,
+        "upstream_body_sha256": content_hash(payload),
+        "prompt_sha256": content_hash(messages),
+        "tools_sha256": content_hash(payload.get("tools")),
+        "nautgate_key_id": getattr(request.state, "nautgate_key_id", "unknown"),
+        "selected_transport": decision_provider,
+        "instance_id": os.environ.get("NAUTGATE_INSTANCE_ID", "default"),
+        "build_digest": os.environ.get("NAUTGATE_BUILD_DIGEST") or None,
+    }
+
     if payload.get("stream"):
         return _streaming_response(
             request=request,
@@ -561,6 +575,7 @@ async def _process_chat_request(
             agent_id=agent_id,
             session_id=session_id,
             captured_prompt_body=captured.body,
+            evidence=evidence,
         )
 
     # --- non-streaming ---
@@ -569,6 +584,7 @@ async def _process_chat_request(
     upstream_status = 200
     upstream_resp: dict | None = None
     upstream_reason: str | None = None
+    response_sha256: str | None = None
     try:
         if decision_provider == "chatgpt-subscription":
             raw = await subscription_client.chat_completions(payload)
@@ -577,6 +593,7 @@ async def _process_chat_request(
     except httpx.HTTPStatusError as exc:
         upstream_status = exc.response.status_code
         upstream_reason = _upstream_reason(exc.response)
+        response_sha256 = hashlib.sha256(exc.response.content).hexdigest()
         log.warning(
             "nautrouter_status_error",
             status=upstream_status,
@@ -600,6 +617,7 @@ async def _process_chat_request(
 
     if isinstance(raw, dict):
         upstream_resp = raw
+        response_sha256 = content_hash(raw)
     elif raw is not None:
         upstream_status = 502
         log.warning(
@@ -681,6 +699,16 @@ async def _process_chat_request(
         actual_model=actual_model,
         actual_provider=actual_provider,
         notional_cost_usd=notional_cost_usd,
+        evidence={
+            **evidence,
+            "response_sha256": response_sha256,
+            "finish_reason": (
+                ((upstream_resp.get("choices") or [{}])[0].get("finish_reason"))
+                if upstream_resp
+                else None
+            ),
+            "error_code": None if 200 <= upstream_status < 300 else f"upstream_http_{upstream_status}",
+        },
     )
     # Brain layer — fire-and-forget. Compute bloat findings + update scorecard.
     # Wrapped in try/except so a brain failure never breaks the request path.
@@ -864,6 +892,7 @@ def _streaming_response(
     agent_id: str | None = None,
     session_id: str | None = None,
     captured_prompt_body: str | None = None,
+    evidence: dict | None = None,
 ) -> StreamingResponse:
     """Tee + cap + (optional) inline format translation. Tech Paper §11."""
     capture = StreamCapture(cap_bytes=ACCUMULATOR_CAP_BYTES_DEFAULT)
@@ -944,6 +973,12 @@ def _streaming_response(
                     tool_calls_made=stream_tool_calls,
                     actual_model=parsed.get("actual_model"),
                     actual_provider=parsed.get("actual_provider"),
+                    evidence={
+                        **(evidence or {}),
+                        "response_sha256": hashlib.sha256(bytes(capture.accumulator)).hexdigest(),
+                        "finish_reason": parsed.get("finish_reason"),
+                        "error_code": None,
+                    },
                 )
                 # Brain layer — same fire-and-forget pattern as non-streaming.
                 if pool is not None:
@@ -2614,6 +2649,15 @@ async def _resolve_provider_overrides(pool) -> dict:
             error_type=type(exc).__name__,
         )
         return _PROVIDER_OVERRIDE_CACHE["keys"]
+    # No metered Anthropic key stored? Use the operator's own subscription
+    # token, so an ng_ client asking for claude-* reaches the Max plan instead
+    # of the exhausted ANTHROPIC_API_KEY (NAUTGATE-36).
+    if "anthropic" not in keys:
+        from app.anthropic_subscription import subscription_token
+
+        token = subscription_token()
+        if token:
+            keys["anthropic"] = token
     _PROVIDER_OVERRIDE_CACHE.update(at=now, keys=keys)
     return keys
 

@@ -712,11 +712,28 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
     }
   }
 
+  // A Claude Code OAuth access token (Max subscription) authenticates
+  // differently from a metered sk-ant-api03 key: Bearer instead of x-api-key,
+  // plus the oauth beta header, plus Anthropic's own identity line as the FIRST
+  // system block. Omit that line and every call comes back 429
+  // {"type":"rate_limit_error","message":"Error"} — indistinguishable from a
+  // real quota wall, which is how it stayed misdiagnosed for a day.
+  const anthropicKey = overrides.anthropic || ANTHROPIC_API_KEY;
+  const isOauth = (anthropicKey ?? "").startsWith("sk-ant-oat01-");
+  if (isOauth) {
+    anthropicBody.system = [
+      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+      ...(system ? [{ type: "text", text: system }] : []),
+    ];
+  }
+
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": overrides.anthropic || ANTHROPIC_API_KEY,
+      ...(isOauth
+        ? { authorization: `Bearer ${anthropicKey}`, "anthropic-beta": "oauth-2025-04-20" }
+        : { "x-api-key": anthropicKey }),
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(anthropicBody),
