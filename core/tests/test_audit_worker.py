@@ -83,3 +83,51 @@ async def test_worker_records_gap_and_does_not_stage_checkpoint():
     sql = "\n".join(call.args[0] for call in conn.execute.await_args_list)
     assert "INSERT INTO nautgate.audit_gaps" in sql
     assert "INSERT INTO nautgate.audit_checkpoints" not in sql
+
+
+@pytest.mark.asyncio
+async def test_duplicate_worker_delivery_uses_same_checkpoint_identity():
+    rows = [_row(1), _row(2)]
+    first_pool, first_conn = _pool(
+        pending={"count": 2, "oldest": rows[0]["created_at"]}, previous=None, rows=rows
+    )
+    second_pool, second_conn = _pool(
+        pending={"count": 2, "oldest": rows[0]["created_at"]}, previous=None, rows=rows
+    )
+    first = await stage_checkpoint_once(
+        first_pool, instance_id="test", signing_key_id="key-v1", force=True
+    )
+    duplicate = await stage_checkpoint_once(
+        second_pool, instance_id="test", signing_key_id="key-v1", force=True
+    )
+    assert first.checkpoint_id == duplicate.checkpoint_id
+    for conn in (first_conn, second_conn):
+        insert = next(
+            call.args[0]
+            for call in conn.execute.await_args_list
+            if "INSERT INTO nautgate.audit_checkpoints" in call.args[0]
+        )
+        assert "ON CONFLICT (checkpoint_id) DO NOTHING" in insert
+
+
+@pytest.mark.asyncio
+async def test_worker_crash_keeps_staging_inside_one_transaction():
+    rows = [_row(1), _row(2)]
+    pool, conn = _pool(
+        pending={"count": 2, "oldest": rows[0]["created_at"]}, previous=None, rows=rows
+    )
+
+    async def execute(sql, *_args):
+        if "UPDATE nautgate.audit_receipts" in sql:
+            raise RuntimeError("worker crashed")
+
+    conn.execute.side_effect = execute
+    with pytest.raises(RuntimeError, match="worker crashed"):
+        await stage_checkpoint_once(pool, instance_id="test", signing_key_id="key-v1", force=True)
+    transaction = conn.transaction.return_value
+    assert transaction.__aenter__.await_count == 1
+    assert transaction.__aexit__.await_count == 1
+    # The outbox delete is after every receipt update and was never reached.
+    assert not any(
+        "DELETE FROM nautgate.audit_outbox" in call.args[0] for call in conn.execute.await_args_list
+    )

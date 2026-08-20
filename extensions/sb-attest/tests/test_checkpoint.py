@@ -1,5 +1,7 @@
 import base64
 import copy
+import json
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -32,6 +34,15 @@ def test_checkpoint_payload_is_domain_separated_and_deterministic():
     assert payload.startswith(CHECKPOINT_DOMAIN)
     reordered = dict(reversed(list(checkpoint.items())))
     assert checkpoint_payload(reordered, expected_key="nautgate-attestation-v1") == payload
+
+
+def test_core_and_sidecar_share_the_published_checkpoint_vector():
+    fixture = Path(__file__).parents[3] / "docs" / "fixtures" / "audit-v1" / "vectors.json"
+    vector = json.loads(fixture.read_text(encoding="utf-8"))["checkpoint"]
+    assert (
+        checkpoint_payload(vector["value"], expected_key="nautgate-attestation-v1").hex()
+        == vector["payload_hex"]
+    )
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,31 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Added
+
+- **Verified Audit Trail v1 creates independently verifiable routing evidence.**
+  Every completed outcome, including failures and subscription passthroughs,
+  receives a canonical, domain-separated receipt in the same database
+  transaction as its durable outbox item. Contiguous receipt batches become
+  Merkle checkpoints; the optional Securosys TSB sidecar accepts only the typed
+  checkpoint schema, signs the checkpoint payload with its RSA key, and verifies
+  the returned signature locally before NautGate marks any receipt verified.
+  Clients receive a stable receipt ID and an honest `pending` evidence status,
+  then retrieve tenant-scoped receipt, checkpoint, key-history, status, and
+  portable-bundle APIs. `nautgate receipt verify` checks canonical receipt
+  hashing, Merkle inclusion, key purpose/fingerprint, and checkpoint signature
+  without contacting NautGate, its database, or TSB. The Audit Log surfaces
+  backlog, signing lag, failures, gaps, checkpoint history, and verified bundle
+  downloads.
+
+  The precise proof boundary is tamper evidence, not omniscience: a verified
+  bundle proves that the disclosed receipt is included in a hardware-signed
+  checkpoint and has not changed. It does not prove that NautGate observed every
+  real-world event, that a provider or compromised process told the truth, that
+  the signature is a trusted legal timestamp, or that the system as a whole is
+  compliant. V1 operates in availability mode; TSB downtime leaves durable
+  receipts pending and visible while model traffic continues.
+
 ## [0.3.0] — 2026-08-20
 
 ### Added

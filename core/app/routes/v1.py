@@ -4662,9 +4662,7 @@ async def audit_receipt_status(receipt_id: str, request: Request) -> Response:
         parsed_receipt_id = uuid.UUID(receipt_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="receipt_id must be a uuid") from None
-    receipt = await queries.get_audit_receipt(
-        pool, receipt_id=parsed_receipt_id, agent_id=agent_id
-    )
+    receipt = await queries.get_audit_receipt(pool, receipt_id=parsed_receipt_id, agent_id=agent_id)
     if receipt is None:
         raise HTTPException(status_code=404, detail="receipt_not_found")
     return JSONResponse(receipt)
@@ -4708,7 +4706,9 @@ async def audit_status(request: Request) -> Response:
     lag = status["signing_lag_seconds"]
     alerts = []
     if status["open_gaps"]:
-        alerts.append({"code": "evidence_gap", "severity": "critical", "count": status["open_gaps"]})
+        alerts.append(
+            {"code": "evidence_gap", "severity": "critical", "count": status["open_gaps"]}
+        )
     if status["checkpoint_failures"]:
         alerts.append(
             {
@@ -4724,9 +4724,9 @@ async def audit_status(request: Request) -> Response:
     status.update(
         enabled=settings.nautgate_verified_audit_trail,
         mode=settings.nautgate_audit_mode,
-        health="critical" if any(a["severity"] == "critical" for a in alerts) else (
-            "warning" if alerts else "healthy"
-        ),
+        health="critical"
+        if any(a["severity"] == "critical" for a in alerts)
+        else ("warning" if alerts else "healthy"),
         alerts=alerts,
     )
     return JSONResponse(status)

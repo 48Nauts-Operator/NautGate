@@ -1,7 +1,10 @@
 import base64
 import copy
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -12,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from app import cli
 from app.audit_checkpoint import build_checkpoint
 from app.audit_evidence import receipt_hash
+from app.audit_receipt import build_receipt, content_hash
 from app.audit_verify import VerificationError, key_fingerprint, verify_bundle
 from app.db import queries
 from app.routes import v1
@@ -81,7 +85,10 @@ def test_bundle_verifies_receipt_inclusion_and_checkpoint_signature():
         (lambda b: b["receipt"].update({"sequence": 12}), "content hash"),
         (lambda b: b["merkle_proof"][0].update({"hash": "00" * 32}), "inclusion proof"),
         (lambda b: b["checkpoint"].update({"merkle_root": "00" * 32}), "inclusion proof"),
-        (lambda b: b["signature"].update({"value": base64.b64encode(b"bad").decode()}), "signature"),
+        (
+            lambda b: b["signature"].update({"value": base64.b64encode(b"bad").decode()}),
+            "signature",
+        ),
         (lambda b: b["signature"].update({"key_id": "other"}), "checkpoint key"),
         (lambda b: b.update({"leaf_index": 3}), "leaf index"),
     ],
@@ -112,9 +119,10 @@ def test_receipt_verify_cli_supports_machine_readable_output(tmp_path, capsys):
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
-    assert cli.main(
-        ["receipt", "verify", str(bundle_path), "--public-key", str(key_path), "--json"]
-    ) == 0
+    assert (
+        cli.main(["receipt", "verify", str(bundle_path), "--public-key", str(key_path), "--json"])
+        == 0
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["verified"] is True
     assert result["evidence_sequence"] == 11
@@ -132,11 +140,48 @@ def test_receipt_verify_cli_returns_distinct_failure_status(tmp_path, capsys):
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
-    assert cli.main(
-        ["receipt", "verify", str(bundle_path), "--public-key", str(key_path), "--json"]
-    ) == 2
+    assert (
+        cli.main(["receipt", "verify", str(bundle_path), "--public-key", str(key_path), "--json"])
+        == 2
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["verified"] is False
+
+
+def test_offline_verifier_runs_in_an_isolated_process_without_services(tmp_path):
+    bundle, public_key = _bundle()
+    bundle_path = tmp_path / "evidence.json"
+    key_path = tmp_path / "public.pem"
+    bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+    key_path.write_bytes(
+        public_key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.cli",
+            "receipt",
+            "verify",
+            str(bundle_path),
+            "--public-key",
+            str(key_path),
+            "--fingerprint",
+            key_fingerprint(public_key),
+            "--json",
+        ],
+        cwd=Path(__file__).parents[1],
+        env={"PATH": "", "PYTHONPATH": "."},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["verified"] is True
 
 
 class _Acquire:
@@ -210,3 +255,42 @@ async def test_export_endpoint_authenticates_and_returns_bundle(monkeypatch):
         "receipt_id": UUID(bundle["receipt"]["receipt_id"]),
         "agent_id": "agent-a",
     }
+
+
+def test_credentials_and_captured_content_never_enter_portable_evidence():
+    secret_prompt = "customer secret sk-ant-api03-never-export-this"
+    bearer = "ng_never-export-this-either"
+    receipt = build_receipt(
+        sequence=1,
+        receipt_id="00000000-0000-7000-8000-000000000001",
+        decision={
+            "id": "10000000-0000-7000-8000-000000000001",
+            "ts": datetime(2026, 8, 20, tzinfo=UTC),
+            "agent_id": "agent-a",
+            "inbound_format": "anthropic",
+            "model_requested": "claude-opus-5",
+            "decision_provider": "anthropic-oauth",
+            "decision_model": "claude-opus-5",
+            "decision_reason": "explicit",
+            "classified_sensitivity": "secret",
+            "classified_signals": [{"rule": "credential", "match": secret_prompt}],
+            "stream_flag": False,
+        },
+        outcome={
+            "ts": datetime(2026, 8, 20, 0, 0, 1, tzinfo=UTC),
+            "status_code": 200,
+            "tool_calls_made": [{"name": "shell", "arguments": secret_prompt}],
+        },
+        evidence={
+            "body_sha256": content_hash(secret_prompt),
+            "prompt_sha256": content_hash(secret_prompt),
+            "tools_sha256": content_hash([{"arguments": secret_prompt}]),
+            "response_sha256": content_hash("safe response"),
+            "nautgate_key_id": "key-fingerprint-only",
+        },
+    )
+    exported = json.dumps(receipt)
+    assert secret_prompt not in exported
+    assert bearer not in exported
+    assert "sk-ant-api03" not in exported
+    assert "ng_never" not in exported
