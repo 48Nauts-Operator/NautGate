@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     nautgate_audit_public_key_pem: str | None = None
     nautgate_audit_public_key_fingerprint: str | None = None
     nautgate_audit_sign_max_attempts: int = 10
+    nautgate_audit_mode: str = "availability"
+    nautgate_audit_lag_warning_s: int = 120
+    nautgate_audit_lag_critical_s: int = 600
 
     # Day 5a/b: tier → provider/model table for `model: "auto"`.
     # Defaults to <repo>/config/routing.yaml when run from the repo; container deploys

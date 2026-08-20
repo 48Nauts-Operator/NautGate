@@ -2504,7 +2504,13 @@ async def get_audit_status(pool: asyncpg.Pool, *, agent_id: str) -> dict:
                COUNT(*) FILTER (WHERE r.status = 'verified') AS verified,
                COUNT(*) FILTER (WHERE r.status IN ('pending', 'batched')) AS pending,
                COUNT(*) FILTER (WHERE r.status = 'failed') AS failed,
-               MIN(r.created_at) FILTER (WHERE r.status != 'verified') AS oldest_pending
+               MIN(r.created_at) FILTER (WHERE r.status != 'verified') AS oldest_pending,
+               EXTRACT(EPOCH FROM NOW() - MIN(r.created_at)
+                   FILTER (WHERE r.status != 'verified'))::bigint AS signing_lag_seconds,
+               (SELECT COUNT(*) FROM nautgate.audit_checkpoints
+                 WHERE status = 'failed') AS checkpoint_failures,
+               (SELECT COUNT(*) FROM nautgate.audit_gaps
+                 WHERE resolved_at IS NULL) AS open_gaps
           FROM nautgate.audit_receipts r
           JOIN nautgate.route_decisions d ON d.id = r.decision_id
          WHERE d.agent_id = $1
@@ -2518,6 +2524,95 @@ async def get_audit_status(pool: asyncpg.Pool, *, agent_id: str) -> dict:
         "pending": int(row["pending"] or 0),
         "failed": int(row["failed"] or 0),
         "oldest_pending": row["oldest_pending"].isoformat() if row["oldest_pending"] else None,
+        "signing_lag_seconds": int(row["signing_lag_seconds"] or 0),
+        "checkpoint_failures": int(row["checkpoint_failures"] or 0),
+        "open_gaps": int(row["open_gaps"] or 0),
+    }
+
+
+async def get_recent_audit_receipts(
+    pool: asyncpg.Pool, *, agent_id: str, limit: int = 50
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT r.receipt_id, r.decision_id, r.evidence_sequence, r.status,
+               r.checkpoint_id, r.created_at, c.signed_at,
+               c.key_id, c.last_error
+          FROM nautgate.audit_receipts r
+          JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.audit_checkpoints c ON c.checkpoint_id = r.checkpoint_id
+         WHERE d.agent_id = $1
+         ORDER BY r.evidence_sequence DESC
+         LIMIT $2
+        """,
+        agent_id,
+        limit,
+    )
+    return [
+        {
+            "receipt_id": str(row["receipt_id"]),
+            "decision_id": str(row["decision_id"]),
+            "sequence": row["evidence_sequence"],
+            "evidence_status": row["status"],
+            "attested": row["status"] == "verified",
+            "checkpoint_id": str(row["checkpoint_id"]) if row["checkpoint_id"] else None,
+            "key_id": row["key_id"],
+            "created_at": row["created_at"].isoformat(),
+            "signed_at": row["signed_at"].isoformat() if row["signed_at"] else None,
+            "error": row["last_error"] if row["status"] in ("failed", "gap") else None,
+        }
+        for row in rows
+    ]
+
+
+async def get_audit_operations(pool: asyncpg.Pool, *, limit: int = 20) -> dict:
+    checkpoints = await pool.fetch(
+        """
+        SELECT checkpoint_id, first_sequence, last_sequence, receipt_count,
+               key_id, status, attempt_count, last_error, created_at, signed_at
+          FROM nautgate.audit_checkpoints
+         ORDER BY first_sequence DESC
+         LIMIT $1
+        """,
+        limit,
+    )
+    gaps = await pool.fetch(
+        """
+        SELECT id, expected_sequence, observed_sequence, detected_at,
+               resolved_at, resolution
+          FROM nautgate.audit_gaps
+         ORDER BY detected_at DESC
+         LIMIT $1
+        """,
+        limit,
+    )
+    return {
+        "checkpoints": [
+            {
+                "checkpoint_id": str(row["checkpoint_id"]),
+                "first_sequence": row["first_sequence"],
+                "last_sequence": row["last_sequence"],
+                "receipt_count": row["receipt_count"],
+                "key_id": row["key_id"],
+                "status": row["status"],
+                "attempt_count": row["attempt_count"],
+                "error": row["last_error"],
+                "created_at": row["created_at"].isoformat(),
+                "signed_at": row["signed_at"].isoformat() if row["signed_at"] else None,
+            }
+            for row in checkpoints
+        ],
+        "gaps": [
+            {
+                "id": row["id"],
+                "expected_sequence": row["expected_sequence"],
+                "observed_sequence": row["observed_sequence"],
+                "detected_at": row["detected_at"].isoformat(),
+                "resolved_at": row["resolved_at"].isoformat() if row["resolved_at"] else None,
+                "resolution": row["resolution"],
+            }
+            for row in gaps
+        ],
     }
 
 

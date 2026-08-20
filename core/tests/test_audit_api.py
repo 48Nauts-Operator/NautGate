@@ -12,7 +12,16 @@ CHECKPOINT_ID = "10000000-0000-7000-8000-000000000073"
 
 
 def _request():
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=object())))
+    settings = SimpleNamespace(
+        nautgate_verified_audit_trail=True,
+        nautgate_audit_mode="availability",
+        nautgate_audit_lag_warning_s=120,
+        nautgate_audit_lag_critical_s=600,
+    )
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=object(), settings=settings)),
+        query_params={},
+    )
 
 
 @pytest.fixture
@@ -69,11 +78,41 @@ async def test_unknown_or_other_agent_receipt_has_stable_not_found(monkeypatch, 
 async def test_audit_status_is_tenant_scoped(monkeypatch, authenticated):
     async def fake_status(_pool, *, agent_id):
         assert agent_id == "agent-a"
-        return {"schema": "dev.nautgate.audit-status/v1", "pending": 2, "verified": 4}
+        return {
+            "schema": "dev.nautgate.audit-status/v1",
+            "pending": 2,
+            "verified": 4,
+            "signing_lag_seconds": 0,
+            "open_gaps": 0,
+            "checkpoint_failures": 0,
+        }
 
     monkeypatch.setattr(v1.queries, "get_audit_status", fake_status)
     response = await v1.audit_status(_request())
     assert json.loads(response.body)["pending"] == 2
+
+
+@pytest.mark.asyncio
+async def test_audit_status_alerts_on_lag_failures_and_gaps(monkeypatch, authenticated):
+    async def fake_status(_pool, *, agent_id):
+        return {
+            "schema": "dev.nautgate.audit-status/v1",
+            "pending": 2,
+            "verified": 4,
+            "signing_lag_seconds": 601,
+            "open_gaps": 1,
+            "checkpoint_failures": 1,
+        }
+
+    monkeypatch.setattr(v1.queries, "get_audit_status", fake_status)
+    response = await v1.audit_status(_request())
+    body = json.loads(response.body)
+    assert body["health"] == "critical"
+    assert {alert["code"] for alert in body["alerts"]} == {
+        "evidence_gap",
+        "checkpoint_signing_failed",
+        "signing_lag",
+    }
 
 
 @pytest.mark.asyncio

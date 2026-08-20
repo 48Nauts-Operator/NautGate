@@ -4703,4 +4703,55 @@ async def audit_status(request: Request) -> Response:
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
     agent_id = await authenticate(pool, request)
-    return JSONResponse(await queries.get_audit_status(pool, agent_id=agent_id))
+    status = await queries.get_audit_status(pool, agent_id=agent_id)
+    settings = request.app.state.settings
+    lag = status["signing_lag_seconds"]
+    alerts = []
+    if status["open_gaps"]:
+        alerts.append({"code": "evidence_gap", "severity": "critical", "count": status["open_gaps"]})
+    if status["checkpoint_failures"]:
+        alerts.append(
+            {
+                "code": "checkpoint_signing_failed",
+                "severity": "critical",
+                "count": status["checkpoint_failures"],
+            }
+        )
+    if lag >= settings.nautgate_audit_lag_critical_s:
+        alerts.append({"code": "signing_lag", "severity": "critical", "seconds": lag})
+    elif lag >= settings.nautgate_audit_lag_warning_s:
+        alerts.append({"code": "signing_lag", "severity": "warning", "seconds": lag})
+    status.update(
+        enabled=settings.nautgate_verified_audit_trail,
+        mode=settings.nautgate_audit_mode,
+        health="critical" if any(a["severity"] == "critical" for a in alerts) else (
+            "warning" if alerts else "healthy"
+        ),
+        alerts=alerts,
+    )
+    return JSONResponse(status)
+
+
+@router.get("/audit/receipts")
+async def audit_recent_receipts(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    try:
+        limit = int(request.query_params.get("limit", "50"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit must be an integer") from None
+    if not 1 <= limit <= 500:
+        raise HTTPException(status_code=400, detail="limit must be in 1..500")
+    receipts = await queries.get_recent_audit_receipts(pool, agent_id=agent_id, limit=limit)
+    return JSONResponse({"data": receipts})
+
+
+@router.get("/audit/operations")
+async def audit_operations(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    return JSONResponse(await queries.get_audit_operations(pool))

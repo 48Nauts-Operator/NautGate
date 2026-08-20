@@ -2584,3 +2584,17 @@ html, body { height: 100%; }
 .comp-n-flag .comp-n-kind, .comp-n-absent .comp-n-kind { color: var(--bad); }
 .comp-n-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .comp-n-sub { font-size: 10.5px; color: var(--text-dim); line-height: 14px; }
+/* Verified Audit Trail health and receipt lifecycle. */
+.audit-evidence-kpis { display:grid; grid-template-columns:repeat(5,minmax(90px,1fr)); gap:10px; margin:12px 0; }
+.audit-evidence-kpis > div { background:var(--bg-raised); border:1px solid var(--border); border-radius:7px; padding:10px; }
+.audit-evidence-kpis b { display:block; font-size:20px; }
+.audit-evidence-kpis span { color:var(--text-dim); font-size:12px; }
+.audit-evidence-state, .audit-evidence-alert { display:inline-flex; border-radius:999px; padding:2px 8px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+.audit-evidence-state.healthy, .audit-evidence-state.verified { background:rgba(63,185,80,.14); color:var(--good); }
+.audit-evidence-state.warning, .audit-evidence-state.pending, .audit-evidence-state.batched { background:rgba(214,161,0,.14); color:var(--warn); }
+.audit-evidence-state.critical, .audit-evidence-state.failed, .audit-evidence-state.gap, .audit-evidence-alert.critical { background:rgba(229,72,77,.14); color:var(--bad); }
+.audit-evidence-state.disabled { background:var(--bg-raised); color:var(--text-dim); }
+.audit-evidence-alert.warning { background:rgba(214,161,0,.14); color:var(--warn); }
+.audit-evidence-alerts { display:flex; gap:8px; flex-wrap:wrap; }
+.audit-evidence-table code { font-size:11px; }
+@media (max-width:800px) { .audit-evidence-kpis { grid-template-columns:repeat(2,1fr); } .audit-evidence-table { display:block; overflow-x:auto; } }

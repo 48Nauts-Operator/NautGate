@@ -1361,6 +1361,7 @@
       return;
     }
     try {
+      await loadAuditEvidence();
       const scope = getActiveAgentScope();
       const url = "/v1/decisions/recent?limit=50"
         + (scope ? "&agent_id=" + encodeURIComponent(scope) : "");
@@ -1369,6 +1370,68 @@
     } catch (e) {
       list.innerHTML = `<p class="hint" style="color:#ff5c5c">load failed: ${esc(e.message || String(e))}</p>`;
       console.error("loadAudit failed", e);
+    }
+  }
+
+  async function loadAuditEvidence() {
+    const healthHost = document.getElementById("audit-evidence-health");
+    const receiptHost = document.getElementById("audit-evidence-receipts");
+    const operationsHost = document.getElementById("audit-evidence-operations");
+    try {
+      const [status, receiptResult, operations] = await Promise.all([
+        api("/v1/audit/status"),
+        api("/v1/audit/receipts?limit=20"),
+        api("/v1/audit/operations"),
+      ]);
+      const state = status.enabled ? status.health : "disabled";
+      const alerts = (status.alerts || []).map((a) =>
+        `<span class="audit-evidence-alert ${esc(a.severity)}">${esc(a.code.replaceAll("_", " "))}</span>`
+      ).join("");
+      healthHost.innerHTML = `<div class="v2-card audit-evidence-card">
+        <div class="v2-card-head"><div class="v2-card-title-wrap">
+          <span class="v2-card-title">Verified Audit Trail</span>
+          <span class="audit-evidence-state ${esc(state)}">${esc(state)}</span>
+        </div><span class="v2-card-meta">${esc(status.mode || "availability")} mode</span></div>
+        <div class="audit-evidence-kpis">
+          <div><b>${status.pending || 0}</b><span>pending</span></div>
+          <div><b>${status.verified || 0}</b><span>verified</span></div>
+          <div><b>${status.failed || 0}</b><span>failed</span></div>
+          <div><b>${status.open_gaps || 0}</b><span>open gaps</span></div>
+          <div><b>${status.signing_lag_seconds || 0}s</b><span>signing lag</span></div>
+        </div><div class="audit-evidence-alerts">${alerts || '<span class="hint">No active evidence alerts.</span>'}</div>
+        <p class="hint">Verified means this receipt is included in a signed checkpoint. It does not prove that omitted events never occurred or that captured input was truthful.</p>
+      </div>`;
+      const rows = receiptResult.data || [];
+      receiptHost.innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Evidence receipts</span><span class="v2-card-meta">latest 20</span></div>
+        <table class="audit-evidence-table"><thead><tr><th>sequence</th><th>receipt</th><th>status</th><th>checkpoint</th><th>action</th></tr></thead><tbody>${rows.map((r) => `<tr>
+          <td>${r.sequence}</td><td><code title="${esc(r.receipt_id)}">${esc(r.receipt_id.slice(0, 12))}…</code></td>
+          <td><span class="audit-evidence-state ${esc(r.evidence_status)}">${esc(r.evidence_status)}</span></td>
+          <td>${r.checkpoint_id ? `<code title="${esc(r.checkpoint_id)}">${esc(r.checkpoint_id.slice(0, 12))}…</code>` : "—"}</td>
+          <td>${r.attested ? `<button class="ghost audit-bundle-download" data-receipt="${esc(r.receipt_id)}">download bundle</button>` : '<span class="dim">not attested</span>'}</td>
+        </tr>`).join("") || '<tr><td colspan="5" class="hint">No evidence receipts yet.</td></tr>'}</tbody></table></div>`;
+      receiptHost.querySelectorAll(".audit-bundle-download").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const receiptId = button.dataset.receipt;
+          button.disabled = true;
+          try {
+            const bundle = await api(`/v1/audit/receipts/${encodeURIComponent(receiptId)}/bundle`);
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+            link.download = `nautgate-evidence-${receiptId}.json`;
+            link.click();
+            URL.revokeObjectURL(link.href);
+          } finally { button.disabled = false; }
+        });
+      });
+      operationsHost.innerHTML = `<details class="v2-more"><summary>Checkpoint history and evidence gaps</summary>
+        <div class="v2-grid-2"><div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Recent checkpoints</span></div>
+        <table><thead><tr><th>range</th><th>receipts</th><th>key</th><th>status</th></tr></thead><tbody>${(operations.checkpoints || []).map((c) => `<tr><td>${c.first_sequence}–${c.last_sequence}</td><td>${c.receipt_count}</td><td><code>${esc(c.key_id)}</code></td><td><span class="audit-evidence-state ${esc(c.status)}">${esc(c.status)}</span>${c.error ? `<div class="dim">${esc(c.error)}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="4" class="hint">No checkpoints.</td></tr>'}</tbody></table></div>
+        <div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Gap history</span></div>
+        <table><thead><tr><th>expected</th><th>observed</th><th>detected</th><th>state</th></tr></thead><tbody>${(operations.gaps || []).map((g) => `<tr><td>${g.expected_sequence}</td><td>${g.observed_sequence}</td><td>${esc(tsFull(g.detected_at))}</td><td><span class="audit-evidence-state ${g.resolved_at ? "verified" : "gap"}">${g.resolved_at ? "resolved" : "open"}</span></td></tr>`).join("") || '<tr><td colspan="4" class="hint">No gaps detected.</td></tr>'}</tbody></table></div></div></details>`;
+    } catch (e) {
+      healthHost.innerHTML = `<div class="v2-card"><p class="hint">Evidence health unavailable: ${esc(e.message || String(e))}</p></div>`;
+      receiptHost.innerHTML = "";
+      operationsHost.innerHTML = "";
     }
   }
 
