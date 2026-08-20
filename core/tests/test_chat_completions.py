@@ -129,6 +129,8 @@ async def test_round_trip_returns_response_and_writes_rows(chat_client):
     body = resp.json()
     assert body == canned
     assert resp.headers.get("x-nautgate-decision-id")
+    assert resp.headers.get("x-nautgate-receipt-id")
+    assert resp.headers.get("x-nautgate-evidence-status") == "pending"
     assert resp.headers.get("x-nautgate-latency-ms")
     assert resp.headers.get("x-nautgate-provider") == "passthrough"
     assert resp.headers.get("x-nautgate-model") == "claude-haiku-4.5"
@@ -164,6 +166,7 @@ async def test_round_trip_returns_response_and_writes_rows(chat_client):
     assert oc["prompt_tokens"] == 12
     assert oc["completion_tokens"] == 3
     assert oc["was_empty"] is False
+    assert oc["evidence"]["receipt_id"] == resp.headers["x-nautgate-receipt-id"]
 
 
 # --- was_empty (Tongyi failure mode) ----------------------------------------
@@ -230,6 +233,8 @@ async def test_provider_reported_model_substitution_is_returned_to_caller(chat_c
     assert resp.headers["x-nautgate-observed-model"] == "claude-haiku-4-5"
     assert resp.headers["x-nautgate-substituted"] == "true"
     assert resp.headers["x-nautgate-decision-id"]
+    assert resp.headers["x-nautgate-receipt-id"]
+    assert resp.headers["x-nautgate-evidence-status"] == "pending"
 
 
 @pytest.mark.asyncio

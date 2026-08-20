@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     nautgate_audit_tick_s: float = 5.0
     nautgate_audit_attest_url: str | None = None
     nautgate_audit_attest_token: str | None = None
+    # Public half only. Published by the key-history API for offline verification.
+    nautgate_audit_public_key_pem: str | None = None
     nautgate_audit_public_key_fingerprint: str | None = None
     nautgate_audit_sign_max_attempts: int = 10
 

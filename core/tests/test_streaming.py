@@ -253,10 +253,15 @@ async def test_streaming_happy_path(streaming_app):
             assert resp.status_code == 200
             assert resp.headers["content-type"].startswith("text/event-stream")
             assert resp.headers.get("x-nautgate-decision-id")
+            assert resp.headers.get("x-nautgate-receipt-id")
+            assert resp.headers.get("x-nautgate-evidence-status") == "pending"
+            receipt_id = resp.headers["x-nautgate-receipt-id"]
 
             received = b""
             async for chunk in resp.aiter_raw():
                 received += chunk
+
+    assert calls["outcome"][0]["evidence"]["receipt_id"] == receipt_id
 
     assert received == b"".join(chunks), "client must receive every byte upstream sent"
 

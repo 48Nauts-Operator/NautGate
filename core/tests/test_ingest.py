@@ -75,6 +75,8 @@ async def test_records_turn(app_with_ingest):
         resp = await c.post("/v1/ingest", json=TURN, headers={"X-Ingest-Token": TOKEN})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+    assert resp.headers["x-nautgate-evidence-status"] == "pending"
+    assert resp.json()["receipt_id"] == resp.headers["x-nautgate-receipt-id"]
 
     pre = captured["precapture"]
     assert pre["agent_id"] == "codex"
@@ -94,3 +96,4 @@ async def test_records_turn(app_with_ingest):
     # usage normalized from response.usage (input/output tokens)
     assert out["prompt_tokens"] == 12
     assert out["completion_tokens"] == 8
+    assert out["evidence"]["receipt_id"] == resp.json()["receipt_id"]

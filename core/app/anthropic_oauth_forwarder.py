@@ -263,6 +263,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     agent_id = _agent_id_for(token)
 
     decision_id = uuid.uuid4()
+    receipt_id = uuid.uuid4()
     requested_model = (payload or {}).get("model") if isinstance(payload, dict) else None
     inbound_format = "anthropic_messages_oauth"
     is_stream = bool(isinstance(payload, dict) and payload.get("stream"))
@@ -381,7 +382,15 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
             error=str(exc) or repr(exc),
             error_type=type(exc).__name__,
         )
-        raise HTTPException(status_code=502, detail=f"anthropic_unreachable: {exc}") from None
+        raise HTTPException(
+            status_code=502,
+            detail=f"anthropic_unreachable: {exc}",
+            headers={
+                "X-Nautgate-Decision-Id": str(decision_id),
+                "X-NautGate-Receipt-Id": str(receipt_id),
+                "X-NautGate-Evidence-Status": "pending",
+            },
+        ) from None
 
     # Build the response back to the client. Preserve Content-Encoding
     # so the client decompresses correctly (we forward raw upstream bytes).
@@ -389,6 +398,8 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
         k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP_RESPONSE
     }
     response_headers["X-Nautgate-Decision-Id"] = str(decision_id)
+    response_headers["X-NautGate-Receipt-Id"] = str(receipt_id)
+    response_headers["X-NautGate-Evidence-Status"] = "pending"
     response_headers["X-Nautgate-OAuth-Passthrough"] = "anthropic"
     if overload_retries:
         response_headers["X-Nautgate-Overload-Retries"] = str(overload_retries)
@@ -493,6 +504,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         actual_model=meta.get("actual_model") or requested_model,
                         actual_provider="anthropic-oauth",
                         evidence={
+                            "receipt_id": str(receipt_id),
                             "body_sha256": hashlib.sha256(raw_body).hexdigest(),
                             "upstream_body_sha256": hashlib.sha256(raw_body).hexdigest(),
                             "prompt_sha256": content_hash(

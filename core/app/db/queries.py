@@ -194,7 +194,8 @@ async def write_outcome(
                 RETURNING next_sequence - 1
                 """
             )
-            receipt_id = uuid4()
+            supplied_receipt_id = (evidence or {}).get("receipt_id")
+            receipt_id = UUID(str(supplied_receipt_id)) if supplied_receipt_id else uuid4()
             outcome = {
                 "ts": outcome_row["ts"],
                 "status_code": status_code,
@@ -2427,4 +2428,142 @@ async def export_evidence_bundle(
             "key_id": row["key_id"],
             "public_key_fingerprint": row["public_key_fingerprint"],
         },
+    }
+
+
+async def get_audit_receipt(pool: asyncpg.Pool, *, receipt_id: UUID, agent_id: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT r.receipt_id, r.decision_id, r.evidence_sequence, r.status,
+               r.checkpoint_id, r.created_at, c.signed_at AS verified_at
+          FROM nautgate.audit_receipts r
+          JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.audit_checkpoints c ON c.checkpoint_id = r.checkpoint_id
+         WHERE r.receipt_id = $1 AND d.agent_id = $2
+        """,
+        receipt_id,
+        agent_id,
+    )
+    if row is None:
+        return None
+    return {
+        "receipt_id": str(row["receipt_id"]),
+        "decision_id": str(row["decision_id"]),
+        "sequence": row["evidence_sequence"],
+        "evidence_status": row["status"],
+        "attested": row["status"] == "verified",
+        "checkpoint_id": str(row["checkpoint_id"]) if row["checkpoint_id"] else None,
+        "created_at": row["created_at"].isoformat(),
+        "verified_at": row["verified_at"].isoformat() if row["verified_at"] else None,
+    }
+
+
+async def get_audit_checkpoint(
+    pool: asyncpg.Pool, *, checkpoint_id: UUID, agent_id: str
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT DISTINCT c.canonical_checkpoint, c.status, c.algorithm, c.signature,
+                        c.key_id, c.public_key_fingerprint, c.signed_at
+          FROM nautgate.audit_checkpoints c
+          JOIN nautgate.audit_receipts r ON r.checkpoint_id = c.checkpoint_id
+          JOIN nautgate.route_decisions d ON d.id = r.decision_id
+         WHERE c.checkpoint_id = $1 AND d.agent_id = $2
+        """,
+        checkpoint_id,
+        agent_id,
+    )
+    if row is None:
+        return None
+    checkpoint = row["canonical_checkpoint"]
+    if isinstance(checkpoint, str):
+        checkpoint = json.loads(checkpoint)
+    return {
+        "checkpoint": checkpoint,
+        "evidence_status": row["status"],
+        "attested": row["status"] == "verified",
+        "signature": (
+            {
+                "algorithm": row["algorithm"],
+                "encoding": "base64-der",
+                "value": row["signature"],
+                "key_id": row["key_id"],
+                "public_key_fingerprint": row["public_key_fingerprint"],
+            }
+            if row["status"] == "verified"
+            else None
+        ),
+        "signed_at": row["signed_at"].isoformat() if row["signed_at"] else None,
+    }
+
+
+async def get_audit_status(pool: asyncpg.Pool, *, agent_id: str) -> dict:
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE r.status = 'verified') AS verified,
+               COUNT(*) FILTER (WHERE r.status IN ('pending', 'batched')) AS pending,
+               COUNT(*) FILTER (WHERE r.status = 'failed') AS failed,
+               MIN(r.created_at) FILTER (WHERE r.status != 'verified') AS oldest_pending
+          FROM nautgate.audit_receipts r
+          JOIN nautgate.route_decisions d ON d.id = r.decision_id
+         WHERE d.agent_id = $1
+        """,
+        agent_id,
+    )
+    return {
+        "schema": "dev.nautgate.audit-status/v1",
+        "total": int(row["total"] or 0),
+        "verified": int(row["verified"] or 0),
+        "pending": int(row["pending"] or 0),
+        "failed": int(row["failed"] or 0),
+        "oldest_pending": row["oldest_pending"].isoformat() if row["oldest_pending"] else None,
+    }
+
+
+async def register_audit_signing_key(
+    pool: asyncpg.Pool, *, key_id: str, fingerprint: str, public_key_pem: str
+) -> None:
+    registered = await pool.fetchval(
+        """
+        INSERT INTO nautgate.audit_signing_keys
+            (key_id, public_key_fingerprint, public_key_pem)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (key_id) DO UPDATE SET
+            public_key_pem = EXCLUDED.public_key_pem
+        WHERE nautgate.audit_signing_keys.public_key_fingerprint = EXCLUDED.public_key_fingerprint
+        RETURNING TRUE
+        """,
+        key_id,
+        fingerprint,
+        public_key_pem,
+    )
+    if registered is not True:
+        raise RuntimeError("audit signing key ID is already bound to different key material")
+
+
+async def get_audit_signing_keys(pool: asyncpg.Pool) -> dict:
+    rows = await pool.fetch(
+        """
+        SELECT key_id, purpose, algorithm, public_key_fingerprint,
+               public_key_pem, status, valid_from, valid_until
+          FROM nautgate.audit_signing_keys
+         ORDER BY valid_from, key_id
+        """
+    )
+    return {
+        "schema": "dev.nautgate.signing-key-history/v1",
+        "keys": [
+            {
+                "key_id": row["key_id"],
+                "purpose": row["purpose"],
+                "algorithm": row["algorithm"],
+                "public_key_fingerprint": row["public_key_fingerprint"],
+                "public_key_pem": row["public_key_pem"],
+                "status": row["status"],
+                "valid_from": row["valid_from"].isoformat(),
+                "valid_until": row["valid_until"].isoformat() if row["valid_until"] else None,
+            }
+            for row in rows
+        ],
     }

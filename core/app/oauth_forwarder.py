@@ -154,6 +154,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
     # by Codex install but distinguish accounts if you ever have multiple.
     agent_id = f"codex-{account_id[:12]}" if account_id else "codex-oauth"
     decision_id = uuid.uuid4()
+    receipt_id = uuid.uuid4()
     inbound_format = "openai_responses_oauth"
 
     pool = getattr(request.app.state, "db", None)
@@ -257,11 +258,21 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
         log.error(
             "oauth_forward_failed", error=str(exc) or repr(exc), error_type=type(exc).__name__
         )
-        raise HTTPException(status_code=502, detail=f"chatgpt_unreachable: {exc}") from None
+        raise HTTPException(
+            status_code=502,
+            detail=f"chatgpt_unreachable: {exc}",
+            headers={
+                "X-Nautgate-Decision-Id": str(decision_id),
+                "X-NautGate-Receipt-Id": str(receipt_id),
+                "X-NautGate-Evidence-Status": "pending",
+            },
+        ) from None
 
     # Strip hop-by-hop headers from the response on the way back.
     response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
     response_headers["X-Nautgate-Decision-Id"] = str(decision_id)
+    response_headers["X-NautGate-Receipt-Id"] = str(receipt_id)
+    response_headers["X-NautGate-Evidence-Status"] = "pending"
     response_headers["X-Nautgate-OAuth-Passthrough"] = "true"
 
     async def _relay() -> AsyncIterator[bytes]:
@@ -322,6 +333,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         actual_provider="chatgpt-oauth",
                         actual_model="codex-subscription",
                         evidence={
+                            "receipt_id": str(receipt_id),
                             "body_sha256": hashlib.sha256(raw_body).hexdigest(),
                             "upstream_body_sha256": hashlib.sha256(raw_body).hexdigest(),
                             "prompt_sha256": content_hash(

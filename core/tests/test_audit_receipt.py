@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -149,3 +149,30 @@ async def test_outcome_receipt_and_outbox_share_one_transaction():
         == receipt_hash(__import__("json").loads(receipt_insert[5])).hex()
     )
     assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_caller_allocated_receipt_id_is_preserved_transactionally():
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(side_effect=[{"ts": _outcome()["ts"]}, _decision()])
+    conn.fetchval = AsyncMock(return_value=7)
+    conn.execute = AsyncMock()
+    transaction = conn.transaction.return_value
+    transaction.__aenter__ = AsyncMock(return_value=None)
+    transaction.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    acquired = pool.acquire.return_value
+    acquired.__aenter__ = AsyncMock(return_value=conn)
+    acquired.__aexit__ = AsyncMock(return_value=None)
+    receipt_id = uuid4()
+
+    await queries.write_outcome(
+        pool,
+        decision_id=_decision()["id"],
+        status_code=200,
+        duration_ms=1,
+        evidence={"receipt_id": str(receipt_id)},
+    )
+
+    assert conn.execute.await_args_list[0].args[1] == receipt_id
+    assert conn.execute.await_args_list[1].args[1] == receipt_id

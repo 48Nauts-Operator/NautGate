@@ -522,8 +522,11 @@ async def _process_chat_request(
     request.state.decision_model = decision_model
     request.state.plugins = plugins
 
+    receipt_id = uuid.uuid4()
     common_headers = {
         "X-Nautgate-Decision-Id": str(decision_id),
+        "X-NautGate-Receipt-Id": str(receipt_id),
+        "X-NautGate-Evidence-Status": "pending",
         "X-Nautgate-Provider": decision_provider,
         "X-Nautgate-Model": str(decision_model),
         "X-Nautgate-Requested-Model": str(model_requested or ""),
@@ -547,6 +550,7 @@ async def _process_chat_request(
         pseudo_stream = True
 
     evidence = {
+        "receipt_id": str(receipt_id),
         "body_sha256": inbound_body_sha256,
         "upstream_body_sha256": content_hash(payload),
         "prompt_sha256": content_hash(messages),
@@ -4433,6 +4437,7 @@ async def ingest(request: Request) -> JSONResponse:
     source_ip = body.get("source_ip")
 
     decision_id = uuid.uuid4()
+    receipt_id = uuid.uuid4()
     payload = {"model": model, "messages": messages, "tools": tools}
     # ponytail: proxy traffic is local/trusted — capture at sensitivity "none"
     # (no PII classification), same as the Codex WS path did.
@@ -4497,9 +4502,26 @@ async def ingest(request: Request) -> JSONResponse:
         response_size_bytes=len(resp_json.encode("utf-8")),
         actual_provider=provider,
         actual_model=served_model,
+        evidence={
+            "receipt_id": str(receipt_id),
+            "body_sha256": content_hash(payload),
+            "upstream_body_sha256": content_hash(payload),
+            "prompt_sha256": content_hash(messages),
+            "tools_sha256": content_hash(tools),
+            "response_sha256": content_hash(response),
+            "selected_transport": provider,
+            "finish_reason": response.get("finish_reason"),
+            "error_code": None if 200 <= status_code < 300 else f"upstream_http_{status_code}",
+        },
     )
 
-    return JSONResponse({"ok": True, "decision_id": str(decision_id)})
+    return JSONResponse(
+        {"ok": True, "decision_id": str(decision_id), "receipt_id": str(receipt_id)},
+        headers={
+            "X-NautGate-Receipt-Id": str(receipt_id),
+            "X-NautGate-Evidence-Status": "pending",
+        },
+    )
 
 
 # ============================================================================
@@ -4628,3 +4650,57 @@ async def audit_evidence_bundle(receipt_id: str, request: Request) -> Response:
         # Do not reveal whether another agent owns the receipt or evidence is pending.
         raise HTTPException(status_code=404, detail="verified_evidence_bundle_not_found")
     return JSONResponse(bundle)
+
+
+@router.get("/audit/receipts/{receipt_id}")
+async def audit_receipt_status(receipt_id: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    try:
+        parsed_receipt_id = uuid.UUID(receipt_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="receipt_id must be a uuid") from None
+    receipt = await queries.get_audit_receipt(
+        pool, receipt_id=parsed_receipt_id, agent_id=agent_id
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="receipt_not_found")
+    return JSONResponse(receipt)
+
+
+@router.get("/audit/checkpoints/{checkpoint_id}")
+async def audit_checkpoint_status(checkpoint_id: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    try:
+        parsed_checkpoint_id = uuid.UUID(checkpoint_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="checkpoint_id must be a uuid") from None
+    checkpoint = await queries.get_audit_checkpoint(
+        pool, checkpoint_id=parsed_checkpoint_id, agent_id=agent_id
+    )
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="checkpoint_not_found")
+    return JSONResponse(checkpoint)
+
+
+@router.get("/audit/keys")
+async def audit_signing_key_history(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    return JSONResponse(await queries.get_audit_signing_keys(pool))
+
+
+@router.get("/audit/status")
+async def audit_status(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    return JSONResponse(await queries.get_audit_status(pool, agent_id=agent_id))

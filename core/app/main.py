@@ -319,6 +319,29 @@ async def lifespan(app: FastAPI):
         )
 
         if settings.nautgate_verified_audit_trail:
+            if settings.nautgate_audit_public_key_pem:
+                from cryptography.hazmat.primitives import serialization
+
+                from app.audit_verify import key_fingerprint, load_verification_key
+                from app.db import queries as _audit_queries
+
+                public_key = load_verification_key(settings.nautgate_audit_public_key_pem)
+                fingerprint = key_fingerprint(public_key)
+                if (
+                    settings.nautgate_audit_public_key_fingerprint
+                    and fingerprint != settings.nautgate_audit_public_key_fingerprint
+                ):
+                    raise RuntimeError("configured audit public-key fingerprint does not match")
+                public_pem = public_key.public_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                ).decode()
+                await _audit_queries.register_audit_signing_key(
+                    app.state.db,
+                    key_id=settings.nautgate_audit_signing_key_id,
+                    fingerprint=fingerprint,
+                    public_key_pem=public_pem,
+                )
             from app.audit_worker import run_scheduler as _audit_checkpoint_scheduler
 
             app.state.audit_checkpoint_task = _asyncio.create_task(
