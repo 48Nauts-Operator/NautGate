@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from app.audit_evidence import RECEIPT_SCHEMA, canonical_json, receipt_hash
@@ -107,7 +107,10 @@ def build_receipt(
             "selected_model": selected,
             "observed_provider": outcome.get("actual_provider"),
             "observed_model": observed,
-            "substituted": bool(requested not in (None, "auto", selected, observed)),
+            "substituted": bool(
+                requested not in (None, "auto")
+                and (selected != requested or (observed is not None and observed != requested))
+            ),
             "fallback_attempts": fallback_attempts,
             "reason_code": str(decision.get("decision_reason") or "unknown"),
         },

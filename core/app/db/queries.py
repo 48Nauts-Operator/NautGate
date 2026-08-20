@@ -7,7 +7,7 @@ DB and gets a durable-spool fallback (Day 4d).
 
 import json
 from datetime import UTC
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -184,7 +184,7 @@ async def write_outcome(
             if decision_row is None:
                 raise RuntimeError(f"route decision disappeared before outcome: {decision_id}")
             sequence = await conn.fetchval("SELECT nextval('nautgate.audit_receipt_sequence')")
-            receipt_id = UUID(bytes=__import__("os").urandom(16), version=4)
+            receipt_id = uuid4()
             outcome = {
                 "ts": outcome_row["ts"],
                 "status_code": status_code,

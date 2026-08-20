@@ -25,6 +25,7 @@ shows the operator what they saved.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time as _time
 import uuid
@@ -35,6 +36,7 @@ import structlog
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.audit_receipt import content_hash
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.streaming import parse_sse_for_outcome
@@ -490,6 +492,28 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         tool_calls_made=meta.get("tool_calls") or None,
                         actual_model=meta.get("actual_model") or requested_model,
                         actual_provider="anthropic-oauth",
+                        evidence={
+                            "body_sha256": hashlib.sha256(raw_body).hexdigest(),
+                            "upstream_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+                            "prompt_sha256": content_hash(
+                                (payload or {}).get("messages")
+                                if isinstance(payload, dict)
+                                else None
+                            ),
+                            "tools_sha256": content_hash(
+                                (payload or {}).get("tools") if isinstance(payload, dict) else None
+                            ),
+                            "response_sha256": hashlib.sha256(decoded).hexdigest(),
+                            "nautgate_key_id": "anthropic-oauth:"
+                            + hashlib.sha256(token.encode()).hexdigest()[:16],
+                            "selected_transport": "anthropic-oauth",
+                            "finish_reason": meta.get("finish_reason"),
+                            "error_code": (
+                                None
+                                if 200 <= upstream_status < 300
+                                else f"upstream_http_{upstream_status}"
+                            ),
+                        },
                     )
                     # Quality eval — same fire-and-forget pattern as the
                     # main routing path. Captures Claude Code's actual prompts

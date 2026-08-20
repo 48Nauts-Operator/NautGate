@@ -22,6 +22,7 @@ NautGate without juggling auth modes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -37,6 +38,7 @@ from app.anthropic_oauth_forwarder import (
     _RETRY_CAP_S,
     _parse_retry_after,
 )
+from app.audit_receipt import content_hash
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.streaming import _iter_sse_events
@@ -319,6 +321,27 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         response_size_bytes=len(body_buf),
                         actual_provider="chatgpt-oauth",
                         actual_model="codex-subscription",
+                        evidence={
+                            "body_sha256": hashlib.sha256(raw_body).hexdigest(),
+                            "upstream_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+                            "prompt_sha256": content_hash(
+                                (payload or {}).get("messages")
+                                if isinstance(payload, dict)
+                                else None
+                            ),
+                            "tools_sha256": content_hash(
+                                (payload or {}).get("tools") if isinstance(payload, dict) else None
+                            ),
+                            "response_sha256": hashlib.sha256(bytes(body_buf)).hexdigest(),
+                            "nautgate_key_id": "chatgpt-oauth:"
+                            + hashlib.sha256(account_id.encode()).hexdigest()[:16],
+                            "selected_transport": "chatgpt-oauth",
+                            "error_code": (
+                                None
+                                if 200 <= upstream.status_code < 300
+                                else f"upstream_http_{upstream.status_code}"
+                            ),
+                        },
                     )
                     # Quality eval — captures Codex prompts so the anti-pattern
                     # leaderboard sees them. Fire-and-forget; never blocks.

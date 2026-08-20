@@ -707,7 +707,9 @@ async def _process_chat_request(
                 if upstream_resp
                 else None
             ),
-            "error_code": None if 200 <= upstream_status < 300 else f"upstream_http_{upstream_status}",
+            "error_code": None
+            if 200 <= upstream_status < 300
+            else f"upstream_http_{upstream_status}",
         },
     )
     # Brain layer — fire-and-forget. Compute bloat findings + update scorecard.

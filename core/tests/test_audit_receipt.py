@@ -1,9 +1,13 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
+
+import pytest
 
 from app.audit_evidence import canonical_json, receipt_hash
 from app.audit_receipt import build_receipt, content_hash, finalized_receipt
+from app.db import queries
 
 ZERO = "0" * 64
 
@@ -77,6 +81,15 @@ def test_failure_is_an_evidence_result_not_missing_receipt():
     assert receipt["routing"]["observed_model"] is None
 
 
+def test_provider_observed_model_difference_is_a_substitution():
+    outcome = _outcome()
+    outcome["actual_model"] = "claude-opus-5-20260820"
+    receipt = build_receipt(sequence=1, decision=_decision(), outcome=outcome)
+    assert receipt["routing"]["selected_model"] == "claude-opus-5"
+    assert receipt["routing"]["observed_model"] == "claude-opus-5-20260820"
+    assert receipt["routing"]["substituted"] is True
+
+
 def test_finalized_receipt_returns_the_signed_material():
     receipt, encoded, digest = finalized_receipt(
         sequence=1,
@@ -93,3 +106,45 @@ def test_content_hash_distinguishes_bytes_text_and_structured_values():
     assert content_hash(b"hello") == content_hash("hello")
     assert content_hash({"b": 2, "a": 1}) == content_hash({"a": 1, "b": 2})
     assert content_hash(None) is None
+
+
+@pytest.mark.asyncio
+async def test_outcome_receipt_and_outbox_share_one_transaction():
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(side_effect=[{"ts": _outcome()["ts"]}, _decision()])
+    conn.fetchval = AsyncMock(return_value=42)
+    conn.execute = AsyncMock()
+    transaction = conn.transaction.return_value
+    transaction.__aenter__ = AsyncMock(return_value=None)
+    transaction.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    acquired = pool.acquire.return_value
+    acquired.__aenter__ = AsyncMock(return_value=conn)
+    acquired.__aexit__ = AsyncMock(return_value=None)
+
+    await queries.write_outcome(
+        pool,
+        decision_id=_decision()["id"],
+        status_code=200,
+        duration_ms=4000,
+        prompt_tokens=1200,
+        completion_tokens=350,
+        cost_usd=Decimal("0.012345"),
+        actual_provider="anthropic",
+        actual_model="claude-opus-5",
+        evidence={"body_sha256": ZERO, "response_sha256": "4" * 64},
+    )
+
+    transaction.__aenter__.assert_awaited_once()
+    transaction.__aexit__.assert_awaited_once()
+    assert conn.fetchrow.await_count == 2  # outcome RETURNING + joined decision
+    assert conn.fetchval.await_count == 1  # monotonic evidence sequence
+    assert conn.execute.await_count == 2  # receipt + outbox
+    receipt_insert = conn.execute.await_args_list[0].args
+    assert "INSERT INTO nautgate.audit_receipts" in receipt_insert[0]
+    assert receipt_insert[3] == 42
+    assert (
+        bytes(receipt_insert[7]).hex()
+        == receipt_hash(__import__("json").loads(receipt_insert[5])).hex()
+    )
+    assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[1].args[0]
