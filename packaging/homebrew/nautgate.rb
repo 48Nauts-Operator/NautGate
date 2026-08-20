@@ -30,13 +30,9 @@ class Nautgate < Formula
 
   desc "Memory-aware LLM gateway — routes, records and prices every model call"
   homepage "https://nautgate.dev"
-  url "https://github.com/48Nauts-Operator/NautGate/archive/refs/tags/v0.2.0.tar.gz"
-  # TODO(release): real digest — `shasum -a 256` of the release tarball.
-  # Left explicit rather than a plausible-looking placeholder, which would only
-  # surface as a checksum mismatch on someone else's machine.
-  sha256 "0" * 64
+  url "https://github.com/48Nauts-Operator/NautGate/archive/refs/tags/v0.3.0.tar.gz"
+  sha256 "82ff10c1cdf85f2dcf7447e18622c32b567e22583d6e247a62e4677778854457"
   license "AGPL-3.0-or-later"
-  revision 1
   head "https://github.com/48Nauts-Operator/NautGate.git", branch: "main"
 
   # libyaml: pyyaml builds its C extension against it — brew audit catches
