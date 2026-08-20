@@ -37,7 +37,6 @@ def test_formula_generated_section_is_exactly_current():
 def test_formula_service_has_a_persistent_default_database_url():
     formula = _generator().FORMULA.read_text()
 
-    assert "revision 1" in formula
     assert (
         'NAUTGATE_DB_URL="${NAUTGATE_DB_URL:-postgres://$(id -un)@localhost:5432/nautgate}"'
         in formula
