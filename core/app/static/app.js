@@ -276,9 +276,7 @@
             <td>${tokenCell}</td>
             <td>${fmtAgo(s.last_seen_at)}</td>
             <td>
-              ${isActive
-                ? '<span class="hint">active</span>'
-                : `<button data-sess-activate="${esc(s.id)}">Activate</button>`}
+              <button data-sess-audit="${esc(s.id)}" ${isActive ? 'class="ghost"' : ""}>Audit Log</button>
               ${verifyBtn}
               <button data-sess-delete="${esc(s.id)}" class="ghost danger">×</button>
             </td>
@@ -296,9 +294,11 @@
     }));
 
     // Wire up actions.
-    list.querySelectorAll("[data-sess-activate]").forEach(b => b.addEventListener("click", () => {
-      setActiveSessionId(b.getAttribute("data-sess-activate"));
-      renderAuth(); renderSessions(); refreshActive();
+    list.querySelectorAll("[data-sess-audit]").forEach(b => b.addEventListener("click", () => {
+      setActiveSessionId(b.getAttribute("data-sess-audit"));
+      renderAuth();
+      renderSessions();
+      activateTab("audit");
     }));
     list.querySelectorAll("[data-sess-delete]").forEach(b => b.addEventListener("click", () => {
       const id = b.getAttribute("data-sess-delete");
