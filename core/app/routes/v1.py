@@ -202,6 +202,7 @@ async def _process_chat_request(
     *,
     payload: dict,
     inbound_format: str,
+    agent_id_override: str | None = None,
     response_translator: Callable[[dict, str], dict] | None = None,
     stream_translator: Callable[[bytes], list[bytes]] | None = None,
     stream_translator_finish: Callable[[], list[bytes]] | None = None,
@@ -223,7 +224,7 @@ async def _process_chat_request(
     if pool is None:
         raise HTTPException(status_code=503, detail="db_unavailable")
 
-    agent_id = await authenticate(pool, request)
+    agent_id = agent_id_override or await authenticate(pool, request)
     inbound_body_sha256 = hashlib.sha256(await request.body()).hexdigest()
 
     if not isinstance(payload, dict):
@@ -1222,6 +1223,46 @@ def _upstream_detail(status: int, reason: str | None, provider: str | None) -> s
     return "upstream_failed"
 
 
+async def _oauth_requires_confidential_local(request: Request, payload: dict) -> bool:
+    """Decide whether an OAuth passthrough must enter the local-only pipeline.
+
+    OAuth remains transparent for ordinary traffic. Once the operator enables
+    a confidentiality boundary, however, that security policy outranks the
+    subscription transport exactly as it outranks explicit and key-pinned
+    cloud models.
+    """
+    from app.app_config import get_settings
+    from app.confidentiality import (
+        ConfidentialityPolicyError,
+        classify_confidentiality,
+        confidential_route_model,
+    )
+
+    pool = getattr(request.app.state, "db", None)
+    config = dict((await get_settings(pool)).get("confidentiality_routing") or {})
+    if not config.get("enabled"):
+        return False
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    base = classify(assemble_user_text(messages))
+    policy_text = json.dumps(
+        {"messages": messages, "tools": payload.get("tools")},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    try:
+        result = classify_confidentiality(
+            base,
+            policy_text,
+            declaration=request.headers.get("x-nautgate-confidentiality"),
+            bowden_enabled=config.get("bowden_enabled", True),
+        )
+        return confidential_route_model(result.classification.sensitivity, config) is not None
+    except ConfidentialityPolicyError as exc:
+        status = 400 if "invalid X-NautGate-Confidentiality" in str(exc) else 503
+        raise HTTPException(status_code=status, detail=str(exc)) from None
+
+
 @router.post("/chat/completions")
 async def chat_completions(request: Request) -> Response:
     # ChatGPT-OAuth bypass — if Codex (or anyone) sends with chatgpt-account-id,
@@ -1260,12 +1301,12 @@ async def messages(request: Request) -> Response:
     # by the sk-ant-oat01-* token shape and forwarded verbatim to
     # api.anthropic.com so the subscription covers the call.
     from app.anthropic_oauth_forwarder import (
+        agent_id_for_request,
         forward_to_anthropic,
         is_anthropic_oauth_request,
     )
 
-    if is_anthropic_oauth_request(request):
-        return await forward_to_anthropic(request)
+    oauth_request = is_anthropic_oauth_request(request)
 
     try:
         raw = await request.json()
@@ -1273,6 +1314,13 @@ async def messages(request: Request) -> Response:
         raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
+
+    oauth_agent_id = None
+    if oauth_request:
+        if not await _oauth_requires_confidential_local(request, raw):
+            return await forward_to_anthropic(request)
+        oauth_agent_id = agent_id_for_request(request)
+        request.state.nautgate_key_id = f"{oauth_agent_id}:local-policy"
 
     payload = ant.request_to_openai_chat(raw)
 
@@ -1307,6 +1355,7 @@ async def messages(request: Request) -> Response:
         request,
         payload=payload,
         inbound_format="anthropic",
+        agent_id_override=oauth_agent_id,
         response_translator=lambda resp, model: ant.response_to_anthropic(
             resp, model, normalize=normalize
         ),

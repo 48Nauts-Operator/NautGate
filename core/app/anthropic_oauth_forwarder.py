@@ -145,6 +145,17 @@ def _agent_id_for(token: str) -> str:
     return f"claude-oauth-{body[:16]}"
 
 
+def agent_id_for_request(request: Request) -> str:
+    """Return the stable, non-secret audit identity for an OAuth request."""
+    auth_hdr = request.headers.get("authorization", "")
+    token = (
+        auth_hdr.split(" ", 1)[1].strip()
+        if auth_hdr.lower().startswith("bearer ")
+        else request.headers.get("x-api-key", "").strip()
+    )
+    return _agent_id_for(token)
+
+
 def _build_forward_headers(request: Request) -> dict[str, str]:
     """Strip hop-by-hop headers; forward everything else verbatim. The
     Authorization / x-api-key header is what authenticates us to Anthropic.

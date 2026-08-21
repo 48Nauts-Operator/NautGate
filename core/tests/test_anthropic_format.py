@@ -307,6 +307,95 @@ async def test_messages_round_trip_returns_anthropic_shape(messages_app):
 
 
 @pytest.mark.asyncio
+async def test_confidential_oauth_request_routes_local_instead_of_passthrough(
+    messages_app, monkeypatch
+):
+    app, calls = messages_app
+
+    async def confidential_settings(_pool):
+        return {
+            "confidentiality_routing": {
+                "enabled": True,
+                "local_model": "lmstudio/qwen-local",
+                "route_pii": True,
+                "route_secret": True,
+                "bowden_enabled": True,
+            }
+        }
+
+    passthrough = AsyncMock()
+    monkeypatch.setattr("app.app_config.get_settings", confidential_settings)
+    monkeypatch.setattr("app.anthropic_oauth_forwarder.forward_to_anthropic", passthrough)
+    calls["mock"].chat_completions.return_value = {
+        "id": "chatcmpl-local",
+        "model": "qwen-local",
+        "choices": [{"message": {"role": "assistant", "content": "kept local"}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/messages",
+            headers={"Authorization": "Bearer sk-ant-oat01-test-account-token"},
+            json={
+                "model": "claude-opus-5",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": "My IBAN is CH93 0076 2011 6238 5295 7"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-provider"] == "lmstudio"
+    assert resp.headers["x-nautgate-model"] == "lmstudio/qwen-local"
+    assert resp.headers["x-nautgate-confidentiality"] == "pii"
+    assert resp.headers["x-nautgate-data-boundary"] == "local"
+    passthrough.assert_not_awaited()
+    forwarded = calls["mock"].chat_completions.call_args.args[0]
+    assert forwarded["model"] == "lmstudio/qwen-local"
+    assert calls["precapture"][0]["agent_id"].startswith("claude-oauth-")
+
+
+@pytest.mark.asyncio
+async def test_clean_oauth_request_stays_on_subscription_passthrough(messages_app, monkeypatch):
+    app, calls = messages_app
+
+    async def confidential_settings(_pool):
+        return {
+            "confidentiality_routing": {
+                "enabled": True,
+                "local_model": "lmstudio/qwen-local",
+                "route_pii": True,
+                "route_secret": True,
+                "bowden_enabled": True,
+            }
+        }
+
+    async def passthrough(_request):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"lane": "oauth"})
+
+    monkeypatch.setattr("app.app_config.get_settings", confidential_settings)
+    monkeypatch.setattr("app.anthropic_oauth_forwarder.forward_to_anthropic", passthrough)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/messages",
+            headers={"Authorization": "Bearer sk-ant-oat01-test-account-token"},
+            json={
+                "model": "claude-opus-5",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": "Write a short haiku"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"lane": "oauth"}
+    calls["mock"].chat_completions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_messages_streaming_emits_anthropic_sse(messages_app):
     app, calls = messages_app
 
