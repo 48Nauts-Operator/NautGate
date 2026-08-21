@@ -2136,6 +2136,13 @@ html, body { height: 100%; }
 .v2-more > summary::-webkit-details-marker { display: none; }
 .v2-more > summary::before { content: "▸ "; color: var(--text-dim); }
 .v2-more[open] > summary::before { content: "▾ "; }
+.audit-receipts-collapsible .v2-card { overflow-x: auto; }
+.table-pagination {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding: 12px 0 2px; font-size: 12px;
+}
+.table-pagination .ghost { min-width: 76px; }
+.table-pagination .ghost:disabled { opacity: 0.4; cursor: default; }
 
 /* Settings → Keys */
 .keys-form { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-end; }

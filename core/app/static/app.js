@@ -1357,6 +1357,7 @@
   document.getElementById("audit-reload").addEventListener("click", () => loadAudit());
 
   let auditExpandedId = null;
+  let auditReceiptPage = 0;
   const auditDetailCache = new Map();
 
   async function loadAudit() {
@@ -1410,27 +1411,39 @@
         <p class="hint">Verified means this receipt is included in a signed checkpoint. It does not prove that omitted events never occurred or that captured input was truthful.</p>
       </div>`;
       const rows = receiptResult.data || [];
-      receiptHost.innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Evidence receipts</span><span class="v2-card-meta">latest 20</span></div>
-        <table class="audit-evidence-table"><thead><tr><th>sequence</th><th>receipt</th><th>status</th><th>checkpoint</th><th>action</th></tr></thead><tbody>${rows.map((r) => `<tr>
-          <td>${r.sequence}</td><td><code title="${esc(r.receipt_id)}">${esc(r.receipt_id.slice(0, 12))}…</code></td>
-          <td><span class="audit-evidence-state ${esc(r.evidence_status)}">${esc(r.evidence_status)}</span></td>
-          <td>${r.checkpoint_id ? `<code title="${esc(r.checkpoint_id)}">${esc(r.checkpoint_id.slice(0, 12))}…</code>` : "—"}</td>
-          <td>${r.attested ? `<button class="ghost audit-bundle-download" data-receipt="${esc(r.receipt_id)}">download bundle</button>` : '<span class="dim">not attested</span>'}</td>
-        </tr>`).join("") || '<tr><td colspan="5" class="hint">No evidence receipts yet.</td></tr>'}</tbody></table></div>`;
-      receiptHost.querySelectorAll(".audit-bundle-download").forEach((button) => {
-        button.addEventListener("click", async () => {
-          const receiptId = button.dataset.receipt;
-          button.disabled = true;
-          try {
-            const bundle = await api(`/v1/audit/receipts/${encodeURIComponent(receiptId)}/bundle`);
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
-            link.download = `nautgate-evidence-${receiptId}.json`;
-            link.click();
-            URL.revokeObjectURL(link.href);
-          } finally { button.disabled = false; }
+      const pageSize = 5;
+      const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+      auditReceiptPage = Math.min(auditReceiptPage, pageCount - 1);
+      const renderReceiptPage = () => {
+        const wasOpen = receiptHost.querySelector("details")?.open || false;
+        const pageRows = rows.slice(auditReceiptPage * pageSize, (auditReceiptPage + 1) * pageSize);
+        receiptHost.innerHTML = `<details class="v2-more audit-receipts-collapsible" ${wasOpen ? "open" : ""}><summary>Evidence receipts <span class="dim">· latest ${rows.length}</span></summary>
+          <div class="v2-card"><table class="audit-evidence-table"><thead><tr><th>sequence</th><th>receipt</th><th>status</th><th>checkpoint</th><th>action</th></tr></thead><tbody>${pageRows.map((r) => `<tr>
+            <td>${r.sequence}</td><td><code title="${esc(r.receipt_id)}">${esc(r.receipt_id.slice(0, 12))}…</code></td>
+            <td><span class="audit-evidence-state ${esc(r.evidence_status)}">${esc(r.evidence_status)}</span></td>
+            <td>${r.checkpoint_id ? `<code title="${esc(r.checkpoint_id)}">${esc(r.checkpoint_id.slice(0, 12))}…</code>` : "—"}</td>
+            <td>${r.attested ? `<button class="ghost audit-bundle-download" data-receipt="${esc(r.receipt_id)}">download bundle</button>` : '<span class="dim">not attested</span>'}</td>
+          </tr>`).join("") || '<tr><td colspan="5" class="hint">No evidence receipts yet.</td></tr>'}</tbody></table>
+          <div class="table-pagination"><button class="ghost audit-receipts-prev" ${auditReceiptPage === 0 ? "disabled" : ""}>Previous</button><span class="dim">Page ${auditReceiptPage + 1} of ${pageCount}</span><button class="ghost audit-receipts-next" ${auditReceiptPage >= pageCount - 1 ? "disabled" : ""}>Next</button></div></div>
+        </details>`;
+        receiptHost.querySelector(".audit-receipts-prev")?.addEventListener("click", () => { auditReceiptPage -= 1; renderReceiptPage(); });
+        receiptHost.querySelector(".audit-receipts-next")?.addEventListener("click", () => { auditReceiptPage += 1; renderReceiptPage(); });
+        receiptHost.querySelectorAll(".audit-bundle-download").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const receiptId = button.dataset.receipt;
+            button.disabled = true;
+            try {
+              const bundle = await api(`/v1/audit/receipts/${encodeURIComponent(receiptId)}/bundle`);
+              const link = document.createElement("a");
+              link.href = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+              link.download = `nautgate-evidence-${receiptId}.json`;
+              link.click();
+              URL.revokeObjectURL(link.href);
+            } finally { button.disabled = false; }
+          });
         });
-      });
+      };
+      renderReceiptPage();
       operationsHost.innerHTML = `<details class="v2-more"><summary>Checkpoint history and evidence gaps</summary>
         <div class="v2-grid-2"><div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Recent checkpoints</span></div>
         <table><thead><tr><th>range</th><th>receipts</th><th>key</th><th>status</th></tr></thead><tbody>${(operations.checkpoints || []).map((c) => `<tr><td>${c.first_sequence}–${c.last_sequence}</td><td>${c.receipt_count}</td><td><code>${esc(c.key_id)}</code></td><td><span class="audit-evidence-state ${esc(c.status)}">${esc(c.status)}</span>${c.error ? `<div class="dim">${esc(c.error)}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="4" class="hint">No checkpoints.</td></tr>'}</tbody></table></div>
@@ -1450,7 +1463,7 @@
   function renderAuditPulse(rows) {
     const host = document.getElementById("audit-pulse");
     if (!host) return;
-    if (rows.length < 2) { host.innerHTML = ""; return; }
+    if (!rows.length) { host.innerHTML = ""; return; }
     const chrono = rows.slice().reverse();
     const modelColor = new Map();
     const colorFor = (m) => {
