@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
 
@@ -35,6 +36,16 @@ class ConfidentialityResult:
     sources: tuple[str, ...]
     declared: str | None
     bowden_labels: dict[str, int]
+
+
+def confidentiality_message_text(messages: list[dict]) -> str:
+    """Serialize conversation data without static top-level tool schemas."""
+    return json.dumps(
+        {"messages": messages},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def classify_confidentiality(

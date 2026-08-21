@@ -5,6 +5,7 @@ from app.confidentiality import (
     ConfidentialityPolicyError,
     classify_confidentiality,
     confidential_route_model,
+    confidentiality_message_text,
     redact_bowden,
 )
 
@@ -30,6 +31,28 @@ def test_generic_urls_do_not_make_clean_tool_schemas_confidential():
     assert result.classification.sensitivity == "none"
     assert result.classification.signals == []
     assert result.bowden_labels == {}
+
+
+def test_message_serialization_keeps_tool_activity_but_excludes_static_tool_schemas():
+    payload = {
+        "messages": [
+            {"role": "user", "content": "What's the weather in Zurich?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "input": {"host": "10.0.0.1"}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "content": "admin@acme.test"}]},
+        ],
+        "tools": [
+            {"description": "Connect to 192.0.2.1 using ~/.ssh/id_rsa; contact docs@example.com"}
+        ],
+    }
+
+    text = confidentiality_message_text(payload["messages"])
+
+    assert "10.0.0.1" in text
+    assert "admin@acme.test" in text
+    assert all(value not in text for value in ("192.0.2.1", "id_rsa", "docs@example.com"))
 
 
 def test_caller_declaration_can_upgrade_but_not_downgrade():

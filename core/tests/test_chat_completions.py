@@ -402,7 +402,7 @@ async def test_confidential_policy_overrides_explicit_cloud_model(chat_app, monk
 
 
 @pytest.mark.asyncio
-async def test_confidential_policy_scans_tool_schema_sent_upstream(chat_app, monkeypatch):
+async def test_confidential_policy_ignores_static_tool_schema_for_routing(chat_app, monkeypatch):
     app, calls = chat_app
 
     async def confidential_settings(_pool):
@@ -443,10 +443,11 @@ async def test_confidential_policy_scans_tool_schema_sent_upstream(chat_app, mon
         )
 
     assert resp.status_code == 200
-    assert resp.headers["x-nautgate-data-boundary"] == "local"
+    assert resp.headers["x-nautgate-data-boundary"] == "standard"
     pc = calls["precapture"][0]
-    assert pc["classified_sensitivity"] == "pii"
-    assert "756.9217.0769.85" not in pc["tools_body"]
+    assert pc["classified_sensitivity"] == "none"
+    assert pc["decision_provider"] == "passthrough"
+    assert "756.9217.0769.85" in pc["tools_body"]
 
 
 @pytest.mark.asyncio

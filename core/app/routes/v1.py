@@ -298,16 +298,18 @@ async def _process_chat_request(
         ConfidentialityPolicyError,
         classify_confidentiality,
         confidential_route_model,
+        confidentiality_message_text,
     )
 
     runtime_settings = await get_runtime_settings(pool)
     confidentiality_config = dict(runtime_settings.get("confidentiality_routing") or {})
-    confidentiality_text = json.dumps(
-        {"messages": messages, "tools": payload.get("tools")},
-        ensure_ascii=False,
-        separators=(",", ":"),
-        default=str,
-    )
+    # Only conversation content crosses the confidentiality boundary. The
+    # top-level ``tools`` collection contains static JSON schemas supplied by
+    # clients such as Claude Code; their documentation/examples commonly
+    # contain placeholder emails, IP addresses, and SSH references. Actual
+    # tool arguments and results are represented in ``messages`` and therefore
+    # remain classified here.
+    confidentiality_text = confidentiality_message_text(messages)
     try:
         confidentiality = classify_confidentiality(
             classification,
