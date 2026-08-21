@@ -840,13 +840,13 @@ table.clickable tbody tr { cursor: pointer; }
 }
 .confidential-findings {
   display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px;
-  padding: 10px; border: 1px solid rgba(214, 161, 0, 0.32);
-  border-radius: 9px; background: rgba(214, 161, 0, 0.06);
+  padding: 10px; border: 1px solid rgba(214, 161, 0, 0.48);
+  border-radius: 9px; background: rgba(214, 161, 0, 0.12);
 }
 .confidential-finding {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px;
   align-items: center; padding: 7px 8px; border-radius: 6px;
-  background: rgba(0, 0, 0, 0.16);
+  background: rgba(255, 255, 255, 0.035);
 }
 .confidential-finding > div { display: flex; flex-direction: column; min-width: 0; }
 .confidential-finding b { font-size: 12px; color: var(--text); }
