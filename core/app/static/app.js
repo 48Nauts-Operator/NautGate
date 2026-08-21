@@ -184,8 +184,10 @@
 
   let sessionPage = 0;
   let sessionPageSize = 10;
-  // Click-to-sort state for the sessions table. key=null → localStorage order.
-  let sessionSort = { key: null, dir: 1 };
+  // Always open with the most recently used session first. Column clicks may
+  // change the order for the current page lifetime, but refreshes reset to
+  // this operationally useful default.
+  let sessionSort = { key: "last_seen_at", dir: -1 };
 
   // Dashboard-local: hide auto-discovered sessions idle longer than this many
   // days so the list doesn't grow to hundreds of pages. Saved token sessions
