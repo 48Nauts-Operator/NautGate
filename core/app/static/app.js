@@ -469,7 +469,11 @@
   const _shell = document.querySelector(".app-shell");
   function closeNavDrawer() { _shell && _shell.classList.remove("nav-open"); }
   document.getElementById("nav-toggle")?.addEventListener("click", () => {
-    _shell && _shell.classList.toggle("nav-open");
+    if (window.matchMedia("(max-width: 820px)").matches) {
+      _shell && _shell.classList.toggle("nav-open");
+    } else {
+      document.getElementById("sidebar-collapse")?.click();
+    }
   });
   document.getElementById("nav-backdrop")?.addEventListener("click", closeNavDrawer);
   // Esc closes the drawer too.
@@ -718,7 +722,7 @@
       g.style.display = any ? "" : "none";
     });
   });
-  // Collapsible sidebar (NAUTGATE-11) — collapse to an icons-only rail; persist.
+  // Collapsible sidebar (NAUTGATE-11) — fully hide the desktop pane; persist.
   (function collapsibleSidebar() {
     const KEY = "nautgate-sidebar-collapsed";
     const shell = document.querySelector(".app-shell");
