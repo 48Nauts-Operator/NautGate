@@ -4,6 +4,26 @@ from __future__ import annotations
 
 import string
 
+# Payment-card issuer ranges and valid PAN lengths.  Luhn alone is not proof
+# that a digit sequence is a card number: roughly one in ten arbitrary numeric
+# identifiers pass it by chance.  Requiring a known IIN/BIN range and a length
+# issued by that network prevents timestamps and run IDs from becoming PII.
+# Maestro is deliberately omitted because its unusually broad prefix/length
+# space would reintroduce those false positives.
+CARD_NETWORKS: list[tuple[str, list[tuple[str, str]], set[int]]] = [
+    ("Visa", [("4", "4")], {13, 16, 19}),
+    ("Mastercard", [("51", "55"), ("2221", "2720")], {16}),
+    ("Amex", [("34", "34"), ("37", "37")], {15}),
+    (
+        "Discover",
+        [("6011", "6011"), ("644", "649"), ("65", "65"), ("622126", "622925")],
+        {16, 17, 18, 19},
+    ),
+    ("Diners Club", [("300", "305"), ("3095", "3095"), ("36", "36"), ("38", "39")], {14, 16, 19}),
+    ("JCB", [("3528", "3589")], {16, 17, 18, 19}),
+    ("UnionPay", [("62", "62"), ("81", "81")], {16, 17, 18, 19}),
+]
+
 IBAN_LENGTHS: dict[str, int] = {
     "AD": 24,
     "AT": 20,
@@ -207,11 +227,24 @@ def luhn_checksum(value: str) -> int:
     return total % 10
 
 
-def is_valid_credit_card(value: str) -> bool:
+def credit_card_network(value: str) -> str | None:
+    """Return the issuer network for a validated PAN, otherwise ``None``."""
     digits = compact_digits(value)
-    if not 13 <= len(digits) <= 19:
-        return False
-    return luhn_checksum(digits) == 0
+    if not 13 <= len(digits) <= 19 or luhn_checksum(digits) != 0:
+        return None
+    for network, ranges, lengths in CARD_NETWORKS:
+        if len(digits) not in lengths:
+            continue
+        for lower, upper in ranges:
+            width = len(lower)
+            if len(digits) >= width and int(lower) <= int(digits[:width]) <= int(upper):
+                return network
+    return None
+
+
+def is_valid_credit_card(value: str) -> bool:
+    """Validate Luhn, issuer prefix, and network-specific PAN length."""
+    return credit_card_network(value) is not None
 
 
 def is_valid_swiss_phone(value: str) -> bool:

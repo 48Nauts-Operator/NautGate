@@ -2,6 +2,7 @@
 
 from app.cards import card_network, is_valid_card_number
 from app.classify import classify, scan_for_findings
+from bowden_pii import detect as bowden_detect
 
 
 # --- valid test numbers per network (public Luhn-valid test PANs) -----------
@@ -42,6 +43,16 @@ def test_packed_timestamps_are_not_cards():
         assert not is_valid_card_number(ts)
 
 
+def test_luhn_valid_run_id_is_not_a_card_in_either_detector():
+    # Real-world regression: this xNaut test-run ID passes Luhn by chance. Once
+    # Claude Code included it in a tool result, every later request was forced
+    # local because Bowden previously treated Luhn alone as proof of a PAN.
+    run_id = "20260813-124712"
+    assert card_network(run_id) is None
+    assert not is_valid_card_number(run_id)
+    assert not [d for d in bowden_detect(run_id) if d.label == "CREDIT_CARD"]
+
+
 def test_luhn_fail_rejected():
     # 4111...1112 breaks the checksum.
     assert not is_valid_card_number("4111111111111112")
@@ -75,6 +86,7 @@ def test_grouped_card_still_detected():
     # 4-4-4-4 spacing is a real card shape and must still be caught.
     c = classify("pay 4111 1111 1111 1111 now")
     assert any(s["rule_id"] == "credit_card_like" for s in c.signals)
+    assert [d for d in bowden_detect("pay 4111 1111 1111 1111 now") if d.label == "CREDIT_CARD"]
 
 
 def test_scan_for_findings_skips_timestamps():
