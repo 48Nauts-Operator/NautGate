@@ -1500,6 +1500,14 @@
     }
     list.innerHTML = rows
       .map((r) => {
+        const confidentialLocal = r.provider === "lmstudio"
+          && String(r.reason || "").startsWith("confidentiality:");
+        const confidentialityClass = confidentialLocal
+          ? (String(r.reason).match(/^confidentiality:([^:]+)/)?.[1] || r.sensitivity || "matched")
+          : null;
+        const localPolicyChip = confidentialLocal
+          ? `<span class="confidential-local-chip" title="Confidentiality policy matched ${esc(confidentialityClass)} and forced this request to the configured local model">◆ LOCAL · ${esc(String(confidentialityClass).toUpperCase())} MATCH</span>`
+          : "";
         const dot = r.was_empty || r.client_disconnected
           ? "warn"
           : r.status_code && r.status_code >= 400
@@ -1531,10 +1539,10 @@
           ? ` <span class="audit-source">→ ${esc(actual)}${r.actual_provider ? ' <span style="color:var(--text-dim)">(' + esc(r.actual_provider) + ')</span>' : ''}</span>`
           : "";
         return `
-          <div class="audit-row" data-decision="${esc(r.decision_id)}">
+          <div class="audit-row${confidentialLocal ? " audit-row-confidential-local" : ""}" data-decision="${esc(r.decision_id)}">
             <div class="audit-dot ${dot}"></div>
             <div>
-              <div class="audit-model">${esc(decided)}${actualBit} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span> ${bloatChip}</div>
+              <div class="audit-model">${esc(decided)}${actualBit} <span class="audit-source">· ${esc(source)} · ${esc(r.inbound_format || "")}</span> ${localPolicyChip} ${bloatChip}</div>
               ${callsLine}
             </div>
             <div>${bar}<div class="audit-source" style="margin-top:2px">${total} tokens · ${(r.request_size_bytes || 0) >= 1024 ? Math.round(r.request_size_bytes / 1024) + "KB" : (r.request_size_bytes || 0) + "B"} req</div></div>
@@ -1682,6 +1690,18 @@
     html += grid("Cost", d.cost_usd != null ? usd(d.cost_usd) : "—");
     html += grid("Tier · Score", `${esc(d.classified_tier || "—")} · ${(d.classified_score ?? 0).toFixed(2)}`);
     html += grid("Sensitivity", sensTag(d.classified_sensitivity) || "none");
+    if (
+      d.decision_provider === "lmstudio"
+      && String(d.decision_reason || "").startsWith("confidentiality:")
+    ) {
+      const matched = String(d.decision_reason).match(/^confidentiality:([^:]+)/)?.[1]
+        || d.classified_sensitivity
+        || "matched";
+      html += grid(
+        "Data boundary",
+        `<span class="confidential-local-chip">◆ LOCAL · ${esc(String(matched).toUpperCase())} MATCH</span>`,
+      );
+    }
     if (d.used_fallback || (d.fallback_count && d.fallback_count > 0)) {
       html += grid("Degraded", `<span style="color:var(--warn)">yes · ${d.fallback_count || 1} fallback${(d.fallback_count || 1) > 1 ? "s" : ""}</span>`);
     }

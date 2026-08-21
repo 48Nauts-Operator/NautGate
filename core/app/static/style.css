@@ -474,6 +474,32 @@ table.clickable tbody tr { cursor: pointer; }
   font-size: 12px;
 }
 .audit-row:hover { border-color: var(--accent); }
+.audit-row.audit-row-confidential-local {
+  background: linear-gradient(90deg, rgba(24, 160, 120, 0.13), rgba(24, 160, 120, 0.035));
+  border-color: rgba(49, 196, 151, 0.34);
+  box-shadow: inset 3px 0 0 #31c497;
+}
+.audit-row.audit-row-confidential-local:hover {
+  border-color: rgba(49, 196, 151, 0.72);
+}
+.audit-row.audit-row-confidential-local.selected {
+  background: linear-gradient(90deg, rgba(24, 160, 120, 0.19), rgba(128, 128, 0, 0.07));
+  box-shadow: inset 3px 0 0 #31c497;
+}
+.confidential-local-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid rgba(49, 196, 151, 0.52);
+  border-radius: 3px;
+  background: rgba(49, 196, 151, 0.12);
+  color: #68ddb8;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
 .audit-dot { width: 8px; height: 8px; border-radius: 50%; }
 .audit-dot.ok { background: var(--good); }
 .audit-dot.warn { background: var(--warn); }
