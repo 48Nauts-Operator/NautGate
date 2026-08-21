@@ -28,7 +28,7 @@ from app.audit_meta import extract as extract_meta
 from app.audit_meta import extract_source
 from app.audit_receipt import content_hash
 from app.auth import authenticate
-from app.capture import capture_prompt, capture_response, capture_tools
+from app.capture import capture_prompt, capture_response, capture_tools, redact
 from app.classify import assemble_user_text, classify
 from app.classify_llm import maybe_upgrade_classification
 from app.compliance import build_trace as build_compliance_trace
@@ -68,8 +68,9 @@ def _normalize_tool_calls(raw: list, sensitivity: str) -> list[dict] | None:
             continue
         entry = {"id": tc.get("id"), "name": name}
         if sensitivity != "secret" and isinstance(args, str) and args:
-            entry["arguments"] = args[:TOOL_CALL_ARG_EXCERPT_BYTES]
-            if len(args) > TOOL_CALL_ARG_EXCERPT_BYTES:
+            safe_args = redact(args) if sensitivity == "pii" else args
+            entry["arguments"] = safe_args[:TOOL_CALL_ARG_EXCERPT_BYTES]
+            if len(safe_args) > TOOL_CALL_ARG_EXCERPT_BYTES:
                 entry["arguments_truncated"] = True
         out.append(entry)
     return out or None
@@ -288,6 +289,44 @@ async def _process_chat_request(
             timeout_s=settings.nautgate_classify_llm_confirm_timeout_s,
         )
 
+    # CONFIDENTIALITY — strictest of the built-in classifier, deterministic
+    # Bowden Swiss/EU PII detection, and an optional caller declaration. The
+    # caller can upgrade the class but can never downgrade a detector finding.
+    from app.app_config import get_settings as get_runtime_settings
+    from app.confidentiality import (
+        ConfidentialityPolicyError,
+        classify_confidentiality,
+        confidential_route_model,
+    )
+
+    runtime_settings = await get_runtime_settings(pool)
+    confidentiality_config = dict(runtime_settings.get("confidentiality_routing") or {})
+    confidentiality_text = json.dumps(
+        {"messages": messages, "tools": payload.get("tools")},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    try:
+        confidentiality = classify_confidentiality(
+            classification,
+            confidentiality_text,
+            declaration=request.headers.get("x-nautgate-confidentiality"),
+            bowden_enabled=bool(
+                confidentiality_config.get("enabled")
+                and confidentiality_config.get("bowden_enabled", True)
+            ),
+        )
+    except ConfidentialityPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    classification = confidentiality.classification
+    # Excerpts are audit/plugin metadata too. Apply the same capture boundary so
+    # a detector finding cannot leak through the small convenience field.
+    if classification.sensitivity == "secret":
+        prompt_excerpt = None
+    elif classification.sensitivity == "pii" and prompt_excerpt:
+        prompt_excerpt = redact(prompt_excerpt)
+
     # SCORE
     score_vector = score(payload)
     tier = to_tier(score_vector)
@@ -410,6 +449,42 @@ async def _process_chat_request(
         if normalized != model_requested:
             payload["model"] = normalized
             decision_reason = f"explicit:{model_requested}->{normalized}"
+
+    # Confidentiality is a security boundary, not another routing preference.
+    # It therefore outranks explicit models, key/header overrides and plugin
+    # suggestions. A sick local model fails closed instead of reaching fallback.
+    try:
+        confidential_model = confidential_route_model(
+            classification.sensitivity, confidentiality_config
+        )
+    except ConfidentialityPolicyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "confidential_route_unavailable",
+                "classification": classification.sensitivity,
+                "required_boundary": "local",
+                "reason": str(exc),
+            },
+        ) from None
+    if confidential_model:
+        if health_tracker and health_tracker.is_unhealthy("lmstudio", confidential_model):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "confidential_route_unavailable",
+                    "classification": classification.sensitivity,
+                    "required_boundary": "local",
+                    "reason": "configured local model is unhealthy",
+                    "model": confidential_model,
+                },
+            )
+        decision_provider = "lmstudio"
+        decision_model = confidential_model
+        decision_reason = (
+            f"confidentiality:{classification.sensitivity}:local_only->{confidential_model}"
+        )
+        payload["model"] = confidential_model
 
     # An ordinary ng_ client can explicitly select a model covered by the
     # operator's ChatGPT plan.  Claim the subscription lane here so the request
@@ -537,6 +612,8 @@ async def _process_chat_request(
         "X-Nautgate-Score": f"{score_vector.aggregate:.4f}",
         "X-Nautgate-Brain-Used": "false",
         "X-Nautgate-Inbound-Format": inbound_format,
+        "X-NautGate-Confidentiality": classification.sensitivity,
+        "X-NautGate-Data-Boundary": "local" if confidential_model else "standard",
     }
 
     # The subscription lane (Codex CLI) cannot stream. A 501 here surfaced as
@@ -557,6 +634,8 @@ async def _process_chat_request(
         "tools_sha256": content_hash(payload.get("tools")),
         "nautgate_key_id": getattr(request.state, "nautgate_key_id", "unknown"),
         "selected_transport": decision_provider,
+        "policy_version": "confidentiality-routing/v1",
+        "policy_sha256": content_hash(confidentiality_config),
         "instance_id": os.environ.get("NAUTGATE_INSTANCE_ID", "default"),
         "build_digest": os.environ.get("NAUTGATE_BUILD_DIGEST") or None,
     }
@@ -2775,7 +2854,36 @@ async def put_config_endpoint(request: Request) -> Response:
     # lets ops point at a different env var name; the secret itself stays in env.
     if isinstance(patch.get("quality_eval"), dict):
         patch["quality_eval"].pop("api_key", None)
-    from app.app_config import update_settings
+    from app.app_config import get_settings, update_settings
+
+    if isinstance(patch.get("confidentiality_routing"), dict):
+        conf = patch["confidentiality_routing"]
+        allowed = {"enabled", "local_model", "route_pii", "route_secret", "bowden_enabled"}
+        unknown = set(conf) - allowed
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown confidentiality setting(s): {', '.join(sorted(unknown))}",
+            )
+        for key in ("enabled", "route_pii", "route_secret", "bowden_enabled"):
+            if key in conf and not isinstance(conf[key], bool):
+                raise HTTPException(status_code=422, detail=f"{key} must be boolean")
+        model = conf.get("local_model")
+        if model is not None and (
+            not isinstance(model, str)
+            or (model and (not model.startswith("lmstudio/") or model == "lmstudio/"))
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="local_model must use the lmstudio/<model> namespace",
+            )
+        current = await get_settings(pool)
+        effective = {**(current.get("confidentiality_routing") or {}), **conf}
+        if effective.get("enabled") and not str(effective.get("local_model") or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="choose a local model before enabling confidential routing",
+            )
     from app.quality_eval import config_cache_clear as qe_cache_clear
     from app.sb_memory import config_cache_clear
 

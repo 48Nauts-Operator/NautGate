@@ -48,12 +48,14 @@ reporting trustworthy.
 - Two credential lanes: OAuth subscription traffic passes through untouched and free; metered keys get routed
 - Per-key model override — pin any model to an API key and run Claude Code on it
 - Local models via LM Studio, addressable as `lmstudio/<id>`
+- Fail-closed confidential routing — send PII/secrets to a Settings-selected local model with no cloud fallback
 
 **Evidence**
 - Full audit log: policy-gated prompt/response capture, tokens, timings, cost
 - Routing flow view — client → lane → decision → upstream → model actually served
 - Silent-substitution detection when the served model differs from the requested one
 - Sensitivity classification (PII/secrets) before anything is stored
+- Deterministic Swiss/EU PII detection through Bowden, with matched values redacted from audit captures
 
 **Analytics**
 - Quality gate — post-hoc judge scoring with failure-mode buckets

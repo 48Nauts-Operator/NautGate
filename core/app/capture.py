@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from app.classify import _PII_RULES, _SECRET_RULES
+from app.confidentiality import redact_bowden
 
 # Sensible default; the streaming-tee cap is 8 MB but ledger storage doesn't
 # need that much. 256 KB covers the common case (system + ≤ 100 messages).
@@ -37,7 +38,7 @@ def redact(text: str) -> str:
     redacted = text
     for rule_id, pattern in _REDACTION_PATTERNS:
         redacted = pattern.sub(f"[{rule_id}-redacted]", redacted)
-    return redacted
+    return redact_bowden(redacted)
 
 
 def _truncate(text: str, cap: int) -> tuple[str, int | None]:

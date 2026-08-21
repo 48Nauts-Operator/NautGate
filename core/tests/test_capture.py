@@ -50,6 +50,14 @@ def test_capture_prompt_pii_redacts_but_keeps_body():
     assert "@48nauts.com" not in out.body
 
 
+def test_capture_prompt_pii_redacts_bowden_swiss_identifier():
+    raw = "756.9217.0769.85"
+    out = capture_prompt(_msg(f"My AHV is {raw}"), "pii")
+    assert out.body is not None
+    assert raw not in out.body
+    assert "[bowden-ahv-redacted]" in out.body
+
+
 def test_capture_prompt_secret_returns_none():
     out = capture_prompt(_msg("ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ab"), "secret")
     assert out.body is None

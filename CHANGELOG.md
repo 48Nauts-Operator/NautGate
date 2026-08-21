@@ -17,6 +17,17 @@ regression we introduced, the entry says so.
 
 ### Added
 
+- **Confidential requests can be forced across a local-only inference boundary.**
+  Settings now lets operators select a loaded LM Studio model and enable
+  fail-closed routing for PII and/or secrets. The policy takes precedence over
+  automatic, explicit, per-key, header, and plugin model choices and never
+  falls back to a cloud provider. Bowden's deterministic Swiss/EU rules augment
+  NautGate's existing classifier; raw matches are redacted from captured bodies
+  and only rule IDs and counts enter the audit record. Callers may explicitly
+  upgrade a request with `X-NautGate-Confidentiality`, but cannot downgrade a
+  detector result. The feature remains disabled until an operator chooses a
+  local model and enables it.
+
 - **Verified Audit Trail v1 creates independently verifiable routing evidence.**
   Every completed outcome, including failures and subscription passthroughs,
   receives a canonical, domain-separated receipt in the same database

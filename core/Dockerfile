@@ -19,6 +19,7 @@ COPY core/pyproject.toml core/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY core/app/ ./app/
+COPY core/bowden_pii/ ./bowden_pii/
 
 FROM python:3.12-slim
 WORKDIR /app
@@ -33,6 +34,7 @@ RUN apt-get update \
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/app /app/app
+COPY --from=builder /app/bowden_pii /app/bowden_pii
 
 # Default routing + pricing tables, shipped so the image works standalone.
 # main.py resolves these via parents[2], which is `/` inside the image (the

@@ -44,6 +44,15 @@ _DEFAULTS: dict[str, Any] = {
     # is unaffected; none of those are load-bearing. Toggled from Settings so
     # it can be demonstrated live on an isolated network.
     "offline": False,
+    # Fail-closed data-boundary routing. Disabled until an operator selects a
+    # local model; once enabled, matching traffic can never fall back to cloud.
+    "confidentiality_routing": {
+        "enabled": False,
+        "local_model": "",
+        "route_pii": True,
+        "route_secret": True,
+        "bowden_enabled": True,
+    },
     # Champion–challenger shadow testing (app/shadow.py). Disabled by default;
     # toggled from the Insights page.
     "shadow": {

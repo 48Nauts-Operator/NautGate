@@ -665,6 +665,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             <span>API keys</span>
           </a>
+          <a href="#settings" data-subtab="confidentiality">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-5"/></svg>
+            <span>Confidential routing</span>
+          </a>
         </div>
         <div class="settings-nav-group">
           <div class="settings-nav-label">Intelligence</div>
@@ -720,6 +724,32 @@
           <input id="session-archive-days" type="number" min="1" max="3650" step="1" style="width:7em" />
         </label>
         <p class="hint">Dashboard-only, saved in this browser. Hides any session idle longer than this from the Overview list so it doesn't grow to hundreds of pages. The active session and never-used tokens stay. Nothing is deleted — raise the number to bring hidden sessions back. Default 30.</p>
+      </div>
+
+      <!-- Confidentiality routing sub-pane -->
+      <div class="settings-pane" data-pane="confidentiality" hidden>
+        <h2>Confidential routing</h2>
+        <p class="hint" style="max-width:920px">Keep personal and secret data inside a local inference boundary. NautGate takes the strictest result from its credential classifier, Bowden's deterministic Swiss/EU PII detector, and <code>X-NautGate-Confidentiality</code>. When enabled, this policy outranks client, key, and plugin model choices and <b>never falls back to cloud</b>.</p>
+        <div class="v2-card" style="max-width:920px">
+          <label class="offline-toggle">
+            <input type="checkbox" id="conf-enabled" />
+            <span>Enable fail-closed confidential routing</span>
+          </label>
+          <label>Default local model
+            <select id="conf-local-model" style="min-width:28em;max-width:100%"><option value="">— choose a loaded LM Studio model —</option></select>
+            <button id="conf-models-reload" class="ghost" type="button" title="Reload local models">↻</button>
+          </label>
+          <div class="settings-row" style="flex-wrap:wrap">
+            <label><input type="checkbox" id="conf-route-pii" /> Route personal / PII locally</label>
+            <label><input type="checkbox" id="conf-route-secret" /> Route secrets locally</label>
+            <label><input type="checkbox" id="conf-bowden" /> Enable Bowden Swiss/EU detection</label>
+          </div>
+          <div class="settings-row">
+            <button id="conf-save">Save policy</button>
+            <span id="conf-state" class="hint"></span>
+          </div>
+        </div>
+        <p class="hint" style="max-width:920px"><b>Failure behavior:</b> if the selected model is absent or unhealthy, the request returns <code>503 confidential_route_unavailable</code>. It is never silently sent to OpenRouter, Anthropic, OpenAI, or another external provider.</p>
       </div>
 
       <!-- Engram-OSS (formerly SecondBrain) sub-pane -->

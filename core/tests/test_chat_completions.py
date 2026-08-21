@@ -354,6 +354,152 @@ async def test_explicit_model_does_not_invoke_routing(chat_app, routing_table):
     assert forwarded["model"] == "my-pinned-model"
 
 
+@pytest.mark.asyncio
+async def test_confidential_policy_overrides_explicit_cloud_model(chat_app, monkeypatch):
+    app, calls = chat_app
+
+    async def confidential_settings(_pool):
+        return {
+            "confidentiality_routing": {
+                "enabled": True,
+                "local_model": "lmstudio/qwen3-local",
+                "route_pii": True,
+                "route_secret": True,
+                "bowden_enabled": True,
+            }
+        }
+
+    monkeypatch.setattr("app.app_config.get_settings", confidential_settings)
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={
+                "model": "openrouter/cloud-model",
+                "messages": [{"role": "user", "content": "AHV 756.9217.0769.85"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-confidentiality"] == "pii"
+    assert resp.headers["x-nautgate-data-boundary"] == "local"
+    assert resp.headers["x-nautgate-provider"] == "lmstudio"
+    assert resp.headers["x-nautgate-model"] == "lmstudio/qwen3-local"
+    forwarded = calls["mock"].chat_completions.call_args.args[0]
+    assert forwarded["model"] == "lmstudio/qwen3-local"
+    pc = calls["precapture"][0]
+    assert pc["decision_provider"] == "lmstudio"
+    assert "confidentiality:pii:local_only" in pc["decision_reason"]
+    assert "756.9217.0769.85" not in pc["prompt_body"]
+    assert "756.9217.0769.85" not in (pc["prompt_excerpt"] or "")
+    assert all("756.9217.0769.85" not in repr(signal) for signal in pc["classified_signals"])
+
+
+@pytest.mark.asyncio
+async def test_confidential_policy_scans_tool_schema_sent_upstream(chat_app, monkeypatch):
+    app, calls = chat_app
+
+    async def confidential_settings(_pool):
+        return {
+            "confidentiality_routing": {
+                "enabled": True,
+                "local_model": "lmstudio/qwen3-local",
+                "route_pii": True,
+                "route_secret": True,
+                "bowden_enabled": True,
+            }
+        }
+
+    monkeypatch.setattr("app.app_config.get_settings", confidential_settings)
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={
+                "model": "cloud-model",
+                "messages": [{"role": "user", "content": "Use the account tool"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "account_lookup",
+                            "description": "Lookup AHV 756.9217.0769.85",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nautgate-data-boundary"] == "local"
+    pc = calls["precapture"][0]
+    assert pc["classified_sensitivity"] == "pii"
+    assert "756.9217.0769.85" not in pc["tools_body"]
+
+
+@pytest.mark.asyncio
+async def test_confidential_policy_missing_model_fails_closed(chat_app, monkeypatch):
+    app, calls = chat_app
+
+    async def incomplete_settings(_pool):
+        return {
+            "confidentiality_routing": {
+                "enabled": True,
+                "local_model": "",
+                "route_secret": True,
+                "bowden_enabled": False,
+            }
+        }
+
+    monkeypatch.setattr("app.app_config.get_settings", incomplete_settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={
+                "model": "cloud-model",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ab",
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "confidential_route_unavailable"
+    calls["mock"].chat_completions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_confidentiality_header_returns_400(chat_client):
+    c, calls = chat_client
+    resp = await c.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": "Bearer ng_test",
+            "X-NautGate-Confidentiality": "maybe",
+        },
+        json={"model": "x", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert resp.status_code == 400
+    calls["mock"].chat_completions.assert_not_awaited()
+
+
 # --- Sensitivity classifier (Day 4b) ----------------------------------------
 
 

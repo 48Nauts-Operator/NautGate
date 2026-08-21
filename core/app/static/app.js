@@ -5119,6 +5119,86 @@
   // /v1/config document; the schedulers poll it each tick so flipping it takes
   // effect without a restart.
   document.getElementById("offline-save")?.addEventListener("click", saveOfflineMode);
+  document.getElementById("conf-save")?.addEventListener("click", saveConfidentialityConfig);
+  document.getElementById("conf-models-reload")?.addEventListener("click", () => loadConfidentialityModels(true));
+
+  async function loadConfidentialityModels(force = false, preferred = null) {
+    const select = document.getElementById("conf-local-model");
+    if (!select) return;
+    const saved = preferred ?? select.value;
+    select.innerHTML = '<option value="">loading local models…</option>';
+    try {
+      if (force) {
+        await fetch("/v1/models/refresh", {
+          method: "GET",
+          headers: { Authorization: "Bearer " + getToken() },
+        });
+      }
+      const result = await api("/v1/models");
+      const local = (result.data || []).filter((m) => m.nautgate_local || String(m.id || "").startsWith("lmstudio/"));
+      select.innerHTML = '<option value="">— choose a loaded LM Studio model —</option>';
+      for (const model of local) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.id + (model.nautgate_unhealthy ? " (unhealthy)" : "");
+        option.disabled = !!model.nautgate_unhealthy;
+        select.appendChild(option);
+      }
+      if (saved && !local.some((m) => m.id === saved)) {
+        const option = document.createElement("option");
+        option.value = saved;
+        option.textContent = saved + " (configured; not currently loaded)";
+        select.appendChild(option);
+      }
+      select.value = saved || "";
+      const state = document.getElementById("conf-state");
+      if (state && force) state.textContent = `${local.length} local model(s) found`;
+    } catch (e) {
+      select.innerHTML = '<option value="">— local model discovery failed —</option>';
+      const state = document.getElementById("conf-state");
+      if (state) state.textContent = "✗ " + (e.message || e);
+    }
+  }
+
+  async function loadConfidentialityConfig() {
+    try {
+      const cfg = await api("/v1/config");
+      const conf = cfg.confidentiality_routing || {};
+      document.getElementById("conf-enabled").checked = !!conf.enabled;
+      document.getElementById("conf-route-pii").checked = conf.route_pii !== false;
+      document.getElementById("conf-route-secret").checked = conf.route_secret !== false;
+      document.getElementById("conf-bowden").checked = conf.bowden_enabled !== false;
+      await loadConfidentialityModels(false, conf.local_model || "");
+    } catch (_e) { /* leave safe disabled defaults */ }
+  }
+
+  async function saveConfidentialityConfig() {
+    const state = document.getElementById("conf-state");
+    const body = {
+      confidentiality_routing: {
+        enabled: document.getElementById("conf-enabled").checked,
+        local_model: document.getElementById("conf-local-model").value,
+        route_pii: document.getElementById("conf-route-pii").checked,
+        route_secret: document.getElementById("conf-route-secret").checked,
+        bowden_enabled: document.getElementById("conf-bowden").checked,
+      },
+    };
+    state.textContent = "saving…";
+    try {
+      const response = await fetch("/v1/config", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "http_" + response.status);
+      state.textContent = body.confidentiality_routing.enabled
+        ? "✓ local-only boundary active"
+        : "✓ policy saved; routing disabled";
+    } catch (e) {
+      state.textContent = "✗ " + (e.message || e);
+    }
+  }
 
   async function saveOfflineMode() {
     const stateEl = document.getElementById("offline-state");
@@ -6183,6 +6263,7 @@
     // Refresh the Backup, SB-ingest and Quality-eval sections every time Settings opens.
     await Promise.all([
       loadBackupConfig(), loadBackupList(), loadSBConfig(), loadQualityConfig(),
+      loadConfidentialityConfig(),
     ]);
     // NautGate API keys (ng_…) — full management.
     loadKeys();
