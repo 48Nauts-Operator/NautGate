@@ -18,9 +18,10 @@ async def app_with_decisions(monkeypatch):
             raise HTTPException(status_code=401, detail="bad token")
         return "alice"
 
-    async def fake_get_recent_decisions(pool, *, agent_id, limit):
+    async def fake_get_recent_decisions(pool, *, agent_id, limit, session_id=None):
         captured["agent_id"] = agent_id
         captured["limit"] = limit
+        captured["session_id"] = session_id
         return [
             {
                 "decision_id": "abc-1",
@@ -89,6 +90,20 @@ async def test_limit_query_param(app_with_decisions):
         )
     assert resp.status_code == 200
     assert captured["limit"] == 10
+
+
+@pytest.mark.asyncio
+async def test_session_id_scopes_recent_decisions(app_with_decisions):
+    app, captured = app_with_decisions
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.get(
+            "/v1/decisions/recent?session_id=abc123",
+            headers={"Authorization": "Bearer ng_test"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["session_id"] == "abc123"
+    assert captured["session_id"] == "abc123"
 
 
 @pytest.mark.asyncio

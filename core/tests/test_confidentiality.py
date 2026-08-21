@@ -23,6 +23,15 @@ def test_bowden_upgrades_swiss_identifier_without_exposing_value():
     assert raw not in repr(result.classification.signals)
 
 
+def test_generic_urls_do_not_make_clean_tool_schemas_confidential():
+    text = " ".join(f"https://docs.example.com/tool/{i}" for i in range(54))
+    result = classify_confidentiality(_classification(), text)
+
+    assert result.classification.sensitivity == "none"
+    assert result.classification.signals == []
+    assert result.bowden_labels == {}
+
+
 def test_caller_declaration_can_upgrade_but_not_downgrade():
     upgraded = classify_confidentiality(_classification(), "hello", declaration="restricted")
     assert upgraded.classification.sensitivity == "secret"

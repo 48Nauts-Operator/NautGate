@@ -9,6 +9,10 @@ from app.classify import Classification
 from app.classify import classify as core_classify
 
 _RANK = {"none": 0, "pii": 1, "secret": 2}
+# Bowden detects URLs for redaction/reporting, but a URL is not inherently
+# personal data. Claude Code repeats dozens of documentation/MCP URLs in every
+# tool schema, so treating this label as confidential pins every request local.
+_NON_CONFIDENTIAL_BOWDEN_LABELS = {"URL"}
 _DECLARATIONS = {
     "none": "none",
     "public": "none",
@@ -56,7 +60,9 @@ def classify_confidentiality(
     if bowden_enabled and text:
         from bowden_pii import detect
 
-        detections = detect(text)
+        detections = [
+            item for item in detect(text) if item.label not in _NON_CONFIDENTIAL_BOWDEN_LABELS
+        ]
         labels.update(item.label for item in detections)
         rules = Counter(item.rule_id for item in detections)
         if rules:

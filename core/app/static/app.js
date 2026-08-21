@@ -334,7 +334,9 @@
       let freshlyAddedId = null;
       let freshlyAddedSeenAt = null;
       for (const agent of (r.data || [])) {
-        const existing = sessions.find(s => s.agent_id === agent.agent_id);
+        const existing = sessions.find(s =>
+          s.agent_id === agent.agent_id
+          && (s.session_id || null) === (agent.session_id || null));
         if (existing) {
           if (!existing.last_seen_at
               || agent.last_seen_at > existing.last_seen_at) {
@@ -345,9 +347,12 @@
           const id = cryptoId();
           sessions.push({
             id,
-            label: agent.agent_id,
+            label: agent.session_id
+              ? `${agent.agent_id} · ${agent.session_id.slice(0, 8)}`
+              : agent.agent_id,
             token: null,
             agent_id: agent.agent_id,
+            session_id: agent.session_id || null,
             key_id: null,
             last_seen_at: agent.last_seen_at,
             discovered: true,
@@ -1364,7 +1369,10 @@
       await loadAuditEvidence();
       const scope = getActiveAgentScope();
       const url = "/v1/decisions/recent?limit=50"
-        + (scope ? "&agent_id=" + encodeURIComponent(scope) : "");
+        + (scope ? "&agent_id=" + encodeURIComponent(scope) : "")
+        + (getActiveSession()?.session_id
+          ? "&session_id=" + encodeURIComponent(getActiveSession().session_id)
+          : "");
       const r = await api(url);
       renderAudit(r.data || [], r.agent_id);
     } catch (e) {

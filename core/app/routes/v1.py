@@ -2086,13 +2086,18 @@ async def decisions_recent(request: Request) -> Response:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be in 1..200")
 
-    rows = await queries.get_recent_decisions(pool, agent_id=target_agent, limit=limit)
-    return JSONResponse({"agent_id": target_agent, "limit": limit, "data": rows})
+    session_id = request.query_params.get("session_id") or None
+    rows = await queries.get_recent_decisions(
+        pool, agent_id=target_agent, limit=limit, session_id=session_id
+    )
+    return JSONResponse(
+        {"agent_id": target_agent, "session_id": session_id, "limit": limit, "data": rows}
+    )
 
 
 @router.get("/agents/discovered")
 async def agents_discovered(request: Request) -> Response:
-    """List of agent_ids that have produced traffic recently.
+    """List of agent/session pairs that have produced traffic recently.
 
     The dashboard calls this on startup and merges any unseen agent_id
     into its localStorage session list as a discovered entry (no token,

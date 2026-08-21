@@ -1173,12 +1173,13 @@ async def get_discovered_agents(
     rows = await pool.fetch(
         """
         SELECT d.agent_id,
+               d.session_id,
                MAX(d.ts)   AS last_seen_at,
                COUNT(*)    AS request_count
           FROM nautgate.route_decisions d
          WHERE d.ts > now() - ($1 || ' hours')::interval
            AND d.agent_id IS NOT NULL
-         GROUP BY d.agent_id
+         GROUP BY d.agent_id, d.session_id
          ORDER BY last_seen_at DESC
         """,
         str(hours),
@@ -1197,6 +1198,7 @@ async def get_recent_decisions(
     *,
     agent_id: str,
     limit: int,
+    session_id: str | None = None,
 ) -> list[dict]:
     """Last N route_decisions for the agent, joined with their outcome row.
 
@@ -1242,11 +1244,13 @@ async def get_recent_decisions(
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
          WHERE d.agent_id = $1
+           AND ($3::text IS NULL OR d.session_id = $3)
          ORDER BY d.ts DESC
          LIMIT $2
         """,
         agent_id,
         limit,
+        session_id,
     )
     out = []
     for r in rows:
