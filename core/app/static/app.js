@@ -4049,6 +4049,19 @@
     return Math.floor(sec / 86400) + "d ago";
   }
 
+  function fmtExpiry(iso) {
+    if (!iso) return "never";
+    const at = new Date(iso).getTime();
+    if (!Number.isFinite(at)) return "—";
+    const remaining = at - Date.now();
+    if (remaining <= 0) return fmtAge(iso);
+    const sec = Math.ceil(remaining / 1000);
+    if (sec < 60) return `in ${sec}s`;
+    if (sec < 3600) return `in ${Math.ceil(sec / 60)}m`;
+    if (sec < 86400) return `in ${Math.ceil(sec / 3600)}h`;
+    return `in ${Math.ceil(sec / 86400)}d`;
+  }
+
   async function loadDrift() {
     if (!getToken()) return;
     const alertsEl = document.getElementById("dr-alerts");
@@ -6303,16 +6316,26 @@
         title: "Keys", countLabel: (n) => `${n} key${n === 1 ? "" : "s"}`,
         searchPlaceholder: "Filter…",
         defaultSort: { key: "created", dir: "desc" },
+        pageSize: 15,
+        pageSizeOptions: [15, 30, 60],
+        segments: {
+          options: [
+            { label: "Active", predicate: (k) => k.status === "active" },
+            { label: "All" },
+            { label: "Expired", predicate: (k) => k.status === "expired" },
+            { label: "Revoked", predicate: (k) => k.status === "revoked" },
+          ],
+        },
         emptyText: "No keys yet — create one above.",
         rows,
         rowClass: (k) => (k.status === "revoked" || k.status === "expired" ? "v2-row-bad" : null),
         columns: [
           { key: "name", label: "Name", render: (k) => NG.el("span", { class: "v2-strong" }, k.name || "—"), sortValue: (k) => k.name || "" },
           { key: "agent_id", label: "Agent", render: (k) => k.agent_id || "—", sortValue: (k) => k.agent_id || "" },
-          { key: "pinned", label: "Model", sortable: false, render: (k) => k.override_model ? NG.el("span", { class: "audit-tool-chip", title: "pinned model" }, shortModelName(k.override_model)) : NG.el("span", { class: "hint" }, "auto") },
+          { key: "pinned", label: "Model", width: "180px", sortable: false, render: (k) => k.override_model ? NG.el("span", { class: "audit-tool-chip key-model-chip", title: k.override_model }, shortModelName(k.override_model)) : NG.el("span", { class: "hint" }, "auto") },
           { key: "created", label: "Created", render: (k) => (k.created_at ? fmtAge(k.created_at) : "—"), sortValue: (k) => k.created_at || "" },
           { key: "last_used", label: "Last used", render: (k) => (k.last_used_at ? fmtAge(k.last_used_at) : "never"), sortValue: (k) => k.last_used_at || "" },
-          { key: "expires", label: "Expires", render: (k) => (k.expires_at ? fmtAge(k.expires_at) : "never"), sortValue: (k) => k.expires_at || "" },
+          { key: "expires", label: "Expires", render: (k) => NG.el("span", { class: "key-expiry", title: k.expires_at ? new Date(k.expires_at).toLocaleString() : "No expiry" }, fmtExpiry(k.expires_at)), sortValue: (k) => k.expires_at || "" },
           { key: "status", label: "Status", sortable: false, render: (k) => NG.chip(k.status, k.status === "active" ? "good" : k.status === "expired" ? "warn" : "bad") },
           { key: "act", label: "", sortable: false, render: (k) => {
               if (k.status !== "active") return "";

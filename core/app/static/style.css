@@ -1126,7 +1126,7 @@ select.bn-model:focus { outline: none; border-color: var(--accent); }
 }
 .settings-nav a[hidden] { display: none; }
 
-.settings-content { max-width: 760px; min-width: 0; }
+.settings-content { max-width: 920px; min-width: 0; }
 .settings-pane[hidden] { display: none !important; }
 .settings-pane { padding-top: 0; }
 
@@ -2124,6 +2124,15 @@ html, body { height: 100%; }
 .key-created-row { display: flex; align-items: center; gap: 10px; }
 .key-created code { flex: 1; font-size: 12.5px; word-break: break-all; background: #0E121A; padding: 8px 10px; border-radius: 6px; color: var(--accent-bright); }
 .key-created-warn { font-size: 12px; color: var(--warn); margin-top: 8px; }
+.key-model-chip {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.key-expiry { white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* transient toast (bottom-center) */
 .ng-toast {
