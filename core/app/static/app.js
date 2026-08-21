@@ -1743,12 +1743,38 @@
         + "</div>";
     }
 
-    // Findings inline
+    // Confidential findings get a dedicated, human-readable block. Raw match
+    // values are deliberately unavailable: classifiers retain only rule IDs
+    // and counts so the audit store does not become a second PII database.
     if (d.classified_signals && d.classified_signals.length) {
-      html += '<div class="section-title">Findings</div>';
-      html += d.classified_signals
-        .map((s) => `<div class="lh-sample">${esc(s.rule_id)} · ${esc(s.severity || s.sensitivity || "")} · ×${s.count || 1}</div>`)
-        .join("");
+      const labels = {
+        email: "Email address",
+        phone_us: "Phone number",
+        ssh_key_reference: "SSH key reference",
+        iban: "IBAN",
+        ch_phone: "Swiss phone number",
+        ch_ahv: "Swiss AHV number",
+        ip_address: "IP address",
+      };
+      const describeSignal = (ruleId) => {
+        const raw = String(ruleId || "unknown");
+        const source = raw.startsWith("bowden:") ? "Bowden" : "NautGate";
+        const normalized = raw.replace(/^bowden:/, "").replace(/_(basic|stdlib|iso13616_mod97|ean13)_v\d+$/, "");
+        const key = Object.keys(labels).find((candidate) => normalized === candidate || normalized.startsWith(candidate + "_"));
+        const label = labels[key] || normalized.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        return { source, label, rule: raw };
+      };
+      html += '<div class="section-title">Detected confidential data</div>';
+      html += '<div class="confidential-findings">';
+      html += d.classified_signals.map((s) => {
+        const finding = describeSignal(s.rule_id);
+        return `<div class="confidential-finding">
+          <div><b>${esc(finding.label)}</b><span>${esc(finding.source)} · ${esc(s.sensitivity || s.severity || "match")}</span></div>
+          <strong>×${s.count || 1}</strong>
+          <code title="${esc(finding.rule)}">${esc(finding.rule)}</code>
+        </div>`;
+      }).join("");
+      html += '<p class="confidential-findings-note">Raw matched values are discarded after classification and are not stored in the audit record.</p></div>';
     }
 
     // Payload Anatomy — what *actually* gets shipped beyond the user's prompt
