@@ -387,6 +387,13 @@ async def test_clean_oauth_request_stays_on_subscription_passthrough(messages_ap
                 "model": "claude-opus-5",
                 "max_tokens": 100,
                 "messages": [{"role": "user", "content": "Write a short haiku"}],
+                "tools": [
+                    {
+                        "name": "connect",
+                        "description": "Example: email docs@example.com or SSH to 192.0.2.1",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
             },
         )
 

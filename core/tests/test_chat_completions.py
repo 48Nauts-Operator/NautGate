@@ -370,6 +370,11 @@ async def test_confidential_policy_overrides_explicit_cloud_model(chat_app, monk
         }
 
     monkeypatch.setattr("app.app_config.get_settings", confidential_settings)
+    # A local-only route must be allowed to probe its own recovery. Refusing
+    # before the call would permanently latch confidential traffic at 503.
+    for _ in range(3):
+        app.state.health_tracker.record("lmstudio", "lmstudio/qwen3-local", was_empty=True)
+    assert app.state.health_tracker.is_unhealthy("lmstudio", "lmstudio/qwen3-local")
     calls["mock"].chat_completions.return_value = {
         "choices": [{"message": {"role": "assistant", "content": "ok"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},

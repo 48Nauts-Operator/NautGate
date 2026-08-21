@@ -455,7 +455,9 @@ async def _process_chat_request(
 
     # Confidentiality is a security boundary, not another routing preference.
     # It therefore outranks explicit models, key/header overrides and plugin
-    # suggestions. A sick local model fails closed instead of reaching fallback.
+    # suggestions. The local route is still attempted when its in-process
+    # empty-response latch is unhealthy: otherwise the latch can never observe
+    # recovery. Any resulting failure remains local and never reaches cloud.
     try:
         confidential_model = confidential_route_model(
             classification.sensitivity, confidentiality_config
@@ -471,17 +473,6 @@ async def _process_chat_request(
             },
         ) from None
     if confidential_model:
-        if health_tracker and health_tracker.is_unhealthy("lmstudio", confidential_model):
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "confidential_route_unavailable",
-                    "classification": classification.sensitivity,
-                    "required_boundary": "local",
-                    "reason": "configured local model is unhealthy",
-                    "model": confidential_model,
-                },
-            )
         decision_provider = "lmstudio"
         decision_model = confidential_model
         decision_reason = (
@@ -1238,6 +1229,7 @@ async def _oauth_requires_confidential_local(request: Request, payload: dict) ->
         ConfidentialityPolicyError,
         classify_confidentiality,
         confidential_route_model,
+        confidentiality_message_text,
     )
 
     pool = getattr(request.app.state, "db", None)
@@ -1246,12 +1238,7 @@ async def _oauth_requires_confidential_local(request: Request, payload: dict) ->
         return False
     messages = payload.get("messages") if isinstance(payload, dict) else None
     base = classify(assemble_user_text(messages))
-    policy_text = json.dumps(
-        {"messages": messages, "tools": payload.get("tools")},
-        ensure_ascii=False,
-        separators=(",", ":"),
-        default=str,
-    )
+    policy_text = confidentiality_message_text(messages)
     try:
         result = classify_confidentiality(
             base,
