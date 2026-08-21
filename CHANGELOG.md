@@ -15,6 +15,8 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-21
+
 ### Added
 
 - **Confidential requests can be forced across a local-only inference boundary.**
@@ -50,6 +52,44 @@ regression we introduced, the entry says so.
   the signature is a trusted legal timestamp, or that the system as a whole is
   compliant. V1 operates in availability mode; TSB downtime leaves durable
   receipts pending and visible while model traffic continues.
+
+- **Claude Max is now a server-side transport for ordinary NautGate keys.**
+  An `ng_`-authenticated agent requesting a supported Claude model can use the
+  operator's local Claude subscription instead of falling through to a metered
+  Anthropic API key. Confidentiality policy still takes precedence and can
+  force the same request onto the configured local model.
+
+- **The dashboard discovers and scopes individual agent conversations.** Audit
+  Log views can be opened directly from the Sessions table, conversation rows
+  default to most-recently-used order, confidentiality-forced local calls carry
+  a visible match flag, and the navigation and evidence-receipt sections are
+  collapsible. Evidence receipts show five rows per page.
+
+### Fixed
+
+- **Claude Code tool documentation no longer makes every request confidential.**
+  Static tool schemas contain example URLs, email addresses, IP addresses and
+  SSH references. Those definitions previously triggered PII or secret routing
+  even for clean prompts such as a weather question. Routing classification now
+  examines conversation messages, which still include real tool arguments and
+  tool results, while audit hashing continues to cover the tool definitions.
+
+- **Confidential local routing can recover without weakening the boundary.**
+  Three empty local responses previously latched a model unhealthy and rejected
+  every later confidential request before retrying it, making recovery
+  impossible until NautGate restarted. The required local route is now retried;
+  failure remains fail-closed and never falls back to a cloud provider.
+
+- **Anthropic OAuth can no longer bypass the confidentiality policy.** Claude
+  Code's direct Max passthrough is evaluated against the same local-only policy
+  before forwarding, so detected PII and secrets remain inside the configured
+  local inference boundary.
+
+- **The API-key and Audit Log interfaces remain readable under real data.** Long
+  model names wrap instead of overlapping status and action columns, expired
+  keys no longer display negative countdowns, single-call sessions retain their
+  activity chart, and session discovery no longer merges every conversation
+  under one agent row.
 
 ## [0.3.0] — 2026-08-20
 

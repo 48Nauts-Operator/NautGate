@@ -1,6 +1,6 @@
 [project]
 name = "nautgate-core"
-version = "0.3.0"
+version = "0.4.0"
 description = "NautGate — memory-aware LLM gateway core"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
