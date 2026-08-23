@@ -571,14 +571,23 @@ async function forwardToProvider(
 
   if (modelDef.provider === "anthropic") {
     return forwardAnthropic(modelDef, body, stream, overrides);
-  } else if (modelDef.provider === "gemini") {
-    return forwardGemini(modelDef, body, stream, overrides);
+  }
+
+  // The private native carrier can contain more information than the OpenAI
+  // canonical request (including Anthropic-only blocks).  It exists solely to
+  // make Anthropic -> Anthropic lossless and must never leak to another
+  // provider during auto-route fallback.
+  const providerBody = { ...body };
+  delete providerBody._nautgate_anthropic_native;
+
+  if (modelDef.provider === "gemini") {
+    return forwardGemini(modelDef, providerBody, stream, overrides);
   } else if (modelDef.provider === "openrouter") {
-    return forwardOpenRouter(modelDef, body, stream, overrides);
+    return forwardOpenRouter(modelDef, providerBody, stream, overrides);
   } else if (modelDef.provider === "openai") {
-    return forwardOpenAI(modelDef, body, stream, overrides);
+    return forwardOpenAI(modelDef, providerBody, stream, overrides);
   } else {
-    return forwardLMStudio(modelDef, body, stream);
+    return forwardLMStudio(modelDef, providerBody, stream);
   }
 }
 
@@ -640,6 +649,7 @@ async function forwardLMStudio(modelDef: ModelDef, body: any, stream: boolean): 
 
 async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, overrides: ProviderKeys = {}): Promise<Response> {
   // Convert OpenAI format → Anthropic Messages API
+  const nativeInput = body._nautgate_anthropic_native;
   const messages = body.messages ?? [];
   let system: string | undefined;
   const anthropicMessages: any[] = [];
@@ -683,14 +693,25 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
     messages: anthropicMessages,
     max_tokens: body.max_tokens ?? body.max_completion_tokens ?? 4096,
   };
-  if (system) anthropicBody.system = system;
-  if (body.temperature != null) anthropicBody.temperature = body.temperature;
-  if (stream) anthropicBody.stream = true;
+  // An Anthropic request routed back to Anthropic must retain its native block
+  // structure.  In particular, OpenAI Chat has no equivalent for Anthropic's
+  // cache_control markers.  Start from the captured native request and change
+  // only fields selected by routing policy.
+  const useNativeAnthropic = nativeInput && typeof nativeInput === "object" && !Array.isArray(nativeInput);
+  if (useNativeAnthropic) {
+    for (const key of Object.keys(anthropicBody)) delete anthropicBody[key];
+    Object.assign(anthropicBody, nativeInput, { model: modelDef.id, stream });
+  }
+  if (!useNativeAnthropic) {
+    if (system) anthropicBody.system = system;
+    if (body.temperature != null) anthropicBody.temperature = body.temperature;
+    if (stream) anthropicBody.stream = true;
+  }
 
   // Translate OpenAI Chat `tools` → Anthropic `tools`. Same intent, different shape:
   //   OpenAI:    {type: "function", function: {name, description, parameters}}
   //   Anthropic: {name, description, input_schema}
-  if (Array.isArray(body.tools) && body.tools.length > 0) {
+  if (!useNativeAnthropic && Array.isArray(body.tools) && body.tools.length > 0) {
     anthropicBody.tools = body.tools
       .map((t: any) => {
         const fn = t?.function ?? t;
@@ -703,7 +724,7 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
       })
       .filter(Boolean);
   }
-  if (body.tool_choice) {
+  if (!useNativeAnthropic && body.tool_choice) {
     // "auto" / "any" pass through; specific tool by name → {type: "tool", name}.
     if (typeof body.tool_choice === "string") {
       anthropicBody.tool_choice = { type: body.tool_choice === "required" ? "any" : body.tool_choice };
@@ -721,10 +742,21 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
   const anthropicKey = overrides.anthropic || ANTHROPIC_API_KEY;
   const isOauth = (anthropicKey ?? "").startsWith("sk-ant-oat01-");
   if (isOauth) {
-    anthropicBody.system = [
-      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
-      ...(system ? [{ type: "text", text: system }] : []),
-    ];
+    const identity = "You are Claude Code, Anthropic's official CLI for Claude.";
+    const nativeSystem = anthropicBody.system;
+    const alreadyIdentified = typeof nativeSystem === "string"
+      ? nativeSystem.includes(identity)
+      : Array.isArray(nativeSystem) && nativeSystem.some((block: any) => block?.text?.includes(identity));
+    if (!alreadyIdentified) {
+      anthropicBody.system = [
+        { type: "text", text: identity },
+        ...(Array.isArray(nativeSystem)
+          ? nativeSystem
+          : nativeSystem
+          ? [{ type: "text", text: nativeSystem }]
+          : []),
+      ];
+    }
   }
 
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -792,7 +824,13 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
       created: Math.floor(Date.now() / 1000),
       model: modelDef.id,
       choices: [{ index: 0, message, finish_reason: finishReason }],
-      usage: { prompt_tokens: data.usage?.input_tokens ?? 0, completion_tokens: data.usage?.output_tokens ?? 0, total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0) },
+      usage: {
+        prompt_tokens: data.usage?.input_tokens ?? 0,
+        completion_tokens: data.usage?.output_tokens ?? 0,
+        total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0),
+        cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0,
+      },
     };
     return new Response(JSON.stringify(openaiResp), { status: 200, headers: { "Content-Type": "application/json" } });
   }
@@ -805,6 +843,8 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
   const decoder = new TextDecoder();
   let streamInputTokens = 0;
   let streamOutputTokens = 0;
+  let streamCacheReadTokens = 0;
+  let streamCacheWriteTokens = 0;
   let stopReason: string | null = null;
   // Anthropic content-block index → OpenAI Chat tool_calls index. Text blocks
   // are not in tool_calls; tool_use blocks consume sequential tool_calls indices.
@@ -841,6 +881,10 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
             const evt = JSON.parse(payload);
             if (evt.type === "message_start" && evt.message?.usage?.input_tokens != null) {
               streamInputTokens = evt.message.usage.input_tokens;
+              streamCacheReadTokens = evt.message.usage.cache_read_input_tokens ?? 0;
+              streamCacheWriteTokens = evt.message.usage.cache_creation_input_tokens ?? 0;
+            } else if (evt.type === "error") {
+              emit({ error: evt.error ?? { type: "upstream_stream_error", message: "Anthropic stream failed" } });
             } else if (evt.type === "content_block_start" && evt.content_block?.type === "tool_use") {
               // Open a new tool_call entry. Anthropic gives id + name up-front;
               // arguments arrive as input_json_delta chunks.
@@ -892,6 +936,8 @@ async function forwardAnthropic(modelDef: ModelDef, body: any, stream: boolean, 
                   prompt_tokens: streamInputTokens,
                   completion_tokens: streamOutputTokens,
                   total_tokens: streamInputTokens + streamOutputTokens,
+                  cache_read_input_tokens: streamCacheReadTokens,
+                  cache_creation_input_tokens: streamCacheWriteTokens,
                 },
               });
             }
@@ -1245,12 +1291,14 @@ app.post("/v1/chat/completions", async (req, res) => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let totalOutput = 0;
+      let streamFailed = false;
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
+          if (chunk.includes('"error"')) streamFailed = true;
           res.write(chunk);
           totalOutput += Math.ceil(chunk.length / 4);
         }
@@ -1266,11 +1314,11 @@ app.post("/v1/chat/completions", async (req, res) => {
         type: "response_complete",
         request_id: requestId,
         timestamp: new Date().toISOString(),
-        data: { latency_ms: latencyMs, cost_usd: costUsd, tokens_consumed: inputTokens + totalOutput, success: true },
+        data: { latency_ms: latencyMs, cost_usd: costUsd, tokens_consumed: inputTokens + totalOutput, success: !streamFailed },
       });
 
-      updateProviderHealth(m.provider, true, latencyMs, costUsd);
-      addRequestRecord({ id: requestId, timestamp: new Date(), agent_id: agentId, profile, tier: decision.tier, provider: m.provider, model: usedModel, latency_ms: latencyMs, cost_usd: costUsd, input_tokens: inputTokens, output_tokens: totalOutput, success: true });
+      updateProviderHealth(m.provider, !streamFailed, latencyMs, costUsd);
+      addRequestRecord({ id: requestId, timestamp: new Date(), agent_id: agentId, profile, tier: decision.tier, provider: m.provider, model: usedModel, latency_ms: latencyMs, cost_usd: costUsd, input_tokens: inputTokens, output_tokens: totalOutput, success: !streamFailed });
       logCost(agentId, { ...decision, model: usedModel, costPer1MInput: m.inputPrice, costPer1MOutput: m.outputPrice }, inputTokens, totalOutput);
     } else {
       const data = await response.json() as any;

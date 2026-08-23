@@ -1,6 +1,6 @@
 """Tests for provider-aware usage normalization + cache-prefix hashing."""
 
-from app.usage import cache_prefix_hash, normalize_usage
+from app.usage import cache_marker_topology, cache_prefix_hash, normalize_usage
 
 
 def test_anthropic_fresh_input_and_separate_cache():
@@ -162,3 +162,45 @@ def test_prefix_hash_none_when_nothing_cacheable():
     assert cache_prefix_hash({"messages": [{"role": "user", "content": "hi"}]}) is None
     assert cache_prefix_hash({}) is None
     assert cache_prefix_hash(None) is None
+
+
+def test_prefix_hash_prefers_native_anthropic_prefix():
+    payload = {
+        "messages": [{"role": "system", "content": "flattened"}],
+        "_nautgate_anthropic_native": {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "native",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    }
+    direct = payload["_nautgate_anthropic_native"]
+
+    assert cache_prefix_hash(payload) == cache_prefix_hash(direct)
+
+
+def test_cache_marker_topology_contains_paths_but_no_prompt_content():
+    paths = cache_marker_topology(
+        {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "secret system content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "tools": [
+                {
+                    "name": "read",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    )
+
+    assert paths == ["$.system[0].cache_control", "$.tools[0].cache_control"]
+    assert "secret system content" not in " ".join(paths)

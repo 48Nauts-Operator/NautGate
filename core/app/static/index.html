@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NautGate</title>
   <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="/static/style.css?v=0.4.0-1" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
  <div class="app-shell">
@@ -23,6 +23,20 @@
     </div>
 
     <nav>
+      <div class="nav-group-label">Observatory</div>
+      <a class="nav-item" href="#observatory" data-tab="observatory">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+        <span class="nav-label">Summary</span>
+      </a>
+      <a class="nav-item" href="#team" data-tab="team">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2"/><path d="M3 20c0-4 2-6 6-6s6 2 6 6M15 15c3 0 5 1.5 5 4"/></svg>
+        <span class="nav-label">Team</span>
+      </a>
+      <a class="nav-item" href="#accounts" data-tab="accounts">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 15h4"/></svg>
+        <span class="nav-label">Accounts</span>
+      </a>
+
       <a class="nav-item active" href="#overview" data-tab="overview">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
         <span class="nav-label">Overview</span>
@@ -48,6 +62,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M8.5 12h2l1.5 3 2-6 1.5 3h2"/></svg>
         <span class="nav-label">Model Health</span>
         <span class="nav-badge" id="nav-drift-badge" hidden></span>
+      </a>
+      <a class="nav-item" href="#drift" data-tab="drift">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 3-7 2 2h3"/><path d="M4 20h16"/></svg>
+        <span class="nav-label">Drift</span>
       </a>
       <a class="nav-item" href="#quality" data-tab="quality">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l2.4 5 5.6.8-4 4 1 5.6-5-2.8-5 2.8 1-5.6-4-4 5.6-.8z"/></svg>
@@ -85,6 +103,11 @@
       <a class="nav-item" href="#cache" data-tab="cache">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg>
         <span class="nav-label">Cache</span>
+      </a>
+      <a class="nav-item" href="#maxguard" data-tab="maxguard">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M8 12h2l1.5 3 2-6 1.5 3h2"/></svg>
+        <span class="nav-label">Max Guard</span>
+        <span class="nav-count" id="nav-maxguard-count" hidden></span>
       </a>
 
       <div class="nav-group-label">Govern</div>
@@ -154,6 +177,26 @@
     <div id="notif-strip" class="notif-strip" hidden></div>
 
     <main class="appcontent">
+    <!-- Observatory suite -------------------------------------------------->
+    <section id="tab-observatory" class="tab observatory-page">
+      <div class="page-toolbar obs-period-toolbar"><label class="obs-period-control"><span>Period</span><select id="observatory-window"><option value="24:hour">Today</option><option value="168:day">This week</option><option value="336:day">2 weeks</option><option value="672:day">4 weeks</option><option value="2160:day">3 months</option><option value="4320:day">6 months</option><option value="8760:day">12 months</option><option value="87600:day">All time</option></select></label><span id="obs-updated" class="hint">updating…</span></div>
+      <div id="obs-summary-root"></div>
+    </section>
+
+    <section id="tab-team" class="tab observatory-page">
+      <div class="obs-toolbar"><span class="obs-window">Active now</span><span class="obs-window">Last 24 hours</span></div>
+      <div id="obs-team-root"></div>
+    </section>
+
+    <section id="tab-accounts" class="tab observatory-page">
+      <div class="obs-toolbar obs-period-toolbar"><label class="obs-period-control"><span>Period</span><select id="obs-accounts-window"><option value="24:hour">Today</option><option value="168:day">This week</option><option value="336:day">2 weeks</option><option value="672:day">4 weeks</option><option value="2160:day">3 months</option><option value="4320:day">6 months</option><option value="8760:day">12 months</option><option value="87600:day">All time</option></select></label><span class="obs-window">USD</span><button id="obs-accounts-refresh" class="obs-ghost">Refresh</button></div>
+      <div id="obs-accounts-root"></div>
+    </section>
+
+    <section id="tab-teamcompliance" class="tab observatory-page">
+      <div id="obs-compliance-root"></div>
+    </section>
+
     <!-- Overview ------------------------------------------------------------>
     <section id="tab-overview" class="tab active">
       <div class="page-toolbar">
@@ -323,6 +366,18 @@
       <p class="hint" style="max-width:920px">What prompt caching is actually doing for you. The first call <em>writes</em> a repeated prefix (25% premium), later calls <em>read</em> it at ~1/10th input price. <b>Hit rate</b> = input tokens served from cache. <b>Saved</b> = read discount minus write premium. The <b>leak detector</b> flags prefixes that write but rarely read back — usually a timestamp/ID sneaking into an otherwise-stable prompt.</p>
       <div id="cache-kpis" class="v2-section"></div>
       <div id="cache-prefix-card" class="v2-section"></div>
+    </section>
+
+    <!-- Max Guard ---------------------------------------------------------->
+    <section id="tab-maxguard" class="tab">
+      <div class="page-toolbar">
+        <button class="reload" id="maxguard-reload" title="reload">↻</button>
+        <span class="hint" id="maxguard-mode"></span>
+      </div>
+      <p class="hint" style="max-width:920px">Protects Claude Max capacity independently of dollar cost. Fresh input, cache activity and in-flight reservations are reconciled per native session. A paused xNaut run is stopped instead of left retrying in the background.</p>
+      <div id="maxguard-kpis" class="v2-section"></div>
+      <div id="maxguard-sessions" class="v2-section"></div>
+      <div id="maxguard-feedback" class="hint" role="status"></div>
     </section>
 
     <!-- Audit Log (per-call live feed) -------------------------------------->
@@ -928,8 +983,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="/static/vendor/uPlot.iife.min.js"></script>
   <script src="/static/vendor/help-pane.js"></script>
-  <script src="/static/help-content.js"></script>
+  <script src="/static/help-content.js?v=0.5.0"></script>
   <script src="/static/kit.js"></script>
-  <script src="/static/app.js?v=0.4.0-1"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

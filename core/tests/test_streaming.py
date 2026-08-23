@@ -151,6 +151,22 @@ def test_parse_anthropic_stream():
     assert out["was_empty"] is False
 
 
+def test_parse_stream_retains_provider_error():
+    buf = (
+        b"event: error\n"
+        b'data: {"type":"error","error":{"type":"rate_limit_error",'
+        b'"message":"Usage limit reached"}}\n\n'
+    )
+
+    out = parse_sse_for_outcome(buf)
+
+    assert out["provider_error"] == {
+        "type": "rate_limit_error",
+        "message": "Usage limit reached",
+    }
+    assert out["assembled_content"] == ""
+
+
 # =============================================================================
 # HTTP-level streaming round-trip
 # =============================================================================
@@ -309,6 +325,32 @@ async def test_streaming_was_empty_records_correctly(streaming_app):
                 pass
 
     assert calls["outcome"][0]["was_empty"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_provider_error_is_forwarded_and_audited_as_failure(streaming_app):
+    app, calls = streaming_app
+    error = {"error": {"type": "rate_limit_error", "message": "Usage limit reached"}}
+    _set_stream_chunks(calls["mock"], [_ev(error), b"data: [DONE]\n\n"])
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        async with c.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer ng_test"},
+            json={
+                "model": "claude-opus-5",
+                "messages": [{"role": "user", "content": "continue"}],
+                "stream": True,
+            },
+        ) as resp:
+            received = b"".join([chunk async for chunk in resp.aiter_raw()])
+
+    assert b"rate_limit_error" in received
+    outcome = calls["outcome"][0]
+    assert outcome["status_code"] == 502
+    assert outcome["evidence"]["error_code"] == "rate_limit_error"
 
 
 @pytest.mark.asyncio

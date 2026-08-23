@@ -39,7 +39,7 @@ from app.outcome import persist_outcome
 from app.provider_health import upsert_health
 from app.scoring import resolve_healthy, score, to_tier
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
-from app.usage import cache_prefix_hash, normalize_usage
+from app.usage import cache_marker_topology, cache_prefix_hash, normalize_usage
 
 AUTO_MODEL_TOKEN = "auto"
 TOOL_CALL_ARG_EXCERPT_BYTES = 200
@@ -620,6 +620,22 @@ async def _process_chat_request(
         payload.pop("stream", None)
         pseudo_stream = True
 
+    native_anthropic = payload.get("_nautgate_anthropic_native")
+    received_cache_markers = cache_marker_topology(
+        native_anthropic if isinstance(native_anthropic, dict) else None
+    )
+    native_anthropic_destination = bool(
+        isinstance(native_anthropic, dict) and decision_model.startswith("claude")
+    )
+    forwarded_cache_markers = received_cache_markers if native_anthropic_destination else []
+    cache_integrity_status = (
+        "not_requested"
+        if not received_cache_markers
+        else "forwarded"
+        if forwarded_cache_markers == received_cache_markers
+        else "lost"
+    )
+
     evidence = {
         "receipt_id": str(receipt_id),
         "body_sha256": inbound_body_sha256,
@@ -632,6 +648,10 @@ async def _process_chat_request(
         "policy_sha256": content_hash(confidentiality_config),
         "instance_id": os.environ.get("NAUTGATE_INSTANCE_ID", "default"),
         "build_digest": os.environ.get("NAUTGATE_BUILD_DIGEST") or None,
+        "cache_markers_received": len(received_cache_markers),
+        "cache_markers_forwarded": len(forwarded_cache_markers),
+        "cache_marker_topology_sha256": content_hash(received_cache_markers),
+        "cache_integrity_status": cache_integrity_status,
     }
 
     if payload.get("stream"):
@@ -656,7 +676,9 @@ async def _process_chat_request(
         )
 
     # --- non-streaming ---
-    _overrides = await _resolve_provider_overrides(pool)
+    _overrides = await _resolve_provider_overrides(
+        pool, allow_subscription=getattr(request.state, "max_launch", None) is not None
+    )
     _router_headers = {"x-ng-provider-keys": json.dumps(_overrides)} if _overrides else None
     upstream_status = 200
     upstream_resp: dict | None = None
@@ -978,7 +1000,9 @@ def _streaming_response(
     state = {"first_byte_ms": None, "client_disconnected": False}
 
     async def gen() -> AsyncIterator[bytes]:
-        _overrides = await _resolve_provider_overrides(pool)
+        _overrides = await _resolve_provider_overrides(
+            pool, allow_subscription=getattr(request.state, "max_launch", None) is not None
+        )
         _rhdr = {"x-ng-provider-keys": json.dumps(_overrides)} if _overrides else None
         try:
             async for chunk in nautrouter.chat_completions_stream(payload, headers=_rhdr):
@@ -1032,7 +1056,7 @@ def _streaming_response(
                     pool,
                     spool,
                     decision_id=decision_id,
-                    status_code=200,
+                    status_code=502 if parsed.get("provider_error") else 200,
                     duration_ms=duration_ms,
                     first_byte_ms=state["first_byte_ms"],
                     prompt_tokens=parsed.get("prompt_tokens"),
@@ -1056,7 +1080,11 @@ def _streaming_response(
                         **(evidence or {}),
                         "response_sha256": hashlib.sha256(bytes(capture.accumulator)).hexdigest(),
                         "finish_reason": parsed.get("finish_reason"),
-                        "error_code": None,
+                        "error_code": (
+                            (parsed.get("provider_error") or {}).get("type")
+                            if parsed.get("provider_error")
+                            else None
+                        ),
                     },
                 )
                 # Brain layer — same fire-and-forget pattern as non-streaming.
@@ -1140,7 +1168,7 @@ def _streaming_response(
             if stream_plugins is not None and not stream_plugins.is_empty:
                 base_payload = {
                     "decision_id": decision_id,
-                    "status_code": 200,
+                    "status_code": 502 if parsed.get("provider_error") else 200,
                     "duration_ms": duration_ms,
                     "first_byte_ms": state["first_byte_ms"],
                     "prompt_tokens": parsed.get("prompt_tokens"),
@@ -1351,6 +1379,45 @@ async def messages(request: Request) -> Response:
         stream_translator=stream_translator,
         stream_translator_finish=stream_translator_finish,
     )
+
+
+@router.post("/max/launches")
+async def register_max_launch(request: Request) -> Response:
+    """Mint an opaque route for one xNaut-launched Claude Code run."""
+    pool = getattr(request.app.state, "db", None)
+    await authenticate(pool, request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(body, dict) or body.get("app") != "xnaut":
+        raise HTTPException(status_code=400, detail="app must be xnaut")
+    from app.max_launches import register_launch
+
+    token, launch = register_launch(
+        app="xnaut",
+        project=str(body.get("project") or ""),
+        native_session=str(body.get("native_session") or ""),
+        run_id=str(body.get("run_id") or ""),
+        owner_instance=os.environ.get("NAUTGATE_INSTANCE_ID", "default"),
+        ttl_seconds=int(body.get("ttl_seconds") or 21600),
+    )
+    origin = str(request.base_url).rstrip("/")
+    return JSONResponse(
+        {
+            "base_url": f"{origin}/v1/max/launches/{token}",
+            "expires_in": int(launch.expires_at - time.monotonic()),
+        }
+    )
+
+
+@router.post("/max/launches/{launch_token}/v1/messages")
+async def bound_max_messages(launch_token: str, request: Request) -> Response:
+    """Claude Code target for a validated xNaut launch capability."""
+    from app.max_launches import bind_request
+
+    bind_request(request, launch_token)
+    return await messages(request)
 
 
 # ============================================================================
@@ -1625,6 +1692,129 @@ async def list_agents(request: Request) -> Response:
     return JSONResponse({"items": items, "count": len(items)})
 
 
+@router.get("/max-guard/sessions")
+async def max_guard_sessions(request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    await authenticate(pool, request)
+    from app.max_guard import durable_window_summary, list_durable_states
+
+    items = await list_durable_states(pool)
+    guard = getattr(request.app.state, "max_guard", None)
+    policy = getattr(guard, "policy", None)
+    return JSONResponse(
+        {
+            "items": items,
+            "count": len(items),
+            "windows": await durable_window_summary(pool),
+            "policy": {
+                "mode": getattr(policy, "mode", "observe"),
+                "session_pause_tokens": getattr(policy, "pause_fresh_tokens", None),
+                "project_hour_pause_tokens": getattr(policy, "project_hour_pause_tokens", None),
+                "five_hour_pause_tokens": getattr(policy, "lane_five_hour_pause_tokens", None),
+                "week_pause_tokens": getattr(policy, "lane_week_pause_tokens", None),
+            },
+        }
+    )
+
+
+@router.post("/max-guard/sessions/{identity}/pause")
+async def max_guard_pause(identity: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    actor_agent_id = await authenticate(pool, request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (
+        str(body.get("reason") or "operator_pause") if isinstance(body, dict) else "operator_pause"
+    )
+    from app.max_guard import set_durable_pause
+
+    changed, receipt_id = await set_durable_pause(
+        pool, identity=identity, paused=True, actor_agent_id=actor_agent_id, reason=reason
+    )
+    if not changed:
+        raise HTTPException(status_code=404, detail="max_guard_session_not_found")
+    guard = getattr(request.app.state, "max_guard", None)
+    if guard is not None:
+        guard.set_pause(identity, True, reason)
+    return JSONResponse(
+        {"identity": identity, "paused": True, "reason": reason, "receipt_id": str(receipt_id)}
+    )
+
+
+@router.post("/max-guard/sessions/{identity}/resume")
+async def max_guard_resume(identity: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    actor_agent_id = await authenticate(pool, request)
+    from app.max_guard import set_durable_pause
+
+    changed, receipt_id = await set_durable_pause(
+        pool, identity=identity, paused=False, actor_agent_id=actor_agent_id
+    )
+    if not changed:
+        raise HTTPException(status_code=404, detail="max_guard_session_not_found")
+    guard = getattr(request.app.state, "max_guard", None)
+    if guard is not None:
+        guard.set_pause(identity, False)
+    return JSONResponse({"identity": identity, "paused": False, "receipt_id": str(receipt_id)})
+
+
+@router.post("/max-guard/sessions/{identity}/authorize")
+async def max_guard_authorize(identity: str, request: Request) -> Response:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    actor_agent_id = await authenticate(pool, request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_json: {exc}") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    try:
+        extra_tokens = int(body.get("extra_tokens", 5_000_000))
+        ttl_seconds = int(body.get("ttl_seconds", 900))
+        remaining = body.get("remaining_requests", 1)
+        remaining_requests = None if remaining is None else int(remaining)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="override values must be integers") from None
+    if extra_tokens < 0 or remaining_requests is not None and remaining_requests < 1:
+        raise HTTPException(status_code=400, detail="invalid override allowance")
+    from app.max_guard import create_durable_override
+
+    try:
+        override_id, receipt_id = await create_durable_override(
+            pool,
+            identity=identity,
+            extra_tokens=extra_tokens,
+            remaining_requests=remaining_requests,
+            ttl_seconds=ttl_seconds,
+            reason=str(body.get("reason") or "operator_authorization"),
+            actor_agent_id=actor_agent_id,
+        )
+    except Exception as exc:
+        if "foreign key" in str(exc).lower():
+            raise HTTPException(status_code=404, detail="max_guard_session_not_found") from None
+        raise
+    return JSONResponse(
+        {
+            "id": str(override_id),
+            "identity": identity,
+            "extra_tokens": extra_tokens,
+            "remaining_requests": remaining_requests,
+            "ttl_seconds": max(60, min(ttl_seconds, 86_400)),
+            "receipt_id": str(receipt_id),
+        }
+    )
+
+
 @router.get("/projects")
 async def list_projects(request: Request) -> Response:
     """Distinct projects (cost centers) with their keys, agents, 30-day
@@ -1658,14 +1848,11 @@ async def cost_summary(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     project_scope = _resolve_project_scope(request)
-    return JSONResponse(
-        await queries.get_cost_summary(
-            pool,
-            agent_id=scope,
-            hours=hours,
-            project_id=project_scope,
-        )
-    )
+    provider_scope = request.query_params.get("provider")
+    kwargs = dict(pool=pool, agent_id=scope, hours=hours, project_id=project_scope)
+    if provider_scope:
+        kwargs["provider_id"] = provider_scope
+    return JSONResponse(await queries.get_cost_summary(**kwargs))
 
 
 @router.get("/cost/timeseries")
@@ -1695,15 +1882,11 @@ async def cost_timeseries(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="hours must be in 1..87600")
 
     project_scope = _resolve_project_scope(request)
-    return JSONResponse(
-        await queries.get_cost_timeseries(
-            pool,
-            agent_id=scope,
-            bucket=bucket,
-            hours=hours,
-            project_id=project_scope,
-        )
-    )
+    provider_scope = request.query_params.get("provider")
+    kwargs = dict(pool=pool, agent_id=scope, bucket=bucket, hours=hours, project_id=project_scope)
+    if provider_scope:
+        kwargs["provider_id"] = provider_scope
+    return JSONResponse(await queries.get_cost_timeseries(**kwargs))
 
 
 def _price_for_model(pricing, model: str | None):
@@ -1765,8 +1948,12 @@ async def cache_summary(request: Request) -> Response:
     if hours < 1 or hours > 87600:
         raise HTTPException(status_code=400, detail="hours must be in 1..87600")
     model_filter = request.query_params.get("model")
+    provider_filter = request.query_params.get("provider")
 
-    summary = await queries.get_cache_summary(pool, hours=hours, model_filter=model_filter)
+    kwargs = dict(pool=pool, hours=hours, model_filter=model_filter)
+    if provider_filter:
+        kwargs["provider_id"] = provider_filter
+    summary = await queries.get_cache_summary(**kwargs)
     pricing = getattr(request.app.state, "pricing", None)
 
     # Attach cache-off / cache-on / saved per model + totals, using live pricing.
@@ -2754,14 +2941,15 @@ def _invalidate_provider_overrides() -> None:
     _PROVIDER_OVERRIDE_CACHE["at"] = 0.0
 
 
-async def _resolve_provider_overrides(pool) -> dict:
+async def _resolve_provider_overrides(pool, *, allow_subscription: bool = False) -> dict:
     """{provider: decrypted_key} for every db-stored key. Cached; keeps the last
     good value if a decrypt/query fails so a transient error can't drop keys."""
     if pool is None:
         return {}
     now = time.monotonic()
     if now - _PROVIDER_OVERRIDE_CACHE["at"] < _PROVIDER_OVERRIDE_TTL:
-        return _PROVIDER_OVERRIDE_CACHE["keys"]
+        keys = dict(_PROVIDER_OVERRIDE_CACHE["keys"])
+        return _with_anthropic_subscription(keys) if allow_subscription else keys
     from app.db import queries
 
     keys: dict = {}
@@ -2776,17 +2964,22 @@ async def _resolve_provider_overrides(pool) -> dict:
             error=str(exc) or repr(exc),
             error_type=type(exc).__name__,
         )
-        return _PROVIDER_OVERRIDE_CACHE["keys"]
-    # No metered Anthropic key stored? Use the operator's own subscription
-    # token, so an ng_ client asking for claude-* reaches the Max plan instead
-    # of the exhausted ANTHROPIC_API_KEY (NAUTGATE-36).
-    if "anthropic" not in keys:
-        from app.anthropic_subscription import subscription_token
-
-        token = subscription_token()
-        if token:
-            keys["anthropic"] = token
+        keys = dict(_PROVIDER_OVERRIDE_CACHE["keys"])
+        return _with_anthropic_subscription(keys) if allow_subscription else keys
     _PROVIDER_OVERRIDE_CACHE.update(at=now, keys=keys)
+    return _with_anthropic_subscription(dict(keys)) if allow_subscription else keys
+
+
+def _with_anthropic_subscription(keys: dict) -> dict:
+    """Add personal Max only to a validated launch's per-request key copy."""
+    from app.anthropic_subscription import subscription_token
+
+    token = subscription_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="anthropic_max_credential_unavailable")
+    # A bound Max launch is explicit. Never silently charge a stored metered
+    # key merely because it also exists, and never cache this OAuth credential.
+    keys["anthropic"] = token
     return keys
 
 

@@ -13,10 +13,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 RECEIPT_SCHEMA = "dev.nautgate.decision-receipt/v1"
+CONTROL_RECEIPT_SCHEMA = "dev.nautgate.max-guard-control-receipt/v1"
 CHECKPOINT_SCHEMA = "dev.nautgate.audit-checkpoint/v1"
 BUNDLE_SCHEMA = "dev.nautgate.evidence-bundle/v1"
 
 RECEIPT_DOMAIN = b"NAUTGATE-DECISION-RECEIPT-V1\0"
+CONTROL_RECEIPT_DOMAIN = b"NAUTGATE-MAX-GUARD-CONTROL-RECEIPT-V1\0"
 MERKLE_LEAF_DOMAIN = b"NAUTGATE-MERKLE-LEAF-V1\0"
 MERKLE_NODE_DOMAIN = b"NAUTGATE-MERKLE-NODE-V1\0"
 CHECKPOINT_DOMAIN = b"NAUTGATE-AUDIT-CHECKPOINT-V1\0"
@@ -91,9 +93,14 @@ def sha256(data: bytes) -> bytes:
 
 
 def receipt_hash(receipt: Mapping[str, Any]) -> bytes:
-    if receipt.get("schema") != RECEIPT_SCHEMA:
+    schema = receipt.get("schema")
+    domains = {
+        RECEIPT_SCHEMA: RECEIPT_DOMAIN,
+        CONTROL_RECEIPT_SCHEMA: CONTROL_RECEIPT_DOMAIN,
+    }
+    if schema not in domains:
         raise EvidenceFormatError(f"unsupported receipt schema: {receipt.get('schema')!r}")
-    return sha256(RECEIPT_DOMAIN + canonical_json(receipt))
+    return sha256(domains[schema] + canonical_json(receipt))
 
 
 def merkle_leaf(receipt_digest: bytes) -> bytes:

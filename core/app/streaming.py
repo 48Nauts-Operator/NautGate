@@ -101,6 +101,7 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     finish_reason: str | None = None
     actual_model: str | None = None
     actual_provider: str | None = None
+    provider_error: dict | None = None
     content_parts: list[str] = []
     # tool_calls accumulator — keyed by tool_call index for OpenAI Chat streaming;
     # for Anthropic, keyed by content_block index. Both stream incrementally.
@@ -115,6 +116,9 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
             payload = json.loads(data)
         except json.JSONDecodeError:
             continue
+
+        if isinstance(payload.get("error"), dict):
+            provider_error = payload["error"]
 
         # OpenRouter / OpenAI: each chunk carries the actual model picked.
         if isinstance(payload.get("model"), str) and not actual_model:
@@ -245,4 +249,5 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         "tool_calls": tool_calls,
         "actual_model": actual_model,
         "actual_provider": actual_provider,
+        "provider_error": provider_error,
     }

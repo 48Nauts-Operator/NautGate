@@ -58,6 +58,8 @@ reporting trustworthy.
 - Deterministic Swiss/EU PII detection through Bowden, with matched values redacted from audit captures
 
 **Analytics**
+- Observatory summary, team, and account views for operational usage at a glance
+- Max Guard for Claude Max fresh-input, cache, session, and rolling-window pressure
 - Quality gate — post-hoc judge scoring with failure-mode buckets
 - Head-to-head — real calls grouped by task, so models compare like-for-like
 - Champion/challenger shadow testing with a blind judge
@@ -141,9 +143,15 @@ Point a client at it:
 export OPENAI_BASE_URL=http://localhost:8090/v1
 export OPENAI_API_KEY=ng_…      # mint one in Settings → Keys
 
-# Claude Code (--bare is required, or its stored OAuth login wins)
-ANTHROPIC_BASE_URL=http://localhost:8090 ANTHROPIC_API_KEY=ng_… claude --bare
+# Claude Code with a NautGate key
+ANTHROPIC_BASE_URL=http://localhost:8090 ANTHROPIC_API_KEY=ng_… claude
 ```
+
+Do not add `--bare` merely to make NautGate work. It changes Claude Code's
+normal authenticated launch behavior and can cause a login loop in setups that
+expect the stored Claude session. xNaut integrations should use NautGate's
+native launch endpoint so Max Guard receives the application, project, run, and
+native-session identity without replacing Claude Code's own login flow.
 
 Dashboard: <http://localhost:8090/dashboard>
 

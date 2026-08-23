@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NautGate Max Usage Forensics — 22 August 2026</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #09100f;
+      --panel: #101a18;
+      --panel-2: #14211e;
+      --line: #29413b;
+      --text: #e8f0ed;
+      --muted: #9fb1ab;
+      --amber: #ffbd59;
+      --amber-soft: rgba(255, 189, 89, .12);
+      --red: #ff746c;
+      --red-soft: rgba(255, 116, 108, .12);
+      --green: #62d6a7;
+      --blue: #70b7ff;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 85% 0%, rgba(255, 189, 89, .09), transparent 28rem),
+        linear-gradient(180deg, #0b1412 0%, var(--bg) 32rem);
+      color: var(--text);
+      font: 15px/1.58 var(--sans);
+    }
+    main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0 96px; }
+    header { display: grid; gap: 22px; padding-bottom: 42px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--amber); font: 700 12px/1 var(--mono); letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 850px; font-size: clamp(38px, 7vw, 72px); line-height: .98; letter-spacing: -.045em; }
+    .lede { max-width: 780px; margin: 0; color: var(--muted); font-size: 19px; }
+    .verdict {
+      display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start;
+      padding: 20px; border: 1px solid rgba(255, 116, 108, .42); border-radius: 14px; background: var(--red-soft);
+    }
+    .verdict strong { color: var(--red); font: 700 12px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .verdict p { margin: 0; font-size: 17px; }
+    section { padding: 44px 0 0; }
+    h2 { margin: 0 0 18px; font-size: 27px; letter-spacing: -.025em; }
+    h3 { margin: 0 0 9px; font-size: 17px; }
+    p { margin: 0 0 14px; }
+    code { font-family: var(--mono); font-size: .91em; color: #d7e7e1; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+    .card { grid-column: span 3; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+    .card .label { color: var(--muted); font: 600 11px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .card .value { margin-top: 8px; font-size: 31px; font-weight: 750; letter-spacing: -.04em; }
+    .card .note { margin-top: 6px; color: var(--muted); font-size: 13px; }
+    .danger .value { color: var(--red); }
+    .warning .value { color: var(--amber); }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+    table { width: 100%; border-collapse: collapse; min-width: 740px; }
+    th, td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font: 650 11px/1.3 var(--mono); letter-spacing: .07em; text-transform: uppercase; background: var(--panel-2); }
+    tr:last-child td { border-bottom: 0; }
+    td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .callout { padding: 20px 22px; border-left: 3px solid var(--amber); background: var(--amber-soft); border-radius: 0 12px 12px 0; }
+    .callout p:last-child { margin-bottom: 0; }
+    .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .step { position: relative; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .step:not(:last-child)::after { content: "→"; position: absolute; right: -10px; top: 50%; z-index: 2; color: var(--amber); font-weight: 800; }
+    .step small { display: block; margin-bottom: 8px; color: var(--amber); font: 700 11px/1 var(--mono); }
+    .step span { color: var(--muted); font-size: 13px; }
+    .confidence { display: inline-block; margin-left: 7px; padding: 3px 7px; border-radius: 999px; font: 700 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .high { color: var(--green); background: rgba(98, 214, 167, .12); }
+    .medium { color: var(--amber); background: var(--amber-soft); }
+    ul, ol { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 8px 0; }
+    .source-box { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .source-box article { padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+    footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    @media (max-width: 850px) {
+      .card { grid-column: span 6; }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .step:nth-child(2)::after { display: none; }
+    }
+    @media (max-width: 560px) {
+      main { width: min(100% - 24px, 1120px); padding-top: 36px; }
+      .card { grid-column: span 12; }
+      .flow, .source-box { grid-template-columns: 1fr; }
+      .step::after { display: none; }
+      .verdict { grid-template-columns: 1fr; }
+    }
+    @media print {
+      :root { color-scheme: light; --bg: white; --panel: #f7f8f7; --panel-2: #eef1ef; --line: #ccd3cf; --text: #111815; --muted: #53615c; }
+      body { background: white; }
+      main { width: 100%; padding: 20px; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">NautGate · Usage Forensics · Incident Review</div>
+    <h1>Why Claude Max usage collapsed on 22 August</h1>
+    <p class="lede">A read-only investigation of NautGate's audit trail for the <code>pi</code> agent, focused on Claude Code-shaped sessions, Max-plan routing, context growth, request frequency, and prompt-cache behavior.</p>
+    <div class="verdict">
+      <strong>High-confidence verdict</strong>
+      <p>A new Max-subscription route exposed two rapidly growing agentic sessions to Claude Opus without effective prompt caching. The result was <b>148.53 million fresh Opus input tokens in one day</b>—42.8× the previous day's volume.</p>
+    </div>
+  </header>
+
+  <section>
+    <h2>Incident at a glance</h2>
+    <div class="grid">
+      <article class="card danger"><div class="label">Fresh Opus input</div><div class="value">148.53M</div><div class="note">22 August only</div></article>
+      <article class="card warning"><div class="label">Opus calls</div><div class="value">687</div><div class="note">6.1× the prior day</div></article>
+      <article class="card danger"><div class="label">Cache reads</div><div class="value">0</div><div class="note">Across all affected calls</div></article>
+      <article class="card warning"><div class="label">Largest fresh request</div><div class="value">447K</div><div class="note">For roughly 100–300 output tokens</div></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>What changed</h2>
+    <div class="callout">
+      <p><b>20 August, commit <code>4ad7157</code>:</b> “a Claude Max lane for ordinary <code>ng_</code> clients.”</p>
+      <p>Before this change, ordinary NautGate-key traffic from <code>pi</code> did not successfully consume the operator's Claude Max subscription. After the change, NautGate supplied the operator's Claude OAuth credential to NautRouter and sent explicit Claude model requests to the Max lane.</p>
+    </div>
+    <div class="flow" style="margin-top:16px">
+      <div class="step"><small>01 · SOURCE</small><b>Local app</b><br><span>Authenticated to NautGate as <code>pi</code></span></div>
+      <div class="step"><small>02 · PROTOCOL</small><b>Anthropic-shaped inbound</b><br><span>Explicit <code>claude-opus-5</code></span></div>
+      <div class="step"><small>03 · TRANSLATION</small><b>NautRouter</b><br><span>Converted and forwarded without cache controls</span></div>
+      <div class="step"><small>04 · BILLING</small><b>Claude Max</b><br><span>Large repeated prefixes counted as fresh input</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Day-over-day evidence</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>21 Aug</th><th>22 Aug</th><th>Change</th></tr></thead>
+        <tbody>
+          <tr><td>Opus calls</td><td class="num">112</td><td class="num">687</td><td class="num">6.1×</td></tr>
+          <tr><td>Fresh Opus input</td><td class="num">3.47M</td><td class="num">148.53M</td><td class="num">42.8×</td></tr>
+          <tr><td>Average fresh input per call</td><td class="num">31K</td><td class="num">216K</td><td class="num">7.0×</td></tr>
+          <tr><td>Opus output</td><td class="num">58.64K</td><td class="num">360.11K</td><td class="num">6.1×</td></tr>
+          <tr><td>Recorded cache reads / writes</td><td class="num">0 / 0</td><td class="num">0 / 0</td><td>No protection</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>The two dominant sessions</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Session</th><th>Calls</th><th>Fresh input</th><th>Messages reached</th><th>Observed period</th></tr></thead>
+        <tbody>
+          <tr><td><code>fc6a2477dfbc4dfc</code></td><td class="num">478</td><td class="num">71.01M</td><td class="num">662</td><td>00:30–18:48</td></tr>
+          <tr><td><code>1dfae1aad9348862</code></td><td class="num">225</td><td class="num">77.52M</td><td class="num">818</td><td>18:49–23:59</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px;color:var(--muted)">The second session reached 54 tool definitions and a 1.15 MB request body. Its largest calls contained about 447,000 fresh input tokens.</p>
+  </section>
+
+  <section>
+    <h2>Agent-loop amplification</h2>
+    <p>One user turn frequently caused many model calls. Every tool result and assistant step expanded the history transmitted on the next call.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Captured turn</th><th>Model calls</th><th>Fresh input</th></tr></thead>
+        <tbody>
+          <tr><td><code>[empty user excerpt / tool-loop traffic]</code></td><td class="num">320</td><td class="num">46.55M</td></tr>
+          <tr><td>“[Request interrupted by user]”</td><td class="num">33</td><td class="num">12.32M</td></tr>
+          <tr><td>“its supposed to be inside the center”</td><td class="num">20</td><td class="num">8.86M</td></tr>
+          <tr><td>“Lets do the 4 you mention and do them now!”</td><td class="num">55</td><td class="num">7.37M</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Source application attribution</h2>
+    <div class="source-box">
+      <article>
+        <h3>What NautGate proves <span class="confidence high">High confidence</span></h3>
+        <ul>
+          <li>Both sessions authenticated as agent <code>pi</code>.</li>
+          <li>Both originated from <code>127.0.0.1</code> / <code>localhost</code>.</li>
+          <li>Both used the Anthropic inbound format and explicitly requested <code>claude-opus-5</code>.</li>
+          <li>The tool schemas are Claude Code-compatible: Bash and a large coding-agent tool surface.</li>
+          <li>The conversation content repeatedly references xNaut, Papers/MCP, Librarian, canvas, panes, screenshots, and local product work.</li>
+        </ul>
+      </article>
+      <article>
+        <h3>What NautGate cannot prove <span class="confidence medium">Attribution gap</span></h3>
+        <ul>
+          <li>The exact local process, PID, executable path, bundle ID, or window that opened the connection.</li>
+          <li>Which of 33 historical <code>pi</code> API keys was used; decisions do not retain a key ID.</li>
+          <li>The key had no project assignment on these calls.</li>
+          <li>NautGate's session ID is a content-derived heuristic, not Claude Code's native session UUID.</li>
+        </ul>
+      </article>
+    </div>
+    <div class="callout" style="margin-top:16px">
+      <p><b>Best-supported attribution:</b> a local xNaut/Pi integration hosting or driving Claude Code-style agents. The downstream model was Claude Opus 5, but NautGate cannot yet name the precise xNaut surface or local process.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Why prompt caching failed</h2>
+    <ol>
+      <li>The affected requests traveled through the ordinary <code>ng_</code> client route added on 20 August.</li>
+      <li>NautRouter translated the request for Anthropic and added the Claude Code identity block needed for OAuth access.</li>
+      <li>The translator did not add Anthropic <code>cache_control</code> markers to the system, tools, or stable history prefix.</li>
+      <li>NautGate recorded zero cache reads and zero cache writes across the affected sessions.</li>
+      <li>As the sessions grew, each subsequent request retransmitted hundreds of thousands of fresh tokens.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Five-hour and weekly limits</h2>
+    <p>The recorded traffic is sufficient to explain rapid Max-plan depletion: hundreds of uncached Opus calls, reaching 148.53M fresh input tokens in one day. NautGate observed substantial activity gaps, including 16:06–17:53 and 19:30–23:49.</p>
+    <p>NautGate did not record upstream <code>429</code> responses for the affected calls, so those gaps cannot be formally labeled as quota windows. The client may have stopped before reaching NautGate or handled the plan limit outside the captured response path. NautGate also does not capture Anthropic's account-level remaining percentage or internal quota weighting.</p>
+  </section>
+
+  <section>
+    <h2>Continuing exposure</h2>
+    <div class="verdict">
+      <strong>23 August warning</strong>
+      <p>By the time of investigation, <code>pi</code> had already sent another <b>45.84M fresh Opus input tokens</b> across 96 calls, averaging <b>477K fresh tokens per call</b>. The condition was still active.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>NautGate product findings</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Capability</th><th>Assessment</th><th>Needed improvement</th></tr></thead>
+        <tbody>
+          <tr><td>Usage forensics</td><td>Strong raw evidence</td><td>Automatic incident narrative and baseline comparison</td></tr>
+          <tr><td>Source attribution</td><td>Agent + IP only</td><td>Persist key ID/name, app ID, process metadata and native session ID</td></tr>
+          <tr><td>Cache observability</td><td>Token fields available</td><td>Alert on repeated large prefixes with zero cache hits</td></tr>
+          <tr><td>Runaway protection</td><td>Missing</td><td>Per-session call/token velocity guardrails</td></tr>
+          <tr><td>Subscription awareness</td><td>Notional cost only</td><td>Max-window estimates and quota-impact warnings</td></tr>
+          <tr><td>Routing safety</td><td>Max route enabled globally</td><td>Explicit opt-in and model/context caps per key/project</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Recommended controls</h2>
+    <ol>
+      <li><b>Immediate:</b> stop or cap the uncached Opus route for <code>pi</code> until prompt caching is correctly implemented.</li>
+      <li><b>Cache correctness:</b> preserve or generate stable Anthropic cache breakpoints for system, tools, and conversation prefixes.</li>
+      <li><b>Velocity alerts:</b> warn or pause when a session exceeds thresholds such as 100K fresh tokens per call or 5M fresh tokens per hour.</li>
+      <li><b>Attribution:</b> write API key ID/name, project, client app, native session ID, and optional PID into every decision.</li>
+      <li><b>Session controls:</b> expose context growth, calls per user turn, interruption loops, and cache-hit ratio in the dashboard.</li>
+      <li><b>Subscription isolation:</b> require explicit per-key authorization before a normal NautGate client may spend Claude Max quota.</li>
+    </ol>
+  </section>
+
+  <footer>
+    Generated 23 August 2026 from the local NautGate PostgreSQL audit trail and repository history. Times are Europe/Zurich. Investigation was read-only. Token totals are provider-reported and normalized by NautGate; Anthropic's account-level quota percentage and weighting formula were not available in the audit data.
+  </footer>
+</main>
+</body>
+</html>

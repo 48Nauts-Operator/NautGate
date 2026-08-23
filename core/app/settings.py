@@ -63,6 +63,21 @@ class Settings(BaseSettings):
     nautgate_codex_home: str | None = None
     nautgate_subscription_workdir: str = "/tmp/nautgate-subscription"  # noqa: S108
 
+    # Max Guard starts observe-only. Operators explicitly select warn/pause
+    # after reviewing their workload; thresholds are capacity policy, not a
+    # claim about Anthropic's unpublished quota formula.
+    nautgate_max_guard_mode: str = "observe"
+    nautgate_max_guard_warn_fresh_tokens: int = 1_000_000
+    nautgate_max_guard_pause_fresh_tokens: int = 5_000_000
+    nautgate_max_guard_warn_request_tokens: int = 100_000
+    nautgate_max_guard_pause_request_tokens: int = 300_000
+    nautgate_max_guard_cache_free_warn_calls: int = 2
+    nautgate_max_guard_cache_free_pause_calls: int = 3
+    nautgate_max_guard_cache_free_min_tokens: int = 50_000
+    nautgate_max_guard_project_hour_pause_tokens: int = 10_000_000
+    nautgate_max_guard_lane_five_hour_pause_tokens: int = 25_000_000
+    nautgate_max_guard_lane_week_pause_tokens: int = 100_000_000
+
     # Model catalogue: fetch each provider's own model list so the picker
     # offers everything they actually serve, and refresh it on a timer so new
     # models appear without anyone editing a hardcoded list.

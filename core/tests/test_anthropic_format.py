@@ -56,6 +56,35 @@ def test_request_handles_system_as_block_list():
     assert "part two" in out["messages"][0]["content"]
 
 
+def test_request_retains_exact_native_anthropic_cache_controls():
+    payload = {
+        "model": "claude-opus-5",
+        "system": [
+            {
+                "type": "text",
+                "text": "stable system",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        "tools": [
+            {
+                "name": "read",
+                "description": "read a file",
+                "input_schema": {"type": "object", "properties": {}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    out = request_to_openai_chat(payload)
+
+    assert out["_nautgate_anthropic_native"] == payload
+    assert out["_nautgate_anthropic_native"] is not payload
+    assert out["_nautgate_anthropic_native"]["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert out["_nautgate_anthropic_native"]["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
 def test_request_normalizes_text_blocks_to_string():
     """Single-text-block content collapses to a plain string for cleanliness."""
     out = request_to_openai_chat(
@@ -212,6 +241,21 @@ def test_stream_translator_finish_emits_terminators_if_needed():
     assert "message_stop" in blob
 
 
+def test_stream_translator_propagates_provider_error_without_fake_success():
+    t = AnthropicStreamTranslator(model="claude-opus-5")
+
+    chunks = t.feed(
+        _data({"error": {"type": "rate_limit_error", "message": "Usage limit reached"}})
+    )
+    chunks += t.finish()
+    blob = b"".join(chunks).decode()
+
+    assert "event: error" in blob
+    assert "rate_limit_error" in blob
+    assert "Usage limit reached" in blob
+    assert "message_stop" not in blob
+
+
 # --- HTTP-level integration via /v1/messages -----------------------------
 
 
@@ -304,6 +348,54 @@ async def test_messages_round_trip_returns_anthropic_shape(messages_app):
     forwarded = calls["mock"].chat_completions.call_args.args[0]
     assert forwarded["messages"][0] == {"role": "system", "content": "You are helpful"}
     assert forwarded["messages"][1]["role"] == "user"
+    assert forwarded["_nautgate_anthropic_native"]["system"] == "You are helpful"
+
+
+@pytest.mark.asyncio
+async def test_messages_route_carries_cache_controls_to_nautrouter(messages_app):
+    app, calls = messages_app
+    calls["mock"].chat_completions.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+    system = [
+        {
+            "type": "text",
+            "text": "stable",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    tools = [
+        {
+            "name": "read",
+            "input_schema": {"type": "object", "properties": {}},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://nautgate.test") as c:
+        resp = await c.post(
+            "/v1/messages",
+            headers={"Authorization": "Bearer ng_test"},
+            json={
+                "model": "claude-opus-5",
+                "system": system,
+                "tools": tools,
+                "max_tokens": 32,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    native = calls["mock"].chat_completions.call_args.args[0]["_nautgate_anthropic_native"]
+    assert native["system"] == system
+    assert native["tools"] == tools
+    evidence = calls["outcome"][0]["evidence"]
+    assert evidence["cache_markers_received"] == 2
+    assert evidence["cache_markers_forwarded"] == 2
+    assert evidence["cache_integrity_status"] == "forwarded"
+    assert evidence["cache_marker_topology_sha256"]
 
 
 @pytest.mark.asyncio

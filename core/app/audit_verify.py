@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from app.audit_evidence import (
     BUNDLE_SCHEMA,
     CHECKPOINT_SCHEMA,
+    CONTROL_RECEIPT_SCHEMA,
     RECEIPT_SCHEMA,
     checkpoint_payload,
     receipt_hash,
@@ -81,7 +82,7 @@ def verify_bundle(
     signature = bundle.get("signature")
     if not all(isinstance(value, dict) for value in (receipt, checkpoint, signature)):
         raise VerificationError("bundle is missing receipt, checkpoint, or signature")
-    if receipt.get("schema") != RECEIPT_SCHEMA:
+    if receipt.get("schema") not in {RECEIPT_SCHEMA, CONTROL_RECEIPT_SCHEMA}:
         raise VerificationError("unsupported receipt schema")
     if checkpoint.get("schema") != CHECKPOINT_SCHEMA:
         raise VerificationError("unsupported checkpoint schema")

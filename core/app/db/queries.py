@@ -312,6 +312,7 @@ async def get_cost_summary(
     agent_id: str | None,
     hours: int,
     project_id: str | None = None,
+    provider_id: str | None = None,
 ) -> dict:
     """Aggregate cost over the last N hours, broken down by provider/model/tier.
 
@@ -328,6 +329,9 @@ async def get_cost_summary(
     if project_id and project_id != "*":
         base_params.append(project_id)
         conds.append(f"d.project_id = ${len(base_params)}")
+    if provider_id and provider_id != "*":
+        base_params.append(provider_id)
+        conds.append(f"d.decision_provider = ${len(base_params)}")
     where = " AND ".join(conds)
 
     async with pool.acquire() as conn:
@@ -499,6 +503,7 @@ async def get_cost_summary(
     return {
         "agent_id": "*" if is_all else agent_id,
         "project_id": project_id or "*",
+        "provider_id": provider_id or "*",
         "window_hours": hours,
         "total_calls": int((totals or {}).get("total_calls") or 0),
         "total_cost_usd": (totals or {}).get("total_cost_usd"),
@@ -521,6 +526,7 @@ async def get_cache_summary(
     *,
     hours: int,
     model_filter: str | None = None,
+    provider_id: str | None = None,
 ) -> dict:
     """Prompt-cache accounting over the window: totals + per-model breakdown.
 
@@ -533,6 +539,9 @@ async def get_cache_summary(
     if model_filter and model_filter != "*":
         params.append(model_filter)
         conds.append(f"d.decision_model = ${len(params)}")
+    if provider_id and provider_id != "*":
+        params.append(provider_id)
+        conds.append(f"d.decision_provider = ${len(params)}")
     where = " AND ".join(conds)
 
     # Naive cost ≈ pretend every input token (fresh + read + write) was billed at
@@ -591,6 +600,7 @@ async def get_cache_summary(
     return {
         "window_hours": hours,
         "model_filter": model_filter or "*",
+        "provider_id": provider_id or "*",
         "totals": _shape(totals) if totals else _shape({}),
         "by_model": [{"model": r["model"], **_shape(r)} for r in rows],
     }
@@ -695,6 +705,7 @@ async def get_cost_timeseries(
     bucket: str,
     hours: int,
     project_id: str | None = None,
+    provider_id: str | None = None,
 ) -> dict:
     """Bucketed cost series. ``agent_id=None`` / ``"*"`` returns aggregate
     across all agents; any other value filters. ``project_id`` further narrows.
@@ -709,12 +720,18 @@ async def get_cost_timeseries(
     if project_id and project_id != "*":
         params.append(project_id)
         conds.append(f"d.project_id = ${len(params)}")
+    if provider_id and provider_id != "*":
+        params.append(provider_id)
+        conds.append(f"d.decision_provider = ${len(params)}")
     where = " AND ".join(conds)
     rows = await pool.fetch(
         f"""
         SELECT date_trunc('{bucket}', d.ts) AS bucket_ts,
                d.decision_provider          AS provider,
                SUM(o.cost_usd)::FLOAT       AS cost_usd,
+               SUM(o.notional_cost_usd)::FLOAT AS notional_cost_usd,
+               SUM(COALESCE(o.prompt_tokens, 0))::BIGINT AS prompt_tokens,
+               SUM(COALESCE(o.cache_read_tokens, 0))::BIGINT AS cache_read_tokens,
                COUNT(*)                      AS calls
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON d.id = o.decision_id
@@ -732,6 +749,9 @@ async def get_cost_timeseries(
             {
                 "ts": r["bucket_ts"].isoformat() if r["bucket_ts"] else None,
                 "cost_usd": r["cost_usd"],
+                "notional_cost_usd": r["notional_cost_usd"],
+                "prompt_tokens": int(r["prompt_tokens"] or 0),
+                "cache_read_tokens": int(r["cache_read_tokens"] or 0),
                 "calls": int(r["calls"]),
             }
         )
@@ -740,6 +760,7 @@ async def get_cost_timeseries(
         "agent_id": "*" if is_all else agent_id,
         "bucket": bucket,
         "window_hours": hours,
+        "provider_id": provider_id or "*",
         "series": [{"provider": p, "points": points} for p, points in series_map.items()],
     }
 
@@ -2404,10 +2425,11 @@ async def export_evidence_bundle(
                    c.signature, c.key_id, c.public_key_fingerprint
               FROM nautgate.audit_receipts r
               JOIN nautgate.audit_checkpoints c ON c.checkpoint_id = r.checkpoint_id
-              JOIN nautgate.route_decisions d ON d.id = r.decision_id
+              LEFT JOIN nautgate.route_decisions d ON d.id = r.decision_id
+              LEFT JOIN nautgate.max_guard_control_events g ON g.id = r.guard_event_id
              WHERE r.receipt_id = $1
                AND r.status = 'verified' AND c.status = 'verified'
-               AND ($2::text IS NULL OR d.agent_id = $2)
+               AND ($2::text IS NULL OR COALESCE(d.agent_id, g.actor_agent_id) = $2)
             """,
             rid,
             agent_id,
@@ -2438,12 +2460,13 @@ async def export_evidence_bundle(
 async def get_audit_receipt(pool: asyncpg.Pool, *, receipt_id: UUID, agent_id: str) -> dict | None:
     row = await pool.fetchrow(
         """
-        SELECT r.receipt_id, r.decision_id, r.evidence_sequence, r.status,
+        SELECT r.receipt_id, r.decision_id, r.guard_event_id, r.evidence_sequence, r.status,
                r.checkpoint_id, r.created_at, c.signed_at AS verified_at
           FROM nautgate.audit_receipts r
-          JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.max_guard_control_events g ON g.id = r.guard_event_id
           LEFT JOIN nautgate.audit_checkpoints c ON c.checkpoint_id = r.checkpoint_id
-         WHERE r.receipt_id = $1 AND d.agent_id = $2
+         WHERE r.receipt_id = $1 AND COALESCE(d.agent_id, g.actor_agent_id) = $2
         """,
         receipt_id,
         agent_id,
@@ -2452,7 +2475,8 @@ async def get_audit_receipt(pool: asyncpg.Pool, *, receipt_id: UUID, agent_id: s
         return None
     return {
         "receipt_id": str(row["receipt_id"]),
-        "decision_id": str(row["decision_id"]),
+        "decision_id": str(row["decision_id"]) if row["decision_id"] else None,
+        "guard_event_id": str(row["guard_event_id"]) if row["guard_event_id"] else None,
         "sequence": row["evidence_sequence"],
         "evidence_status": row["status"],
         "attested": row["status"] == "verified",
@@ -2471,8 +2495,9 @@ async def get_audit_checkpoint(
                         c.key_id, c.public_key_fingerprint, c.signed_at
           FROM nautgate.audit_checkpoints c
           JOIN nautgate.audit_receipts r ON r.checkpoint_id = c.checkpoint_id
-          JOIN nautgate.route_decisions d ON d.id = r.decision_id
-         WHERE c.checkpoint_id = $1 AND d.agent_id = $2
+          LEFT JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.max_guard_control_events g ON g.id = r.guard_event_id
+         WHERE c.checkpoint_id = $1 AND COALESCE(d.agent_id, g.actor_agent_id) = $2
         """,
         checkpoint_id,
         agent_id,
@@ -2516,8 +2541,9 @@ async def get_audit_status(pool: asyncpg.Pool, *, agent_id: str) -> dict:
                (SELECT COUNT(*) FROM nautgate.audit_gaps
                  WHERE resolved_at IS NULL) AS open_gaps
           FROM nautgate.audit_receipts r
-          JOIN nautgate.route_decisions d ON d.id = r.decision_id
-         WHERE d.agent_id = $1
+          LEFT JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.max_guard_control_events g ON g.id = r.guard_event_id
+         WHERE COALESCE(d.agent_id, g.actor_agent_id) = $1
         """,
         agent_id,
     )
@@ -2539,13 +2565,14 @@ async def get_recent_audit_receipts(
 ) -> list[dict]:
     rows = await pool.fetch(
         """
-        SELECT r.receipt_id, r.decision_id, r.evidence_sequence, r.status,
+        SELECT r.receipt_id, r.decision_id, r.guard_event_id, r.evidence_sequence, r.status,
                r.checkpoint_id, r.created_at, c.signed_at,
                c.key_id, c.last_error
           FROM nautgate.audit_receipts r
-          JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.route_decisions d ON d.id = r.decision_id
+          LEFT JOIN nautgate.max_guard_control_events g ON g.id = r.guard_event_id
           LEFT JOIN nautgate.audit_checkpoints c ON c.checkpoint_id = r.checkpoint_id
-         WHERE d.agent_id = $1
+         WHERE COALESCE(d.agent_id, g.actor_agent_id) = $1
          ORDER BY r.evidence_sequence DESC
          LIMIT $2
         """,
@@ -2555,7 +2582,8 @@ async def get_recent_audit_receipts(
     return [
         {
             "receipt_id": str(row["receipt_id"]),
-            "decision_id": str(row["decision_id"]),
+            "decision_id": str(row["decision_id"]) if row["decision_id"] else None,
+            "guard_event_id": str(row["guard_event_id"]) if row["guard_event_id"] else None,
             "sequence": row["evidence_sequence"],
             "evidence_status": row["status"],
             "attested": row["status"] == "verified",

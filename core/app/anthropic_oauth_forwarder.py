@@ -156,6 +156,28 @@ def agent_id_for_request(request: Request) -> str:
     return _agent_id_for(token)
 
 
+def max_guard_pause_response(decision, *, native_session: bool, pause_tokens: int | None):
+    """A provider-shaped, explicitly non-retryable Max Guard rejection."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "type": "error",
+            "error": {
+                "type": "nautgate_max_guard_paused",
+                "message": (
+                    "NautGate paused this Claude Max session: "
+                    f"{decision.reason}. Start or authorize a new run before retrying."
+                ),
+                "retryable": False,
+                "scope": "native_session" if native_session else "oauth_identity",
+                "fresh_tokens": decision.fresh_tokens,
+                "configured_pause_tokens": pause_tokens,
+            },
+        },
+        headers={"X-NautGate-Max-Guard": "paused"},
+    )
+
+
 def _build_forward_headers(request: Request) -> dict[str, str]:
     """Strip hop-by-hop headers; forward everything else verbatim. The
     Authorization / x-api-key header is what authenticates us to Anthropic.
@@ -271,7 +293,53 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
         if auth_hdr.lower().startswith("bearer ")
         else request.headers.get("x-api-key", "").strip()
     )
-    agent_id = _agent_id_for(token)
+    launch = getattr(request.state, "max_launch", None)
+    agent_id = f"xnaut:{launch.run_id}" if launch is not None else _agent_id_for(token)
+    guard_identity = launch.native_session if launch is not None else agent_id
+    max_guard = getattr(request.app.state, "max_guard", None)
+    pool = getattr(request.app.state, "db", None)
+    guard_preflight = max_guard.preflight(guard_identity, payload) if max_guard else None
+    if pool is None and guard_preflight is not None and guard_preflight.action == "pause":
+        return max_guard_pause_response(
+            guard_preflight,
+            native_session=launch is not None,
+            pause_tokens=getattr(getattr(max_guard, "policy", None), "pause_fresh_tokens", None),
+        )
+    durable_reservation_id = None
+    if max_guard is not None and pool is not None:
+        try:
+            from app.max_guard import estimate_input_tokens, reserve_durable
+
+            durable_decision, durable_reservation_id = await reserve_durable(
+                pool,
+                identity=guard_identity,
+                app=launch.app if launch is not None else "claude-code",
+                project_id=launch.project if launch is not None else "",
+                native_session=launch.native_session if launch is not None else "",
+                estimated_tokens=estimate_input_tokens(payload),
+                policy=max_guard.policy,
+            )
+            if durable_decision.action == "pause":
+                return max_guard_pause_response(
+                    durable_decision,
+                    native_session=launch is not None,
+                    pause_tokens=max_guard.policy.pause_fresh_tokens,
+                )
+        except Exception as exc:
+            # The synchronous in-memory guard above still protects this process.
+            # Record the durability loss loudly; never silently switch billing lanes.
+            log.error(
+                "max_guard_reservation_failed",
+                identity=guard_identity,
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
+            if guard_preflight is not None and guard_preflight.action == "pause":
+                return max_guard_pause_response(
+                    guard_preflight,
+                    native_session=launch is not None,
+                    pause_tokens=max_guard.policy.pause_fresh_tokens,
+                )
 
     decision_id = uuid.uuid4()
     receipt_id = uuid.uuid4()
@@ -279,7 +347,6 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     inbound_format = "anthropic_messages_oauth"
     is_stream = bool(isinstance(payload, dict) and payload.get("stream"))
 
-    pool = getattr(request.app.state, "db", None)
     pricing = getattr(request.app.state, "pricing", None)
     started_at_ns = _time.monotonic_ns()
 
@@ -314,7 +381,12 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                 classified_score=score_vector.aggregate,
                 classified_sensitivity=sensitivity,
                 classified_signals=classification.signals,
-                session_id=compute_session_id(agent_id, messages),
+                session_id=(
+                    launch.native_session
+                    if launch is not None
+                    else compute_session_id(agent_id, messages)
+                ),
+                project_id=getattr(request.state, "project_id", None),
                 decision_provider="anthropic-oauth",
                 decision_model=requested_model or "claude-default",
                 decision_reason="anthropic-oauth:passthrough",
@@ -351,7 +423,8 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
     # attaches it, but be defensive in case some client doesn't.
     fwd_headers.setdefault("anthropic-version", "2023-06-01")
     # Path is whatever the client called us with, on api.anthropic.com.
-    url = f"https://{ANTHROPIC_HOST}{request.url.path}"
+    upstream_path = getattr(request.state, "anthropic_upstream_path", request.url.path)
+    url = f"https://{ANTHROPIC_HOST}{upstream_path}"
     if request.url.query:
         url = f"{url}?{request.url.query}"
 
@@ -473,6 +546,38 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                     else:
                         decoded = bytes(body_buf)
                     meta = _parse_response_meta(decoded, is_stream)
+                    prefix = cache_prefix_hash(payload)
+                    guard_outcome = (
+                        max_guard.reconcile(
+                            guard_identity,
+                            fresh_tokens=meta.get("prompt_tokens"),
+                            cache_read_tokens=meta.get("cache_read_tokens"),
+                            cache_write_tokens=meta.get("cache_write_tokens"),
+                            output_tokens=meta.get("completion_tokens"),
+                            prefix_hash=prefix,
+                        )
+                        if max_guard
+                        else None
+                    )
+                    if durable_reservation_id is not None:
+                        from app.max_guard import reconcile_durable
+
+                        try:
+                            await reconcile_durable(
+                                pool,
+                                reservation_id=durable_reservation_id,
+                                fresh_tokens=meta.get("prompt_tokens"),
+                                cache_read_tokens=meta.get("cache_read_tokens"),
+                                cache_write_tokens=meta.get("cache_write_tokens"),
+                                output_tokens=meta.get("completion_tokens"),
+                            )
+                        except Exception as exc:
+                            log.error(
+                                "max_guard_reconcile_failed",
+                                reservation_id=str(durable_reservation_id),
+                                error=str(exc) or repr(exc),
+                                error_type=type(exc).__name__,
+                            )
                     # Capture body for the audit drawer (policy gate is "none"
                     # — this path is already opt-in via OAuth detection).
                     response_text = decoded.decode("utf-8", errors="replace")
@@ -502,7 +607,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         reasoning_tokens=meta.get("reasoning_tokens"),
                         cache_read_tokens=meta.get("cache_read_tokens"),
                         cache_write_tokens=meta.get("cache_write_tokens"),
-                        prefix_hash=cache_prefix_hash(payload),
+                        prefix_hash=prefix,
                         # Real spend = $0 (Max covers it). Notional separately.
                         cost_usd=0.0,
                         notional_cost_usd=notional,
@@ -530,6 +635,17 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                             "nautgate_key_id": "anthropic-oauth:"
                             + hashlib.sha256(token.encode()).hexdigest()[:16],
                             "selected_transport": "anthropic-oauth",
+                            "max_guard": {
+                                "action": guard_outcome.action,
+                                "reason": guard_outcome.reason,
+                                "fresh_tokens": guard_outcome.fresh_tokens,
+                                "requests": guard_outcome.requests,
+                                "scope": "native_session"
+                                if launch is not None
+                                else "oauth_identity",
+                            }
+                            if guard_outcome
+                            else None,
                             "finish_reason": meta.get("finish_reason"),
                             "error_code": (
                                 None

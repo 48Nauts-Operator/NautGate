@@ -2,6 +2,43 @@
    Consumed by the vendored @48nauts/help-module vanilla pane. `hints` are fed
    to the assistant's system prompt; keep them factual. */
 window.NAUTGATE_HELP = {
+  "/observatory": {
+    title: "Observatory",
+    summary: "A compact operational record of what ran, where capacity went, and which signals deserve attention.",
+    sections: [{ heading: "How to read it", bullets: [
+      "**Observed work** joins calls, fresh input, output and metered cost for the last 24 hours.",
+      "**Live risk** surfaces the tracked Max-plan session with the most fresh input; open Max Guard for controls.",
+      "**Drift** is provider/model behavior moving outside NautGate's learned baseline, not prompt-topic drift.",
+    ] }],
+    suggestedQuestions: ["Which project used the most capacity?", "Why is this session the live risk?", "Open Drift"],
+    hints: ["Observatory is the operational home. Treat provider quota as private: Max Guard figures are NautGate estimates from observed fresh input."],
+  },
+  "/team": {
+    title: "Observatory · Team",
+    summary: "Activity, routing cost, Max-plan use and compliance indicators grouped by ng_key identity.",
+    sections: [{ heading: "Identity and compliance", bullets: [
+      "A team member is an **ng_key identity**, not a guessed human identity.",
+      "Click the compliance card to see the evidence NautGate can attribute to that identity.",
+    ] }],
+    suggestedQuestions: ["Who generated the most traffic?", "Explain this compliance indicator"],
+    hints: ["Team joins API keys, per-agent cost streams, quality anti-patterns and Max Guard sessions."],
+  },
+  "/accounts": {
+    title: "Observatory · Accounts",
+    summary: "Provider availability, plan type, metered API spend, subscription value and observed capacity in one account inspector.",
+    sections: [{ heading: "Important limits", bullets: [
+      "NautGate can measure traffic and estimate subscription value, but it cannot read Anthropic's private Max quota balance.",
+      "API balance is shown only when a provider exposes it and NautGate has access.",
+    ] }],
+    suggestedQuestions: ["Which account is active?", "Compare API spend with Max-plan value"],
+    hints: ["Accounts uses logos/labels and provider evidence. Never present Max Guard estimates as an official vendor balance."],
+  },
+  "/teamcompliance": {
+    title: "Team · Compliance explanation",
+    summary: "The evidence chain behind a team compliance indicator: source identity, observed behavior, impact and attribution limits.",
+    suggestedQuestions: ["Who did what?", "What evidence is missing?"],
+    hints: ["Explain only retained evidence; do not reconstruct prompts or claim source-app attribution when metadata was absent."],
+  },
   "/overview": {
     title: "Overview",
     summary: "The state of everything at a glance — what ran, what it cost, which sessions are live, and whether a provider is struggling.",
@@ -50,6 +87,23 @@ window.NAUTGATE_HELP = {
     suggestedQuestions: ["What is a leaky prefix?", "Why do local models show no cache savings?"],
     hints: ["Cache tab. hit_rate = cache_read / (cache_read + cache_write + prompt_tokens)."],
   },
+  "/maxguard": {
+    title: "Max Guard",
+    summary: "Protects Claude Max capacity from runaway or cache-broken sessions while keeping each xNaut project and Claude session separately attributable.",
+    sections: [
+      { heading: "What the gauges mean", bullets: [
+        "**Rolling five hours** and **rolling seven days** compare recorded fresh input with your configured protection thresholds; they do not claim to know Anthropic's private quota formula.",
+        "Fresh input, cache reads and cache writes are separate because repeated fresh context consumes capacity very differently from a cache hit.",
+      ] },
+      { heading: "Controls", bullets: [
+        "**Pause** blocks the selected identity with a non-retryable response; integrated xNaut runs stop their exact zellij session.",
+        "**Resume** removes the pause. **Authorize** grants a small, expiring allowance for one or more requests.",
+        "Every control action receives a signed audit receipt. In **observe** mode NautGate reports risk but does not automatically pause traffic.",
+      ] },
+    ],
+    suggestedQuestions: ["Why is a session using fresh tokens?", "What does observe mode do?", "How does Authorize work?"],
+    hints: ["User is on Max Guard. Never imply NautGate knows Anthropic's exact Max quota. Explain native-session scope, cache accounting, observe/warn/pause modes, and non-retryable cooperative xNaut stopping."],
+  },
   "/tooling": {
     title: "Tooling",
     summary: "What your MCP servers cost simply by existing — every tool schema travels in **every** request, called or not.",
@@ -91,6 +145,12 @@ window.NAUTGATE_HELP = {
     summary: "Watches for a provider quietly degrading — slower, emptier, or serving something other than what you asked for.",
     suggestedQuestions: ["How is drift detected?", "What is a model_mismatch alert?"],
     hints: ["Model Health tab. EWMA baselines per (provider, model, metric); |z|>3 is an anomaly, two in a row raises a clustered alert."],
+  },
+  "/drift": {
+    title: "Drift",
+    summary: "Detailed provider/model behavior changes against NautGate's learned baselines, with anomalies, investigations and reports.",
+    suggestedQuestions: ["Why did this drift alert fire?", "Show the underlying request evidence"],
+    hints: ["Drift uses EWMA baselines per provider, model and metric. It is behavior drift, not a claim about the user's intent."],
   },
   "/privacy": {
     title: "Privacy",

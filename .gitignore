@@ -39,6 +39,7 @@ vendor/**/build/
 # Logs
 logs/
 *.log
+backups/
 
 # Docker
 *.pid

@@ -166,6 +166,10 @@ def cache_prefix_hash(payload: dict | None) -> str | None:
     if not isinstance(payload, dict):
         return None
 
+    native = payload.get("_nautgate_anthropic_native")
+    if isinstance(native, dict):
+        payload = native
+
     parts: list[object] = []
 
     system = payload.get("system")
@@ -195,3 +199,29 @@ def cache_prefix_hash(payload: dict | None) -> str | None:
     except (TypeError, ValueError):
         return None
     return hashlib.sha1(canon.encode("utf-8")).hexdigest()  # noqa: S324 (non-crypto use)
+
+
+def cache_marker_topology(payload: dict | None) -> list[str]:
+    """Return content-free JSON paths for Anthropic cache-control markers.
+
+    The paths prove whether a gateway preserved marker placement without
+    retaining the surrounding prompt, source code, or tool definitions.
+    """
+    if not isinstance(payload, dict):
+        return []
+
+    paths: list[str] = []
+
+    def walk(value: object, path: str) -> None:
+        if isinstance(value, dict):
+            if "cache_control" in value:
+                paths.append(f"{path}.cache_control")
+            for key, child in value.items():
+                if key != "cache_control":
+                    walk(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+
+    walk(payload, "$")
+    return paths

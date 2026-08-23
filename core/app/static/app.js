@@ -167,8 +167,8 @@
 
   // Pill click → switch to Overview tab and focus the sessions list.
   sessionPill?.addEventListener("click", () => {
-    location.hash = "#overview";
-    setTimeout(() => document.getElementById("sessions-list")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    location.hash = "#observatory";
+    setTimeout(() => document.getElementById("obs-session-table")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   });
 
   // --- Sessions UI on the Overview tab -----------------------------------
@@ -208,6 +208,7 @@
   function sessionSortVal(s, key) {
     if (key === "label") return (s.label || s.agent_id || "").toLowerCase();
     if (key === "agent") return (s.agent_id || "").toLowerCase();
+    if (key === "request_count") return Number(s.request_count || 0);
     if (key === "last_seen_at") return s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
     return "";
   }
@@ -383,6 +384,7 @@
         }
         renderAuth();
         renderSessions();
+        if (activeTab === "observatory") loadObservatory();
       }
     } catch (e) {
       console.warn("agent discovery failed", e);
@@ -454,6 +456,22 @@
     return res.json();
   }
 
+  async function apiPost(path, body = {}) {
+    const t = getToken();
+    if (!t) throw new Error("no_token");
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail = "http_" + res.status;
+      try { detail = (await res.json()).detail || detail; } catch (_e) {}
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return res.json();
+  }
+
   // --- Tab routing --------------------------------------------------------
 
   // Bind every sidebar item that declares a top-level tab — this includes the
@@ -483,6 +501,10 @@
 
   // Header page title + one-line subtitle per tab (sidebar chrome).
   const PAGE_META = {
+    observatory:["Observatory", "What is happening now, what it costs, and what needs intervention"],
+    team:      ["Team", "Active identities, consumption, sessions, and compliance"],
+    accounts:  ["Accounts", "Plans, provider balances, and financial usage"],
+    teamcompliance:["Compliance explanation", "Who did what, why it was flagged, and what happened next"],
     overview:  ["Overview", "Live provider status & last-24h traffic"],
     audit:     ["Audit Log", "Every LLM call as it happens"],
     decisions: ["Decisions", "Recent routing decisions · refreshes every 5s"],
@@ -502,6 +524,7 @@
     reports:   ["Reports", "Print-ready usage & governance audits"],
     cost:      ["Cost", "Spend & subscription savings"],
     cache:     ["Prompt Cache", "Prompt-cache accounting & leak detector"],
+    maxguard:  ["Max Guard", "Protect Claude Max capacity and control individual sessions"],
     privacy:   ["Privacy", "Lighthouse-style audit of recent prompts"],
     models:    ["Models", "Routes from config/routing.yaml"],
     settings:  ["Settings", "Profile, memory ingest, quality eval, backups & keys"],
@@ -530,6 +553,10 @@
 
   function activateTab(name) {
     activeTab = name;
+    document.body.classList.toggle("observatory-active", ["observatory","team","accounts","teamcompliance"].includes(name));
+    // These wide inspector layouts need the full viewport. Start them with the
+    // floating Help drawer collapsed; the user can still reopen it explicitly.
+    if (["observatory","team","accounts","teamcompliance"].includes(name)) window.__helpPane?.setOpen(false);
     window.__helpPane?.setPathname("/" + name);   // keep the help pane page-aware
     document.querySelectorAll(".sidebar a[data-tab]").forEach((a) =>
       a.classList.toggle("active", a.dataset.tab === name)
@@ -586,10 +613,15 @@
   }
 
   function refreshActive() {
-    if (activeTab === "overview") loadOverview();
+    if (activeTab === "observatory") loadObservatory();
+    else if (activeTab === "team") loadObservatoryTeam();
+    else if (activeTab === "accounts") loadObservatoryAccounts();
+    else if (activeTab === "teamcompliance") loadTeamComplianceDetail();
+    else if (activeTab === "overview") loadOverview();
     else if (activeTab === "audit") loadAudit();
     else if (activeTab === "cost") loadCost();
     else if (activeTab === "cache") loadCache();
+    else if (activeTab === "maxguard") loadMaxGuard();
     else if (activeTab === "privacy") loadPrivacy();
     else if (activeTab === "compliance") loadCompliance();
     else if (activeTab === "decisions") loadDecisions();
@@ -608,6 +640,91 @@
     else if (activeTab === "health" || activeTab === "models") loadModels();
     else if (activeTab === "settings") loadSettings();
   }
+
+  function maxTokenLabel(value) {
+    const n = Number(value || 0);
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+    return String(n);
+  }
+
+  function maxGuardGauge(label, value, limit) {
+    const pct = limit ? Math.min(100, Math.round((Number(value || 0) / limit) * 100)) : 0;
+    const color = pct >= 100 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--accent)";
+    return `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">${esc(label)}</span></div>
+      <div style="padding:16px 18px"><div style="font-size:24px;font-weight:650">${maxTokenLabel(value)}</div>
+      <div class="hint">${pct}% of ${maxTokenLabel(limit)}</div>
+      <div style="height:7px;background:var(--bg-raised);border-radius:5px;margin-top:10px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${color}"></div></div></div></div>`;
+  }
+
+  async function loadMaxGuard() {
+    const kpis = document.getElementById("maxguard-kpis");
+    const sessionsEl = document.getElementById("maxguard-sessions");
+    const feedback = document.getElementById("maxguard-feedback");
+    if (!kpis || !sessionsEl) return;
+    try {
+      const data = await api("/v1/max-guard/sessions");
+      const policy = data.policy || {};
+      const windows = data.windows || {};
+      const items = data.items || [];
+      const paused = items.filter((item) => item.paused).length;
+      const mode = document.getElementById("maxguard-mode");
+      if (mode) mode.textContent = `mode: ${policy.mode || "observe"} · ${paused} paused`;
+      const nav = document.getElementById("nav-maxguard-count");
+      if (nav) { nav.hidden = paused === 0; nav.textContent = String(paused); }
+      kpis.innerHTML = `<div class="v2-grid-2">
+        ${maxGuardGauge("Rolling five hours", windows.five_hour_tokens, policy.five_hour_pause_tokens)}
+        ${maxGuardGauge("Rolling seven days", windows.week_tokens, policy.week_pause_tokens)}
+      </div>`;
+      if (!items.length) {
+        sessionsEl.innerHTML = '<div class="v2-card"><div style="padding:22px" class="hint">No Max-backed sessions have been recorded since the guard migration.</div></div>';
+        return;
+      }
+      sessionsEl.innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Claude Max sessions</span><span class="v2-card-meta">${items.length} identities</span></div>
+        <div style="overflow:auto"><table class="v2-table"><thead><tr><th>Session</th><th>Project</th><th class="ta-right">Fresh</th><th class="ta-right">Cache read</th><th class="ta-right">Cache write</th><th class="ta-right">1h project</th><th>Status</th><th>Controls</th></tr></thead><tbody>
+        ${items.map((item) => `<tr class="${item.paused ? "v2-row-bad" : ""}"><td><strong>${esc(item.native_session || item.identity)}</strong><div class="mono">${esc(item.identity)}</div></td><td>${esc(item.project_id || "—")}</td><td class="ta-right">${maxTokenLabel(item.fresh_tokens)}</td><td class="ta-right">${maxTokenLabel(item.cache_read_tokens)}</td><td class="ta-right">${maxTokenLabel(item.cache_write_tokens)}</td><td class="ta-right">${maxTokenLabel(item.project_hour_tokens)}</td><td>${item.paused ? `<span style="color:var(--bad)">paused</span><div class="hint">${esc(item.pause_reason || "")}</div>` : '<span style="color:var(--good)">active</span>'}</td><td><div style="display:flex;gap:6px;white-space:nowrap">${item.paused ? `<button data-max-action="resume" data-identity="${esc(item.identity)}">Resume</button>` : `<button data-max-action="pause" data-identity="${esc(item.identity)}">Pause</button>`}<button data-max-action="authorize" data-identity="${esc(item.identity)}">Authorize</button></div></td></tr>`).join("")}
+        </tbody></table></div></div>`;
+      sessionsEl.querySelectorAll("[data-max-action]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const identity = button.dataset.identity;
+          const action = button.dataset.maxAction;
+          feedback.textContent = "working…";
+          button.disabled = true;
+          try {
+            let result;
+            if (action === "pause") {
+              const reason = window.prompt("Reason for pausing this session:", "operator_pause");
+              if (reason === null) return;
+              result = await apiPost(`/v1/max-guard/sessions/${encodeURIComponent(identity)}/pause`, { reason });
+            } else if (action === "resume") {
+              result = await apiPost(`/v1/max-guard/sessions/${encodeURIComponent(identity)}/resume`);
+            } else {
+              const raw = window.prompt("Extra tokens for the next request:", "5000000");
+              if (raw === null) return;
+              const extra = Number(raw);
+              if (!Number.isFinite(extra) || extra < 0) throw new Error("invalid token allowance");
+              result = await apiPost(`/v1/max-guard/sessions/${encodeURIComponent(identity)}/authorize`, {
+                extra_tokens: Math.floor(extra), remaining_requests: 1, ttl_seconds: 900,
+                reason: "dashboard_authorization",
+              });
+            }
+            feedback.textContent = `${action} completed for ${identity} · receipt ${result?.receipt_id || "pending"}`;
+            await loadMaxGuard();
+          } catch (error) {
+            feedback.textContent = `Max Guard action failed: ${error.message}`;
+          } finally {
+            button.disabled = false;
+          }
+        });
+      });
+    } catch (error) {
+      kpis.innerHTML = "";
+      sessionsEl.innerHTML = `<div class="v2-card"><div style="padding:22px;color:var(--bad)">Could not load Max Guard: ${esc(error.message)}</div></div>`;
+    }
+  }
+
+  document.getElementById("maxguard-reload")?.addEventListener("click", loadMaxGuard);
 
   // --- Settings sub-tabs (horizontal nav within #tab-settings) ----------
   const SETTINGS_SUBTAB_KEY = "nautgate-settings-subtab";
@@ -792,8 +909,8 @@
     }
   }
 
-  function renderOverviewStreams(rows) {
-    const mount = document.getElementById("overview-streams-card");
+  function renderOverviewStreams(rows, mountId = "overview-streams-card") {
+    const mount = document.getElementById(mountId);
     if (!mount) return;
     const streamRows = rows || [];
     NG.DataTable(mount, {
@@ -1318,17 +1435,19 @@
     }
   }
 
-  function drawLhScore(score) {
-    const canvas = document.getElementById("lh-score");
+  function drawLhScore(score, canvasId = "lh-score", size = 160) {
+    const canvas = document.getElementById(canvasId);
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = 160 * dpr;
-    canvas.height = 160 * dpr;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, 160, 160);
+    ctx.clearRect(0, 0, size, size);
 
-    const cx = 80, cy = 80, r = 64, lw = 12;
+    const cx = size / 2, cy = size / 2, r = size * .4, lw = size * .075;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(255,255,255,0.06)";
@@ -1345,7 +1464,7 @@
     ctx.stroke();
 
     ctx.fillStyle = color;
-    ctx.font = "bold 36px ui-monospace, monospace";
+    ctx.font = `bold ${size * .225}px ui-monospace, monospace`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(String(score ?? 0), cx, cy);
@@ -6296,6 +6415,269 @@
     return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
   }
 
+  // --- Observatory --------------------------------------------------------
+
+  let obsSelectedAgent = null;
+  let obsSelectedAccount = null;
+  let obsComplianceAgent = null;
+  let obsCompliancePattern = null;
+  let obsTeamView = "active";
+  let obsTeamHours = 24;
+  let obsWindow = {hours:24,bucket:"hour"};
+  let obsAccountsWindow = {hours:24,bucket:"hour"};
+  let obsSessionPageSize = 15;
+  document.getElementById("observatory-window")?.addEventListener("change",e=>{const [hours,bucket]=e.target.value.split(":");obsWindow={hours:Number(hours),bucket};sessionPage=0;loadObservatory();});
+  document.getElementById("obs-accounts-window")?.addEventListener("change",e=>{const [hours,bucket]=e.target.value.split(":");obsAccountsWindow={hours:Number(hours),bucket};loadObservatoryAccounts();});
+
+  const obsGet = (path) => api(path).catch((error) => ({ _error: error.message || String(error) }));
+  const obsN = (n) => Number(n || 0).toLocaleString();
+  const obsPct = (n) => `${Math.round(Number(n || 0) * (Number(n || 0) <= 1 ? 100 : 1))}%`;
+  const obsStatus = (s) => /up|active|healthy|ok/i.test(s || "") ? "good" : /down|paused|error|bad/i.test(s || "") ? "bad" : "warn";
+  const obsEmpty = (title, body) => `<div class="obs-card"><h3>${esc(title)}</h3><p class="hint">${esc(body)}</p></div>`;
+
+  function obsTableSortValue(cell) {
+    const raw=(cell?.dataset.sortValue||cell?.textContent||"").trim();
+    const age=raw.match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d|w)\s+ago$/i);
+    if(age){const unit={s:1,m:60,h:3600,d:86400,w:604800}[age[2].toLowerCase()];return {type:"number",value:-Number(age[1])*unit};}
+    const numeric=raw.replace(/[$,%\s]/g,"").replace(/,/g,"");
+    if(numeric!==""&&Number.isFinite(Number(numeric)))return {type:"number",value:Number(numeric)};
+    const date=Date.parse(raw);
+    if(/[-/:]/.test(raw)&&Number.isFinite(date))return {type:"number",value:date};
+    return {type:"text",value:raw.toLocaleLowerCase()};
+  }
+
+  function enhanceObservatoryTables(scope) {
+    scope?.querySelectorAll("table").forEach(table=>{
+      const body=table.tBodies[0]; if(!body)return;
+      [...(table.tHead?.rows[0]?.cells||[])].forEach((th,index)=>{
+        if(!th.textContent.trim()||th.dataset.sortBound==="1"||th.dataset.sort)return;
+        th.dataset.sortBound="1"; th.classList.add("obs-sortable"); th.title=`Sort by ${th.textContent.trim()}`;
+        th.addEventListener("click",()=>{
+          const direction=th.dataset.sortDirection==="asc"?-1:1;
+          [...table.querySelectorAll("thead th")].forEach(h=>{if(h!==th){delete h.dataset.sortDirection;h.classList.remove("obs-sort-asc","obs-sort-desc");}});
+          th.dataset.sortDirection=direction===1?"asc":"desc";
+          th.classList.toggle("obs-sort-asc",direction===1); th.classList.toggle("obs-sort-desc",direction===-1);
+          const rows=[...body.rows];
+          rows.sort((a,b)=>{const av=obsTableSortValue(a.cells[index]),bv=obsTableSortValue(b.cells[index]);const result=av.type==="number"&&bv.type==="number"?av.value-bv.value:String(av.value).localeCompare(String(bv.value),undefined,{numeric:true,sensitivity:"base"});return result*direction;});
+          rows.forEach(row=>body.appendChild(row));
+        });
+      });
+    });
+  }
+
+  async function loadObservatory() {
+    const root = document.getElementById("obs-summary-root");
+    if (!root) return;
+    root.innerHTML = obsEmpty("Loading Observatory", "Collecting the latest evidence…");
+    const [cost, cache, guard, drift, quality, qualityPatterns, lighthouse, config] = await Promise.all([
+      obsGet(`/v1/cost/summary?hours=${obsWindow.hours}&agent_id=*`), obsGet(`/v1/cache/summary?hours=${obsWindow.hours}`),
+      obsGet("/v1/max-guard/sessions"), obsGet("/v1/drift"), obsGet(`/v1/quality/summary?hours=${Math.min(obsWindow.hours,720)}`),
+      obsGet(`/v1/quality/anti-patterns-by-agent?days=${Math.max(1,Math.min(3650,Math.ceil(obsWindow.hours/24)))}`),
+      obsGet(`/v1/findings/summary?hours=${obsWindow.hours}&scan_limit=500`), obsGet("/v1/config"),
+    ]);
+    const t = cost || {}, ct = cache.totals || {}, sessions = guard.items || [];
+    const projects = (cost.by_project || []).slice(0, 6);
+    const alerts = (drift.alerts || []).filter(a => a.is_open);
+    const guardPolicy=guard.policy||{}, guardWindows=guard.windows||{};
+    const ratio=(value,limit)=>Number(limit)>0?Number(value||0)/Number(limit):0;
+    const topSession=[...sessions].sort((a,b)=>Number(b.fresh_tokens||0)-Number(a.fresh_tokens||0))[0];
+    const pressure=[];
+    sessions.forEach(session=>{
+      if(session.paused)pressure.push({severity:2,ratio:1,kind:"paused",session,label:"Session paused"});
+      const sessionRatio=ratio(session.fresh_tokens,guardPolicy.session_pause_tokens);
+      if(sessionRatio>=.7)pressure.push({severity:1,ratio:sessionRatio,kind:"session",session,label:"Session nearing fresh-token limit"});
+      const projectRatio=ratio(session.project_hour_tokens,guardPolicy.project_hour_pause_tokens);
+      if(projectRatio>=.7)pressure.push({severity:1,ratio:projectRatio,kind:"project",session,label:"Project nearing hourly limit"});
+    });
+    const fiveHourRatio=ratio(guardWindows.five_hour_tokens,guardPolicy.five_hour_pause_tokens), weekRatio=ratio(guardWindows.week_tokens,guardPolicy.week_pause_tokens);
+    if(fiveHourRatio>=.7)pressure.push({severity:1,ratio:fiveHourRatio,kind:"five-hour",session:topSession,label:"Five-hour capacity nearing limit"});
+    if(weekRatio>=.7)pressure.push({severity:1,ratio:weekRatio,kind:"week",session:topSession,label:"Weekly capacity nearing limit"});
+    pressure.sort((a,b)=>b.severity-a.severity||b.ratio-a.ratio);
+    const liveRisk=pressure[0]||null, risky=liveRisk?.session;
+    const riskDetail=liveRisk?`${Math.round(liveRisk.ratio*100)}% of configured ${liveRisk.kind} limit${risky?` · ${risky.project_id||risky.identity||'unassigned'}`:''}`:"All tracked Max-plan scopes are below 70% of their configured limits.";
+    const fresh = Number(ct.fresh_tokens || t.total_prompt_tokens || 0);
+    const cacheRead = Number(ct.cache_read_tokens || 0);
+    const cacheHit = ct.hit_rate == null ? 0 : Number(ct.hit_rate);
+    const qualityTotals=quality.totals||{};
+    const conf=config.confidentiality_routing||{};
+    const confidentialOnline=!!conf.enabled;
+    const qualityConfig=config.quality_eval||{};
+    const qualityOnline=qualityConfig.enabled!==false;
+    const qualitySampleRate=Math.round(Number(qualityConfig.sample_rate??0.10)*100);
+    const qualitySlop=(qualityPatterns.items||[]).reduce((total,item)=>total+Number(item.total_anti_patterns||0),0);
+    const qualityAverage=qualityTotals.avg_task_completion==null?null:Number(qualityTotals.avg_task_completion);
+    root.innerHTML = `
+      <div class="obs-hero">
+        <div><div class="obs-eyebrow">OBSERVED WORK · ${obsWindow.hours===24?'TODAY':`LAST ${obsWindow.hours} HOURS`}</div><div class="obs-inline"><div class="obs-big">${obsN(t.total_calls)}</div><span>AI requests</span></div><p>${obsN(Number(t.total_prompt_tokens||0)+Number(t.total_completion_tokens||0))} tokens · ${projects.length} projects · ${sessions.length} active sessions</p><div class="obs-stats"><span>${obsPct(cacheHit)} cache reads</span><span>${obsN(fresh)} fresh input</span><span>${obsN(t.total_completion_tokens)} output</span><span>${usd(t.total_cost_usd||0)} API spend</span></div></div>
+        <button type="button" class="obs-card obs-risk obs-clickable" data-obs-tab="maxguard" title="Open Max Guard"><div class="obs-card-head"><div class="obs-eyebrow">LIVE MAX GUARD · CURRENT COUNTERS</div><span class="obs-status ${liveRisk?'warn':'good'}">${liveRisk?(liveRisk.kind==='paused'?'PAUSED':'NEAR LIMIT'):'CLEAR'}</span></div><h3>${esc(liveRisk?.label||'No capacity pressure detected')}</h3><p>${esc(riskDetail)}</p><div class="obs-kpis"><div><b>${Math.round(fiveHourRatio*100)}%</b><span>current 5h limit</span></div><div><b>${Math.round(weekRatio*100)}%</b><span>current 7d limit</span></div><div><b>${sessions.length}</b><span>currently tracked</span></div></div><span class="obs-link">Open Max Guard →</span></button>
+      </div>
+      <div class="obs-grid-main obs-band"><div class="obs-card"><div class="obs-card-head"><h3>Projects consuming tokens</h3><span class="hint">fresh input · selected window</span></div><table class="obs-table"><thead><tr><th>Project</th><th>Requests</th><th>Fresh</th><th>Cache</th><th>Risk</th></tr></thead><tbody>${projects.length?projects.map(p=>`<tr><td>${p.key==='(none)'?'<span class="obs-warn">Unattributed traffic</span>':esc(p.key||'unassigned')}</td><td>${obsN(p.calls)}</td><td>${obsN(p.prompt_tokens)}</td><td>${obsPct(cacheHit)}</td><td>${p.key==='(none)'?'<span class="obs-warn">missing project metadata</span>':Number(p.prompt_tokens)>fresh*.4?'<span class="obs-warn">watch</span>':'<span class="obs-good">clean</span>'}</td></tr>`).join(''):'<tr><td colspan="5" class="hint">No project traffic recorded.</td></tr>'}</tbody></table>${projects.some(p=>p.key==='(none)')?'<p class="hint">Calls were recorded, but their OAuth launch did not supply a project ID. NautGate cannot safely assign them to one of the configured projects after the fact.</p>':''}</div>
+        <div class="obs-stack"><button type="button" class="obs-card obs-signal obs-clickable obs-lighthouse-signal" id="obs-open-lighthouse" title="Open Lighthouse in a new tab"><canvas id="obs-lh-score" width="72" height="72" aria-label="Lighthouse score ${lighthouse.overall??0} out of 100"></canvas><span><div class="obs-eyebrow">LIGHTHOUSE</div><small>${esc(lighthouse.verdict||'unavailable')}<br>${obsN(lighthouse.scanned_count)} scanned</small></span><small class="obs-link">↗</small></button><div class="obs-card obs-signal"><span><div class="obs-eyebrow">CONFIDENTIAL</div><div class="obs-big ${confidentialOnline?'obs-good':'obs-warn'}" style="font-size:24px">${confidentialOnline?'ONLINE':'OFFLINE'}</div></span><small>${confidentialOnline?`local-only · ${esc(conf.local_model||'local model')}`:'routing disabled'}</small></div><button type="button" class="obs-card obs-signal obs-clickable" id="obs-open-quality" title="Open Quality in a new tab"><span><div class="obs-eyebrow">QUALITY</div><div class="obs-big ${qualitySlop?'obs-warn':'obs-good'}" style="font-size:24px">${obsN(qualitySlop)} SLOP</div></span><small>${qualityAverage==null?`${obsN(qualityTotals.evaluations)} evaluated`:`${qualityAverage.toFixed(1)} / 5 · ${obsN(qualityTotals.evaluations)} evaluated`}${qualityOnline?` · ${qualitySampleRate}% sampling`:' · judge disabled'} ↗</small></button></div></div>
+      <div id="obs-wide-chart" class="obs-wide-chart"></div>
+      <div class="obs-session-zone">${renderObservatorySessions(sessions)}<div class="obs-session-side"><div class="obs-card"><div class="obs-card-head"><h3>Recent evidence</h3><button class="obs-ghost" data-obs-tab="drift">Open Drift →</button></div><div class="obs-row"><span>Now</span><b>Max Guard</b><span>${sessions.length?'Capacity observed':'No warning'}</span></div><div class="obs-row"><span>${obsWindow.hours===24?'24h':`${obsWindow.hours}h`}</span><b>Drift</b><span>${alerts.length?`${alerts.length} signals`:'Inside baseline'}</span></div></div><div class="obs-card"><h3>Model verdicts</h3><p class="hint">Evidence-backed best and worst performers.</p><button class="obs-ghost" data-obs-tab="modelhealth">Model Health →</button></div></div></div>`;
+    root.querySelectorAll("[data-obs-tab]").forEach(b => b.addEventListener("click", () => activateTab(b.dataset.obsTab)));
+    document.getElementById("obs-open-lighthouse")?.addEventListener("click", () => {
+      window.open(`${location.pathname}${location.search}#privacy`, "_blank", "noopener");
+    });
+    document.getElementById("obs-open-quality")?.addEventListener("click", () => {
+      window.open(`${location.pathname}${location.search}#quality`, "_blank", "noopener");
+    });
+    drawLhScore(lighthouse.overall, "obs-lh-score", 72);
+    root.querySelectorAll("[data-obs-session-audit]").forEach(b => b.addEventListener("click", () => {
+      setActiveSessionId(b.dataset.obsSessionAudit); renderAuth(); renderSessions(); activateTab("audit");
+    }));
+    root.querySelectorAll("#obs-session-table [data-sort]").forEach(th => th.addEventListener("click", () => {
+      const key=th.dataset.sort;
+      if(sessionSort.key===key) sessionSort.dir*=-1;
+      else sessionSort={key,dir:1};
+      sessionPage=0;
+      loadObservatory();
+    }));
+    document.getElementById("obs-sessions-prev")?.addEventListener("click",()=>{sessionPage=Math.max(0,sessionPage-1);reloadObservatoryAtSessions();});
+    document.getElementById("obs-sessions-next")?.addEventListener("click",()=>{sessionPage+=1;reloadObservatoryAtSessions();});
+    document.getElementById("obs-sessions-page-size")?.addEventListener("change",e=>{obsSessionPageSize=Number(e.target.value)||15;sessionPage=0;reloadObservatoryAtSessions();});
+    enhanceObservatoryTables(root);
+    renderObservatoryWideChart(alerts);
+    const stamp = document.getElementById("obs-updated"); if (stamp) stamp.textContent = `updated ${new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}`;
+  }
+
+  async function reloadObservatoryAtSessions(){const old=document.getElementById("obs-session-table"),top=old?.getBoundingClientRect().top??0;await loadObservatory();const next=document.getElementById("obs-session-table");if(next)window.scrollBy(0,next.getBoundingClientRect().top-top);}
+
+  async function renderObservatoryWideChart(driftAlerts = []) {
+    const mount = document.getElementById("obs-wide-chart"); if (!mount) return;
+    const body=NG.el("div"), chart=NG.el("div",{class:"v2-chart",html:'<p class="hint">loading activity…</p>'}); body.appendChild(chart);
+    mount.innerHTML=""; mount.appendChild(NG.card({title:"Requests over time",meta:"requests · red = active drift alerts",body}));
+    try {
+      const ts=await api(`/v1/cost/timeseries?hours=${obsWindow.hours}&bucket=${obsWindow.bucket}&agent_id=*`), series=ts.series||[];
+      const labels=[...new Set(series.flatMap(s=>(s.points||[]).map(p=>p.ts)))].sort();
+      const x=labels.map(v=>new Date(v).getTime()/1000), values=labels.map(v=>series.reduce((n,s)=>n+Number((s.points||[]).find(p=>p.ts===v)?.calls||0),0));
+      const driftValues=x.map(epoch=>driftAlerts.reduce((count,a)=>{
+        const started=a.started_at?new Date(a.started_at).getTime()/1000:Infinity;
+        const resolved=a.resolved_at?new Date(a.resolved_at).getTime()/1000:Infinity;
+        return count+(started<=epoch&&resolved>epoch?1:0);
+      },0));
+      chart.innerHTML="";
+      if(x.length<2){chart.innerHTML='<div class="v2-chart-fallback">Not enough traffic in this window.</div>';return;}
+      NG.chart(chart,{type:"area",x,height:475,series:[{label:"requests",values,color:"#7C9BFF"},{label:"active drift alerts",values:driftValues,color:"#FF5C5C",fill:"rgba(255,92,92,0)"}],fmtY:v=>fmtNum(v),fmtX:v=>new Date(v*1000).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})});
+    } catch(_e){chart.innerHTML='<div class="v2-chart-fallback">No traffic data.</div>';}
+  }
+
+  function renderObservatorySessions(guardSessions) {
+    const all = sortSessions(withinArchiveWindow(loadSessions(), getActiveSessionId() || ""));
+    const maxPage=Math.max(0,Math.ceil(all.length/obsSessionPageSize)-1); if(sessionPage>maxPage)sessionPage=maxPage;
+    const start=sessionPage*obsSessionPageSize, end=Math.min(start+obsSessionPageSize,all.length), saved=all.slice(start,end);
+    const guardByNative = new Map((guardSessions || []).map(s => [s.native_session || s.identity, s]));
+    return `<div class="obs-card obs-band" id="obs-session-table"><div class="obs-card-head"><h3>Sessions · ${all.length}</h3><span class="hint">select a session to inspect its Audit Log</span></div>
+      <table class="obs-table"><thead><tr>${sortHead("label","Session")}${sortHead("agent","Agent")}${sortHead("request_count","Requests")}${sortHead("last_seen_at","Last active")}<th>State</th><th></th></tr></thead><tbody>${saved.length ? saved.map(s => {
+        const g = guardByNative.get(s.session_id) || guardByNative.get(s.agent_id) || {};
+        return `<tr><td><b>${esc(s.label || s.session_id || s.agent_id || "unlabelled")}</b></td><td>${esc(s.agent_id || "unknown")}</td><td>${obsN(s.request_count)}</td><td>${fmtAgo(s.last_seen_at)}</td><td><span class="obs-state"><i class="obs-dot ${g.paused?'down':'up'}"></i>${g.paused?'paused':'active'}</span></td><td><button data-obs-session-audit="${esc(s.id)}">Audit Log</button></td></tr>`;
+      }).join("") : '<tr><td colspan="6" class="hint">No discovered or saved sessions yet.</td></tr>'}</tbody></table><div class="pager"><label class="hint">Rows <select id="obs-sessions-page-size"><option value="10" ${obsSessionPageSize===10?'selected':''}>10</option><option value="15" ${obsSessionPageSize===15?'selected':''}>15</option><option value="25" ${obsSessionPageSize===25?'selected':''}>25</option><option value="50" ${obsSessionPageSize===50?'selected':''}>50</option></select></label><span class="hint">${all.length?`${start+1}–${end} of ${all.length}`:'0 of 0'}</span><button id="obs-sessions-prev" class="ghost" ${sessionPage===0?'disabled':''}>← Previous</button><button id="obs-sessions-next" class="ghost" ${end>=all.length?'disabled':''}>Next →</button></div></div>`;
+  }
+
+  async function loadObservatoryTeam() {
+    const root = document.getElementById("obs-team-root"); if (!root) return;
+    root.innerHTML = obsEmpty("Loading Team", "Joining keys, routing activity and compliance evidence…");
+    const [keysData, cost, patterns, guard] = await Promise.all([obsGet("/v1/keys"), obsGet("/v1/cost/summary?hours=24&agent_id=*"), obsGet("/v1/quality/anti-patterns-by-agent?days=30"), obsGet("/v1/max-guard/sessions")]);
+    const keys = keysData.keys || [], streams = cost.by_stream || [], pats = patterns.items || [];
+    const ids = [...new Set([...keys.map(k=>k.agent_id), ...streams.map(s=>s.agent_id)].filter(Boolean))];
+    const activeCutoff=()=>Date.now()-obsTeamHours*3600000;
+    const isActive=(x)=>{const s=streams.find(v=>v.agent_id===x),k=keys.find(v=>v.agent_id===x);const when=s?.last_seen_at||k?.last_used_at;return !!when&&new Date(when).getTime()>=activeCutoff();};
+    const filteredIds=()=>ids.filter(x=>obsTeamView==="active"?isActive(x):!isActive(x));
+    if (!obsSelectedAgent || !filteredIds().includes(obsSelectedAgent)) obsSelectedAgent = filteredIds()[0] || null;
+    const render = () => {
+      const visible=filteredIds(); if(!visible.includes(obsSelectedAgent)) obsSelectedAgent=visible[0]||null;
+      const id = obsSelectedAgent, stream = streams.find(s=>s.agent_id===id) || {}, key = keys.find(k=>k.agent_id===id) || {}, pat = pats.find(p=>p.agent_id===id) || {};
+      const sessions = (guard.items || []).filter(s => s.identity===id || s.agent_id===id || s.project_id===id);
+      const attention=pats.filter(x=>Number(x.total_anti_patterns||0)>0).length;
+      const breachCount=Number(pat.total_anti_patterns||0), complianceLevel=!breachCount?'good':(pat.avg_completion!=null&&Number(pat.avg_completion)<2?'bad':'warn');
+      root.innerHTML = `<div class="obs-split"><aside class="obs-rail"><div class="obs-team-summary"><span><div class="obs-eyebrow">ACTIVE IDENTITIES</div><div class="obs-big">${ids.filter(isActive).length} / ${ids.length}</div><small class="obs-good">● within ${obsTeamHours}h</small></span><span style="text-align:right"><div class="obs-eyebrow">NEEDS ATTENTION</div><div class="obs-big obs-warn">${attention}</div><small>drift · cache</small></span></div><div class="obs-filterbar"><button class="obs-ghost ${obsTeamView==='active'?'active':''}" data-team-view="active">Active</button><button class="obs-ghost ${obsTeamView==='inactive'?'active':''}" data-team-view="inactive">Inactive</button><label>within <input id="obs-team-hours" type="number" min="1" max="72" value="${obsTeamHours}"> hrs</label></div><div class="obs-card-head"><h3>Team members</h3><span class="hint">${visible.length} ng_keys</span></div>${visible.length ? visible.map(x=>{const s=streams.find(v=>v.agent_id===x)||{}, p=pats.find(v=>v.agent_id===x)||{}; return `<button class="obs-list-item ${x===id?"active":""}" data-agent="${esc(x)}"><span><b>${esc(x)}</b><small>${esc((s.models||[])[0]?.provider||'NautGate')} · ${obsN(s.prompt_tokens)} input</small></span><span><small class="${isActive(x)?'obs-good':'hint'}">● ${isActive(x)?'active':'inactive'}</small><small class="${Number(p.total_anti_patterns||0)?'obs-warn':'obs-good'}">${obsN(p.total_anti_patterns||0)} breaches</small></span></button>`}).join("") : `<p class="hint">No ${obsTeamView} identities in the ${obsTeamHours}h window.</p>`}</aside>
+        <main class="obs-analysis"><div class="obs-analysis-head"><div><h2>${esc(id || "No member")}</h2><p>${esc(key.name || "NautGate key identity")} · ${sessions.length} active sessions</p></div><span class="obs-status ${isActive(id)?'good':'warn'}">● ${isActive(id)?'active':'inactive'}</span></div><div class="obs-card"><div class="obs-card-head"><div><h3>Activity</h3><span class="hint">Last ${obsTeamHours} hours · <span class="obs-warn">fresh input</span> · <span class="obs-info">cache reads</span></span></div><div class="obs-kpis"><div><b>${obsN(stream.prompt_tokens)}</b><span>input</span></div><div><b>${obsN(stream.calls)}</b><span>calls</span></div></div></div><div id="obs-team-activity-chart" class="obs-chart"></div></div>
+        <div class="obs-grid-main"><div class="obs-card"><div class="obs-eyebrow">ROUTING</div><h3>Observed work</h3><div class="obs-row"><span>Prompt tokens</span><b>${obsN(stream.prompt_tokens)}</b></div><div class="obs-row"><span>Completion tokens</span><b>${obsN(stream.completion_tokens)}</b></div><div class="obs-row"><span>Models</span><b>${esc((stream.models||[]).map(m=>m.model||m.provider).filter(Boolean).join(", ") || "—")}</b></div></div>
+        <button class="obs-card obs-clickable ${complianceLevel}" id="obs-open-compliance"><div class="obs-eyebrow">COMPLIANCE</div><h3 class="${complianceLevel==='good'?'obs-good':complianceLevel==='bad'?'obs-bad':'obs-warn'}">${obsN(breachCount)} observed breach${breachCount===1?"":"es"}</h3><p>${esc((pat.top_patterns||[]).map(p=>`${p.pattern} (${p.count})`).join(" · ") || "No anti-patterns detected in the evidence window.")}</p><span class="obs-link">Open compliance history →</span></button></div>${renderTeamSessions(id)}</main></div><div id="obs-team-streams-card" class="v2-section obs-team-streams"></div>`;
+      root.querySelectorAll("[data-agent]").forEach(b=>b.addEventListener("click",()=>{obsSelectedAgent=b.dataset.agent; render();}));
+      root.querySelectorAll("[data-team-view]").forEach(b=>b.addEventListener("click",()=>{obsTeamView=b.dataset.teamView;render();}));
+      document.getElementById("obs-team-hours")?.addEventListener("change",e=>{obsTeamHours=Math.max(1,Math.min(72,Number(e.target.value)||24));render();});
+      document.getElementById("obs-open-compliance")?.addEventListener("click",()=>{obsComplianceAgent=id; activateTab("teamcompliance");});
+      root.querySelectorAll("[data-obs-session-audit]").forEach(b=>b.addEventListener("click",()=>{setActiveSessionId(b.dataset.obsSessionAudit);renderAuth();renderSessions();activateTab("audit");}));
+      enhanceObservatoryTables(root);
+      renderTeamActivityChart(id);
+      renderOverviewStreams(streams,"obs-team-streams-card");
+    }; render();
+  }
+
+  function renderTeamSessions(agentId){const rows=sortSessions(withinArchiveWindow(loadSessions(),getActiveSessionId()||"")).filter(s=>s.agent_id===agentId).slice(0,5);return `<div class="obs-rule-section"><div class="obs-card-head"><h3>Active sessions</h3><span class="hint">${rows.length} shown</span></div><table class="obs-table"><thead><tr><th>Session</th><th>Requests</th><th>Last active</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td>${esc(s.label||s.session_id||'session')}</td><td>${obsN(s.request_count)}</td><td>${fmtAgo(s.last_seen_at)}</td><td><button class="obs-ghost" data-obs-session-audit="${esc(s.id)}">Audit →</button></td></tr>`).join('')||'<tr><td colspan="4" class="hint">No sessions for this identity.</td></tr>'}</tbody></table></div>`;}
+
+  async function renderTeamActivityChart(agentId){const mount=document.getElementById("obs-team-activity-chart");if(!mount||!agentId)return;try{const ts=await api(`/v1/cost/timeseries?hours=${obsTeamHours}&bucket=hour&agent_id=${encodeURIComponent(agentId)}`),series=ts.series||[],labels=[...new Set(series.flatMap(s=>(s.points||[]).map(p=>p.ts)))].sort(),x=labels.map(v=>new Date(v).getTime()/1000),fresh=labels.map(v=>series.reduce((n,s)=>n+Number((s.points||[]).find(p=>p.ts===v)?.prompt_tokens||0),0)),cacheReads=labels.map(v=>series.reduce((n,s)=>n+Number((s.points||[]).find(p=>p.ts===v)?.cache_read_tokens||0),0));if(x.length<2){mount.innerHTML='<div class="v2-chart-fallback">Not enough activity for a line.</div>';return;}NG.chart(mount,{type:"area",x,height:220,series:[{label:"fresh input",values:fresh,color:"#D6A100"},{label:"cache reads",values:cacheReads,color:"#4C8DFF",fill:"rgba(76,141,255,0)"}],fmtY:v=>fmtNum(v),fmtX:v=>new Date(v*1000).toLocaleTimeString([],{hour:"2-digit"})});}catch(_e){mount.innerHTML='<div class="v2-chart-fallback">Activity unavailable.</div>';}}
+
+  async function loadObservatoryAccounts() {
+    const root = document.getElementById("obs-accounts-root"); if (!root) return;
+    root.innerHTML = obsEmpty("Loading Accounts", "Checking vendors, plans and attributable value…");
+    const periodHours=obsAccountsWindow.hours, periodLabel=periodHours===24?'Today':document.getElementById("obs-accounts-window")?.selectedOptions[0]?.textContent||`Last ${periodHours} hours`;
+    const [health, cost, guard, balance] = await Promise.all([obsGet("/v1/health/providers"), obsGet(`/v1/cost/summary?hours=${periodHours}&agent_id=*`), obsGet("/v1/max-guard/sessions"), obsGet("/v1/cost/openrouter-balance")]);
+    const providers = health.providers || [], byProvider = cost.by_provider || [];
+    const providerKeyForAccount=(account)=>{const key=String(account||"").toLowerCase(), available=byProvider.map(p=>String(p.key||""));if(/anthropic|max/.test(key))return available.find(p=>/anthropic-oauth/i.test(p))||"anthropic-oauth";if(/codex|chatgpt/.test(key))return available.find(p=>/chatgpt-subscription|codex-oauth/i.test(p))||"chatgpt-subscription";const exact=available.find(p=>p.toLowerCase()===key);return exact||account;};
+    const healthNames=providers.map(p=>p.key||p.provider||p.label).filter(Boolean), coveredRoutes=new Set(healthNames.map(providerKeyForAccount));
+    const names = [...new Set([...healthNames, ...byProvider.map(p=>p.key).filter(k=>k&&!coveredRoutes.has(k))])];
+    if ((guard.items||[]).length && !names.some(n=>/anthropic/i.test(n))) names.unshift("anthropic");
+    if (!obsSelectedAccount || !names.includes(obsSelectedAccount)) obsSelectedAccount = names[0] || null;
+    const render = async () => {
+      const name=obsSelectedAccount, providerKey=providerKeyForAccount(name), hp=providers.find(p=>(p.key||p.provider||p.label)===name)||{};
+      const [selectedCost,selectedTs,selectedCache]=await Promise.all([obsGet(`/v1/cost/summary?hours=${periodHours}&agent_id=*&provider=${encodeURIComponent(providerKey)}`),obsGet(`/v1/cost/timeseries?hours=${periodHours}&bucket=${obsAccountsWindow.bucket}&agent_id=*&provider=${encodeURIComponent(providerKey)}`),obsGet(`/v1/cache/summary?hours=${periodHours}&provider=${encodeURIComponent(providerKey)}`)]), selectedPeriod=selectedCost;
+      if(name!==obsSelectedAccount)return;
+      const cp=(selectedCost.by_provider||[])[0]||{};
+      const max = /anthropic/i.test(name||"") && (guard.items||[]).length;
+      const isOpenRouter=/openrouter/i.test(name||""), balanceAvailable=isOpenRouter&&!balance.error&&!balance._error;
+      const accountStatus=balanceAvailable?'active':(hp.status||'unknown');
+      const apiSpend=Number(selectedCost.total_cost_usd||0), planValue=Number(selectedCost.subscription_savings_usd||0), globalApiSpend=byProvider.reduce((n,x)=>n+Number(x.cost_usd||0),0), globalPlanValue=byProvider.reduce((n,x)=>n+Number(x.notional_cost_usd||0),0), reported=Number(balance.remaining_usd||0);
+      const accountCapacityCard=isOpenRouter?`<div class="obs-card"><div class="obs-card-head"><h3>OpenRouter credit</h3><span class="${balanceAvailable?'obs-good':'obs-warn'} obs-eyebrow">${balanceAvailable?'LIVE BALANCE':'UNAVAILABLE'}</span></div><div class="obs-row"><span>Remaining credit</span><b class="obs-good">${balanceAvailable?usd(balance.remaining_usd):'—'}</b></div><div class="obs-row"><span>Purchased credits</span><b>${balanceAvailable?usd(balance.total_credits):'—'}</b></div><div class="obs-row"><span>Total usage</span><b>${balanceAvailable?usd(balance.total_usage):'—'}</b></div><div class="obs-row"><span>Seven-day spend</span><b>${balanceAvailable?usd(balance.spend_7d_usd):'—'}</b></div><div class="obs-row"><span>Current burn</span><b>${balanceAvailable&&balance.daily_burn_usd!=null?`${usd(balance.daily_burn_usd)} / day`:'—'}</b></div><p class="hint">${balanceAvailable&&balance.days_left_at_current_burn!=null?`${Math.round(Number(balance.days_left_at_current_burn))} days remaining at current burn`:(balance.error||balance._error||'No current burn projection')}</p></div>`:`<div class="obs-card"><div class="obs-card-head"><h3>Max capacity</h3><span class="obs-warn obs-eyebrow">${max?'NAUTGATE ESTIMATE':'NOT APPLICABLE'}</span></div><div class="obs-row"><span>Five-hour window</span><b>${max?obsN((guard.windows||{}).five_hour_tokens):'—'}</b></div><div class="obs-progress"><span style="width:${max?Math.min(100,Number((guard.windows||{}).five_hour_tokens||0)/Math.max(1,Number((guard.policy||{}).five_hour_pause_tokens||1))*100):0}%;background:var(--warn)"></span></div><div class="obs-row"><span>Weekly window</span><b>${max?obsN((guard.windows||{}).week_tokens):'—'}</b></div><div class="obs-progress"><span style="width:${max?Math.min(100,Number((guard.windows||{}).week_tokens||0)/Math.max(1,Number((guard.policy||{}).week_pause_tokens||1))*100):0}%"></span></div><p class="hint">${max?`Max Guard ${esc((guard.policy||{}).mode||'observe')} · vendor quota is not exposed`:'Not applicable to this account'}</p></div>`;
+      root.innerHTML=`<div class="obs-split"><aside class="obs-rail"><div class="obs-account-credit"><div class="obs-eyebrow">AVAILABLE API CREDIT</div><div class="obs-inline"><div class="obs-big obs-good" style="font-size:34px">${reported?usd(reported):'—'}</div><span>provider reported</span></div><div class="obs-stats"><span>${usd(globalApiSpend)} API spend</span><span>${usd(globalPlanValue)} plan value</span></div></div><div class="obs-provider-strip">${providers.map(p=>`<span class="obs-provider-pill"><i class="obs-dot ${obsStatus(p.status)==='good'?'up':'degraded'}"></i>${esc(p.label||p.key||'provider')}</span>`).join('')}</div><div class="obs-card-head"><h3>Accounts and plans</h3><span class="hint">${names.length} accounts</span></div>${names.map(n=>{const h=providers.find(p=>(p.key||p.provider||p.label)===n)||{}, route=providerKeyForAccount(n), c=byProvider.find(p=>p.key===route)||{}, open=/openrouter/i.test(n), live=open&&!balance.error&&!balance._error, status=live?'active':(h.status||'unknown'), detail=live?`API credit · ${usd(balance.remaining_usd)} remaining`:`${/anthropic|max/i.test(n)?"Max plan":"API account"} · ${usd(c.cost_usd||0)}`; return `<button class="obs-list-item ${n===name?"active":""}" data-account="${esc(n)}"><span><b>${esc((h.label||n).replace(/Anthropic Max/i,"Max"))}</b><small>${detail}</small></span><span class="obs-status ${obsStatus(status)}">● ${esc(status)}</span></button>`}).join("")||'<p class="hint">No provider accounts observed.</p>'}</aside>
+      <main class="obs-analysis"><div class="obs-analysis-head"><div><div class="obs-eyebrow">${max?"MAX PLAN":"API ACCOUNT"}</div><h2>${esc(hp.label||name||"No account")}</h2><p>${max?"Claude Code / xNaut · quota estimated by NautGate":"Metered provider route"}</p></div><span class="obs-status ${obsStatus(accountStatus)}">● ${esc(accountStatus)}</span></div>
+      <div class="obs-card"><div class="obs-card-head"><div><h3>API spend vs Max plan value</h3><span class="hint">Cumulative · ${esc(periodLabel)} · connected usage</span></div><div class="obs-kpis"><div><b class="obs-good">${usd(planValue)}</b><span>plan value</span></div><div><b>${usd(apiSpend)}</b><span>API spend</span></div></div></div><div id="obs-account-chart" class="obs-chart"></div></div>
+      <div class="obs-grid-main">${accountCapacityCard}<div class="obs-card"><h3>Usage · ${esc(periodLabel)}</h3><div class="obs-kpis"><div><b>${obsN(selectedPeriod.total_calls)}</b><span>calls</span></div><div><b>${obsN(Number(selectedPeriod.total_prompt_tokens||0)+Number(selectedPeriod.total_completion_tokens||0))}</b><span>tokens</span></div><div><b>${obsPct((selectedCache.totals||{}).hit_rate||0)}</b><span>cache reads</span></div></div><div class="obs-progress"><span style="width:${Math.min(100,Number((selectedCache.totals||{}).hit_rate||0)*100)}%"></span></div></div></div>
+      <div class="obs-rule-section"><div class="obs-card-head"><h3>Selected account activity</h3><span class="hint">${esc(providerKey)} · ${esc(periodLabel)}</span></div><table class="obs-table"><thead><tr><th>Project</th><th>Calls</th><th>Tokens</th><th>Plan value</th><th>API spend</th></tr></thead><tbody>${(selectedCost.by_project||[]).slice(0,6).map(p=>`<tr><td>${esc(p.key||'unassigned')}</td><td>${obsN(p.calls)}</td><td>${obsN(Number(p.prompt_tokens||0)+Number(p.completion_tokens||0))}</td><td class="obs-good">${usd(p.notional_cost_usd||0)}</td><td>${usd(p.cost_usd||0)}</td></tr>`).join('')||'<tr><td colspan="5" class="hint">No project activity for this account.</td></tr>'}</tbody></table></div><div class="obs-card obs-row"><span>Confidential routing: see Privacy</span><span>Max Guard ${(guard.policy||{}).mode||'observe'}</span><span>${obsN(cp.cost_usd==null&&cp.notional_cost_usd==null?cp.calls:0)} unpriced calls</span><b>${esc(accountStatus)}</b></div></main></div>`;
+      root.querySelectorAll("[data-account]").forEach(b=>b.addEventListener("click",()=>{obsSelectedAccount=b.dataset.account;render();}));
+      enhanceObservatoryTables(root);
+      const series=(selectedTs.series||[]); const all=[...new Set(series.flatMap(s=>(s.points||[]).map(p=>p.ts)))].sort();
+      const chart=document.getElementById("obs-account-chart");
+      if(chart&&all.length){let apiCum=0,planCum=0;const apiVals=[],planVals=[];all.forEach(x=>{apiCum+=series.reduce((n,s)=>n+Number((s.points||[]).find(p=>p.ts===x)?.cost_usd||0),0);planCum+=series.reduce((n,s)=>n+Number((s.points||[]).find(p=>p.ts===x)?.notional_cost_usd||0),0);apiVals.push(apiCum);planVals.push(planCum);});NG.chart(chart,{type:"area",x:all.map(x=>new Date(x).getTime()/1000),series:[{label:"Max plan value",values:planVals,color:"#C3CE1F"},{label:"API spend",values:apiVals,color:"#7C9BFF"}],height:230,fmtY:v=>usd(v),fmtX:x=>new Date(x*1000).toLocaleDateString([], {weekday:"short"})});}
+      else if(chart) chart.innerHTML='<p class="hint">No metered spend in this window.</p>';
+    }; render();
+  }
+
+  async function loadTeamComplianceDetail() {
+    const root=document.getElementById("obs-compliance-root"); if(!root)return;
+    root.innerHTML=obsEmpty("Loading compliance evidence","Joining identity, session, routing, and quality records…");
+    const [patterns,bySession,guard]=await Promise.all([obsGet("/v1/quality/anti-patterns-by-agent?days=30"),obsGet("/v1/quality/anti-patterns-by-session?days=30&min_calls=1"),obsGet("/v1/max-guard/sessions")]);
+    const agents=patterns.items||[], id=obsComplianceAgent||obsSelectedAgent||agents[0]?.agent_id||null;
+    const [cost]=await Promise.all([obsGet(`/v1/cost/summary?hours=720&agent_id=${encodeURIComponent(id||"")}`)]);
+    const p=agents.find(x=>x.agent_id===id)||{}, stream=(cost.by_stream||[]).find(x=>x.agent_id===id)||(cost.by_stream||[])[0]||{};
+    const evidence=(bySession.items||[]).filter(x=>x.agent_id===id).sort((a,b)=>new Date(b.last_seen||0)-new Date(a.last_seen||0));
+    const sessions=(guard.items||[]).filter(x=>x.identity===id||x.agent_id===id||x.project_id===id);
+    const breaches=(p.top_patterns||[]).map((x,i)=>({key:`pattern-${i}`,pattern:x.pattern||"Observed anti-pattern",count:Number(x.count||0),session:evidence.find(e=>(e.top_patterns||[]).some(y=>(y.pattern||y.name)===x.pattern))||evidence[i]||null}));
+    const detailRow=(label,value,tone="")=>`<div class="obs-detail-row"><span>${esc(label)}</span><span class="${tone?`obs-${tone}`:""}">${esc(value)}</span></div>`;
+    if(!obsCompliancePattern||!breaches.some(x=>x.key===obsCompliancePattern))obsCompliancePattern=breaches[0]?.key||null;
+    const render=()=>{
+      const selected=breaches.find(x=>x.key===obsCompliancePattern)||breaches[0]||null, ev=selected?.session||evidence[0]||{}, native=ev.session_id||null;
+      const gs=sessions.find(x=>x.native_session===native)||sessions[0]||{}, models=(ev.models||stream.models||[]).map(x=>typeof x==="string"?x:(x.model||x.provider)).filter(Boolean);
+      const severity=Number(p.avg_completion||ev.avg_completion||0)<2?"high":"medium", lastSeen=ev.last_seen||ev.first_seen||null;
+      const fresh=gs.fresh_input_tokens??gs.fresh_tokens??null, cache=gs.cache_read_tokens??gs.cache_tokens??null, calls=gs.request_count??ev.calls??stream.calls??null;
+      const app=gs.app||gs.source_app||null, project=gs.project_id||stream.project_id||null, identity=gs.identity||id, sessionLabel=native||gs.native_session||null;
+      const subtitle=document.querySelector(".page-subtitle"); if(subtitle)subtitle.textContent=`${id?`@${id}`:"Unknown identity"} · who did what, why it was flagged, and what happened next.`;
+      root.innerHTML=`<div class="obs-compliance-toolbar"><button class="obs-back" id="obs-back-team" aria-label="Back to Team">‹</button><div class="obs-compliance-actions"><span class="obs-open-pill">${obsN(breaches.length)} OPEN BREACHES</span><button class="obs-ghost" id="obs-export-evidence">Export evidence</button></div></div>
+      <div class="obs-compliance-layout"><aside class="obs-compliance-rail"><div class="obs-compliance-identity"><span><small>IDENTITY</small><b>${esc(id?`@${id}`:"unavailable")}</b></span><span><b class="obs-warn">${obsN(breaches.length)}</b><small>open</small></span></div><div class="obs-breach-heading"><b>Breaches</b><small>newest first</small></div><div class="obs-breach-list">${breaches.map(b=>`<button class="obs-breach-item ${b.key===obsCompliancePattern?'selected':''}" data-breach="${b.key}"><span><b>${esc(b.pattern)}</b><em>OPEN</em></span><p>${esc(`${obsN(b.count)} observed occurrence${b.count===1?'':'s'} in the 30-day evidence window.`)}</p><span><small>${esc(b.session?.last_seen?fmtAgo(b.session.last_seen):'Quality evaluator')}</small><small>${severity} impact</small></span></button>`).join('')||'<div class="obs-breach-empty">No compliance breaches are open for this identity.</div>'}</div></aside>
+      <main class="obs-compliance-detail">${selected?`<section class="obs-breach-hero"><div><h2>${esc(selected.pattern)}</h2><small>QUALITY-${esc(String(native||id||"evidence").slice(-12))}</small></div><span class="obs-open-pill">OPEN · ${severity.toUpperCase()} IMPACT</span><p>${esc(`${obsN(selected.count)} occurrence${selected.count===1?' was':'s were'} detected by NautGate's quality evaluator for this identity.`)}</p><b>Detected ${lastSeen?new Date(lastSeen).toLocaleString():'time unavailable'} · rule quality.anti_pattern</b></section>
+      <div class="obs-compliance-pair"><section class="obs-card"><h3>Who</h3>${detailRow("Identity",identity?`@${identity}`:"unavailable")}${detailRow("Source application",app||"unavailable")}${detailRow("Project",project||"unavailable")}${detailRow("Session",sessionLabel||"unavailable")}${detailRow("Model lane",models.join(", ")||"unavailable")}</section><section class="obs-card"><h3>What happened</h3>${detailRow("Observed signal",selected.pattern)}${detailRow("Occurrences",obsN(selected.count))}${detailRow("Average completion",ev.avg_completion!=null?Number(ev.avg_completion).toFixed(2):"unavailable")}${detailRow("Fresh input",fresh!=null?obsN(fresh):"unavailable","warn")}${detailRow("Cache reads",cache!=null?obsN(cache):"unavailable",cache===0?"bad":"")}</section></div>
+      <section class="obs-card obs-causal"><div class="obs-card-head"><h3>Causal chain</h3><small>evidence, not prompt content</small></div><div class="obs-flow"><span class="obs-flow-step"><small>Identity</small><b>${esc(id||"unavailable")}</b></span><i class="obs-flow-arrow">→</i><span class="obs-flow-step"><small>Session</small><b>${esc(sessionLabel||"unavailable")}</b></span><i class="obs-flow-arrow">→</i><span class="obs-flow-step"><small>Routed model</small><b>${esc(models[0]||"unavailable")}</b></span><i class="obs-flow-arrow">→</i><span class="obs-flow-step"><small>Quality evaluation</small><b>${lastSeen?fmtAgo(lastSeen):"observed"}</b></span><i class="obs-flow-arrow">→</i><span class="obs-flow-step warn"><small>Signal observed</small><b>${esc(selected.pattern)}</b></span></div></section>
+      <div class="obs-compliance-pair"><section class="obs-card"><h3>Measured impact</h3>${detailRow("Affected observations",obsN(selected.count),"warn")}${detailRow("Calls / 30 days",calls!=null?obsN(calls):"unavailable")}${detailRow("Fresh input",fresh!=null?obsN(fresh):obsN(stream.prompt_tokens||0),"warn")}${detailRow("Attributed API spend",usd(cost.total_cost_usd||0),"good")}${detailRow("Evidence confidence",native?"High · native session ID":"Limited · no native session ID",native?"good":"warn")}<p class="hint">No prompt body or credential is retained in this explanation.</p></section><section class="obs-card obs-resolution"><div class="obs-card-head"><h3>Resolution</h3><small class="obs-warn">${gs.identity&&!gs.paused?'ACTION AVAILABLE':'REVIEW REQUIRED'}</small></div><p>Review the attributed session and quality evidence. Pause only when the live session is still consuming unexpectedly.</p><button id="obs-pause-compliance" ${!gs.identity||gs.paused?'disabled':''}>${gs.paused?'Session already paused':gs.identity?'Pause affected session':'No pausable session identified'}</button><button class="ghost" disabled>Mark reviewed · not available</button><small>Owner: unassigned · due date unavailable</small></section></div>`:'<div class="obs-card"><h2>No open breaches</h2><p>No anti-pattern evidence is currently attributed to this identity.</p></div>'}</main></div>`;
+      root.querySelectorAll("[data-breach]").forEach(b=>b.addEventListener("click",()=>{obsCompliancePattern=b.dataset.breach;render();}));
+      document.getElementById("obs-back-team")?.addEventListener("click",()=>activateTab("team"));
+      document.getElementById("obs-export-evidence")?.addEventListener("click",()=>{const blob=new Blob([JSON.stringify({identity:id,summary:p,sessions:evidence,max_guard:sessions},null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`nautgate-compliance-${id||'unknown'}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);});
+      document.getElementById("obs-pause-compliance")?.addEventListener("click",async()=>{if(!gs.identity||!confirm(`Pause Max Guard session ${gs.identity}?`))return;await apiPost(`/v1/max-guard/sessions/${encodeURIComponent(gs.identity)}/pause`,{reason:"compliance_explanation"});await loadTeamComplianceDetail();});
+    };render();
+  }
+
+  document.getElementById("obs-accounts-refresh")?.addEventListener("click", loadObservatoryAccounts);
+
   // --- Settings -----------------------------------------------------------
 
   document.getElementById("prefs-save").addEventListener("click", async () => {
@@ -6935,12 +7317,12 @@
 
   const importedLabel = await consumeImportFragment();
 
-  // Start tab from URL hash, default to overview.
-  const initial = (location.hash || "#overview").slice(1);
+  // Start tab from URL hash; Observatory Summary is the operational home.
+  const initial = (location.hash || "#observatory").slice(1);
   if (document.getElementById("tab-" + initial)) {
     activateTab(initial);
   } else {
-    activateTab("overview");
+    activateTab("observatory");
   }
   renderAuth();
   renderSessions();
@@ -7109,6 +7491,7 @@
       },
     });
     window.__helpPane = pane;
+    if (["observatory","team","accounts","teamcompliance"].includes(activeTab)) pane.setOpen(false);
     const openPane = (ev) => { ev.preventDefault(); pane.setOpen(true); };
     document.getElementById("nav-help")?.addEventListener("click", openPane);
     document.getElementById("header-help-btn")?.addEventListener("click", openPane);

@@ -15,6 +15,59 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-24
+
+### Added
+
+- **Max Guard protects Claude Max capacity from runaway sessions.** NautGate
+  now attributes native xNaut launches, reserves estimated fresh-input capacity
+  before dispatch, reconciles provider usage afterwards, and tracks per-session,
+  project-hour, rolling five-hour, and weekly pressure. Observe, warn, and pause
+  modes are explicit; a paused request receives a provider-shaped, non-retryable
+  `403` and never falls through to metered Anthropic API credits. Pause, resume,
+  and temporary authorization controls are durable and auditable.
+
+- **The Observatory separates operational answers into Summary, Team, and
+  Accounts.** Summary shows work, live Max Guard pressure, Lighthouse privacy,
+  quality evidence, drift, projects, and paginated sessions. Team joins `ng_`
+  identities to activity, cache reads, compliance findings, sessions, and the
+  sortable Agent Streams table. Accounts scopes spend, plan value, cache, and
+  OpenRouter credit data to the selected provider and period.
+
+- **Compliance explanations expose the evidence chain without inventing prompt
+  content.** Operators can select an observed quality breach and inspect its
+  identity, attributable session and application, routed model, observed
+  signal, measured impact, and attribution limits. Evidence can be exported as
+  JSON; a matching live Max Guard session can be paused after confirmation.
+
+- **Cache telemetry survives the Anthropic-compatible path.** Cache-read and
+  cache-write usage are parsed and persisted independently, prompt-cache
+  markers and stable-prefix evidence feed Max Guard, and Team activity charts
+  compare fresh input with cache reads.
+
+### Fixed
+
+- **Claude Code OAuth forwarding no longer depends on the problematic `--bare`
+  launch flow.** Native launch metadata is carried by NautGate's xNaut launch
+  contract while the ordinary Claude Code client remains responsible for its
+  own authenticated session.
+
+- **Subscription consumption is no longer hidden behind a zero-dollar cost.**
+  Claude Max traffic records notional plan value separately from API spend, and
+  live-risk indicators use current guard counters rather than historical
+  incident totals.
+
+- **Observatory cards now use their real backing data.** OpenRouter balances,
+  provider-scoped charts, confidentiality state, Lighthouse score, quality
+  findings, session pagination and sorting, and active/inactive team windows no
+  longer use shared or placeholder values.
+
+### Documentation
+
+- Added the Max Guard product and engineering specification, the August 22 Max
+  usage forensic report, feature pages with diagrams, dashboard Help content,
+  and a v0.5.0 website release page.
+
 ## [0.4.0] — 2026-08-21
 
 ### Added

@@ -14,6 +14,7 @@ Translation is best-effort; unknown / unmapped fields fall through unchanged.
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from typing import Any
@@ -160,6 +161,12 @@ def request_to_openai_chat(payload: dict) -> dict:
     """
     out: dict[str, Any] = {}
     out["model"] = payload.get("model")
+    # Keep an exact private copy for Anthropic -> Anthropic routing.  The
+    # canonical OpenAI representation is still needed for classification and
+    # cross-provider routes, but it cannot represent Anthropic cache_control
+    # markers losslessly.  NautRouter consumes this field only when the chosen
+    # destination is Anthropic and never forwards the private field itself.
+    out["_nautgate_anthropic_native"] = copy.deepcopy(payload)
 
     msgs: list[dict] = []
     system = payload.get("system")
@@ -329,6 +336,7 @@ class AnthropicStreamTranslator:
         ] = {}  # openai_idx → {block_index, started, stopped, name, id}
         self._next_block_index = 0
         self._message_stopped = False
+        self._terminal_error = False
         self._input_tokens: int | None = None
         self._output_tokens: int | None = None
         self._finish_reason: str | None = None
@@ -546,6 +554,8 @@ class AnthropicStreamTranslator:
         return out
 
     def _terminate(self):
+        if self._terminal_error:
+            return []
         out: list[bytes] = []
         if not self._message_started:
             out.append(self._start_message())
@@ -567,6 +577,12 @@ class AnthropicStreamTranslator:
 
     def _handle_chunk(self, obj: dict):
         out: list[bytes] = []
+
+        error = obj.get("error")
+        if isinstance(error, dict):
+            self._terminal_error = True
+            out.append(self._emit("error", {"type": "error", "error": error}))
+            return out
 
         usage = obj.get("usage")
         if isinstance(usage, dict):

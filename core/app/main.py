@@ -149,6 +149,23 @@ async def lifespan(app: FastAPI):
     log = structlog.get_logger()
 
     app.state.settings = settings
+    from app.max_guard import MaxGuard, MaxGuardPolicy
+
+    app.state.max_guard = MaxGuard(
+        MaxGuardPolicy(
+            mode=settings.nautgate_max_guard_mode,
+            warn_fresh_tokens=settings.nautgate_max_guard_warn_fresh_tokens,
+            pause_fresh_tokens=settings.nautgate_max_guard_pause_fresh_tokens,
+            warn_request_tokens=settings.nautgate_max_guard_warn_request_tokens,
+            pause_request_tokens=settings.nautgate_max_guard_pause_request_tokens,
+            cache_free_stable_warn_calls=settings.nautgate_max_guard_cache_free_warn_calls,
+            cache_free_stable_pause_calls=settings.nautgate_max_guard_cache_free_pause_calls,
+            cache_free_min_tokens=settings.nautgate_max_guard_cache_free_min_tokens,
+            project_hour_pause_tokens=settings.nautgate_max_guard_project_hour_pause_tokens,
+            lane_five_hour_pause_tokens=settings.nautgate_max_guard_lane_five_hour_pause_tokens,
+            lane_week_pause_tokens=settings.nautgate_max_guard_lane_week_pause_tokens,
+        )
+    )
     app.state.db = None
     app.state.nautrouter = None
     app.state.chatgpt_subscription = None

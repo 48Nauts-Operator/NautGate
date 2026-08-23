@@ -265,11 +265,12 @@ For Claude Code:
 ```bash
 export ANTHROPIC_BASE_URL=https://nautgate.<your-tailnet>.ts.net
 export ANTHROPIC_API_KEY=ng_your_client_key
-claude --bare
+claude
 ```
 
-`--bare` matters when Claude Code already has a stored OAuth login; otherwise
-that login can take precedence over the endpoint and key you just supplied.
+Do not add `--bare` merely for NautGate. It changes Claude Code's normal
+authenticated launch behavior and can cause a login loop when the stored Claude
+session is expected. Confirm the actual credential lane in NautGate's audit data.
 
 Use the same pattern for applications and scripts: the Tailscale Serve URL is
 the base URL, and a client-specific `ng_…` token is the API key. Provider keys
