@@ -24,7 +24,7 @@
 
     <nav>
       <div class="nav-group-label">Observatory</div>
-      <a class="nav-item" href="#observatory" data-tab="observatory">
+      <a class="nav-item active" href="#observatory" data-tab="observatory">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
         <span class="nav-label">Summary</span>
       </a>
@@ -36,12 +36,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 15h4"/></svg>
         <span class="nav-label">Accounts</span>
       </a>
-
-      <a class="nav-item active" href="#overview" data-tab="overview">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-        <span class="nav-label">Overview</span>
-      </a>
-
       <div class="nav-group-label">Observe</div>
       <a class="nav-item" href="#audit" data-tab="audit">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
@@ -143,7 +137,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <div class="page-heading">
-        <div class="page-title" id="page-title">Overview</div>
+        <div class="page-title" id="page-title">Observatory</div>
         <div class="page-subtitle" id="page-subtitle"></div>
       </div>
 
@@ -167,7 +161,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.5 7.2L4 21l1.8-5.5A8 8 0 1121 12z"/><path d="M9.8 9.6a2.2 2.2 0 014.2.9c0 1.5-2 1.8-2 3" stroke-width="1.5"/><circle cx="12" cy="16.6" r=".7" fill="currentColor" stroke="none"/></svg>
       </button>
 
-      <button id="session-pill" class="session-pill" title="Click to manage sessions on the Overview tab">
+      <button id="session-pill" class="session-pill" title="Show sessions on Observatory Summary">
         <span id="auth-state" class="auth-state">no session</span>
       </button>
     </header>
@@ -178,7 +172,7 @@
 
     <main class="appcontent">
     <!-- Observatory suite -------------------------------------------------->
-    <section id="tab-observatory" class="tab observatory-page">
+    <section id="tab-observatory" class="tab observatory-page active">
       <div class="page-toolbar obs-period-toolbar"><label class="obs-period-control"><span>Period</span><select id="observatory-window"><option value="24:hour">Today</option><option value="168:day">This week</option><option value="336:day">2 weeks</option><option value="672:day">4 weeks</option><option value="2160:day">3 months</option><option value="4320:day">6 months</option><option value="8760:day">12 months</option><option value="87600:day">All time</option></select></label><span id="obs-updated" class="hint">updating…</span></div>
       <div id="obs-summary-root"></div>
     </section>
@@ -195,58 +189,6 @@
 
     <section id="tab-teamcompliance" class="tab observatory-page">
       <div id="obs-compliance-root"></div>
-    </section>
-
-    <!-- Overview ------------------------------------------------------------>
-    <section id="tab-overview" class="tab active">
-      <div class="page-toolbar">
-        <span class="window-buttons" id="overview-window">
-          <button data-hours="24" data-bucket="hour" class="active">Today</button>
-          <button data-hours="168" data-bucket="day">This week</button>
-          <button data-hours="336" data-bucket="day">2 weeks</button>
-          <button data-hours="672" data-bucket="day">4 weeks</button>
-          <button data-hours="2160" data-bucket="day">3 months</button>
-          <button data-hours="4320" data-bucket="day">6 months</button>
-          <button data-hours="8760" data-bucket="day">12 months</button>
-          <button data-hours="87600" data-bucket="day">All time</button>
-        </span>
-      </div>
-      <div id="provider-strip" class="prov-strip v2-section"></div>
-
-      <div id="overview-intel" class="v2-section"></div>
-
-      <div id="overview-kpis" class="v2-section"></div>
-
-      <div id="overview-streams-card" class="v2-section"></div>
-
-      <div class="v2-grid-2 v2-section">
-        <div id="overview-requests-card"></div>
-        <div id="overview-tier-card"></div>
-      </div>
-
-      <div class="v2-card">
-        <div class="v2-card-head">
-          <div class="v2-card-title-wrap"><span class="v2-card-title">Sessions</span><span class="v2-card-meta" id="sessions-meta">saved bearer tokens</span></div>
-        </div>
-      <div id="sessions-list"></div>
-      <div id="sessions-pager" class="pager">
-        <button id="sessions-prev">‹ prev</button>
-        <span id="sessions-range" class="hint"></span>
-        <button id="sessions-next">next ›</button>
-        <label class="hint">show
-          <select id="sessions-page-size"><option>10</option><option>25</option><option>50</option></select>
-        </label>
-      </div>
-      <details id="sessions-add" class="sessions-add">
-        <summary>+ Add session</summary>
-        <div class="sessions-add-form">
-          <input id="add-token" type="password" placeholder="Bearer token (ng_…)" />
-          <input id="add-label" type="text" placeholder="Label (optional, e.g. 'Pi', 'Claude Code')" />
-          <button id="add-save">Save session</button>
-          <div id="add-error" class="hint" style="color:#ff5c5c"></div>
-        </div>
-      </details>
-      </div><!-- /.v2-card sessions -->
     </section>
 
     <!-- Cost ---------------------------------------------------------------->
@@ -695,7 +637,7 @@
     <section id="tab-settings" class="tab">
       <div class="settings-surface">
       <nav class="settings-nav" id="settings-subnav">
-        <a class="settings-back" href="#overview" data-tab="overview">
+        <a class="settings-back" href="#observatory" data-tab="observatory">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           <span>Back to app</span>
         </a>

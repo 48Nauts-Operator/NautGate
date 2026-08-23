@@ -15,6 +15,13 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+### Changed
+
+- **Observatory Summary is now the dashboard home.** The superseded Overview
+  page and navigation entry were removed after its sessions, financial data,
+  provider state, traffic, and Agent Streams were moved to Summary, Accounts,
+  and Team respectively.
+
 ## [0.5.0] — 2026-08-24
 
 ### Added

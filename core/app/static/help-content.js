@@ -39,18 +39,6 @@ window.NAUTGATE_HELP = {
     suggestedQuestions: ["Who did what?", "What evidence is missing?"],
     hints: ["Explain only retained evidence; do not reconstruct prompts or claim source-app attribution when metadata was absent."],
   },
-  "/overview": {
-    title: "Overview",
-    summary: "The state of everything at a glance — what ran, what it cost, which sessions are live, and whether a provider is struggling.",
-    sections: [
-      { heading: "What the tiles mean", bullets: [
-        "**Subscription saved** — the metered list price of traffic your Max/Plus plans covered. Notional, not billed.",
-        "**Data shipped** — how many calls carried PII/secrets; bodies are policy-gated before storage.",
-      ] },
-    ],
-    suggestedQuestions: ["What is \"subscription saved\"?", "Why is a provider showing no recent calls?"],
-    hints: ["User is on the Overview. The headline figures are efficiency index, savings identified, experiments, data shipped, requests, empty rate, latency."],
-  },
   "/audit": {
     title: "Audit Log",
     summary: "Every call in and out, with the model that was **asked for** and the model that **actually answered**. Click a row for the full record.",

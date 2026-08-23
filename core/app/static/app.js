@@ -40,7 +40,7 @@
   const REFRESH_MS = 5000;
 
   let refreshTimer = null;
-  let activeTab = "overview";
+  let activeTab = "observatory";
 
   // --- Sessions (multi-token) --------------------------------------------
 
@@ -165,13 +165,13 @@
     }
   }
 
-  // Pill click → switch to Overview tab and focus the sessions list.
+  // Pill click → switch to Observatory Summary and focus the sessions table.
   sessionPill?.addEventListener("click", () => {
     location.hash = "#observatory";
     setTimeout(() => document.getElementById("obs-session-table")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   });
 
-  // --- Sessions UI on the Overview tab -----------------------------------
+  // --- Legacy saved-session renderer (kept for token migration helpers) ---
 
   function fmtAgo(iso) {
     if (!iso) return "—";
@@ -505,7 +505,6 @@
     team:      ["Team", "Active identities, consumption, sessions, and compliance"],
     accounts:  ["Accounts", "Plans, provider balances, and financial usage"],
     teamcompliance:["Compliance explanation", "Who did what, why it was flagged, and what happened next"],
-    overview:  ["Overview", "Live provider status & last-24h traffic"],
     audit:     ["Audit Log", "Every LLM call as it happens"],
     decisions: ["Decisions", "Recent routing decisions · refreshes every 5s"],
     health:    ["Provider Health", "Model availability & the in-process health tracker"],
@@ -828,7 +827,7 @@
   // Orca settings surface (NAUTGATE-12): back link + nav search.
   document.querySelector(".settings-back")?.addEventListener("click", (ev) => {
     ev.preventDefault();
-    activateTab("overview");
+    activateTab("observatory");
   });
   const settingsSearch = document.getElementById("settings-search-input");
   settingsSearch?.addEventListener("input", () => {
@@ -1641,7 +1640,7 @@
     const list = document.getElementById("audit-list");
     if (!rows.length) {
       const who = agentId ? `agent_id <code>${esc(agentId)}</code>` : "the active session";
-      list.innerHTML = `<p class="hint">No requests for ${who} yet. The audit log is scoped to whichever session is active — switch sessions on the Overview tab to see another agent's traffic.</p>`;
+      list.innerHTML = `<p class="hint">No requests for ${who} yet. The audit log is scoped to the active session — select another session from Observatory Summary to inspect its traffic.</p>`;
       return;
     }
     list.innerHTML = rows
@@ -7474,7 +7473,7 @@
     }
 
     const pane = HelpModule.mount(document.body, {
-      pathname: "/" + (activeTab || "overview"),
+      pathname: "/" + (activeTab || "observatory"),
       contentRegistry: window.NAUTGATE_HELP,
       chatHandler,
       persona: { name: "Naut", initial: "N", tagline: "your guide" },
@@ -7497,7 +7496,7 @@
     document.getElementById("header-help-btn")?.addEventListener("click", openPane);
   })();
   if (importedLabel) {
-    // Tiny toast: 4s pinned banner on the Overview Sessions section.
+    // Tiny toast: 4s pinned banner when the legacy session manager is present.
     const banner = document.createElement("div");
     banner.style.cssText = "padding:8px 12px;margin:8px 0;border-left:3px solid #4caf50;background:rgba(76,175,80,0.08);font-size:13px";
     banner.textContent = `Session "${importedLabel}" imported and activated.`;
