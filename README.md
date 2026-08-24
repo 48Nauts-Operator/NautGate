@@ -25,8 +25,8 @@ your app ────┘     │                ├─ OpenRouter
 ```
 
 <p align="center">
-  <img src="assets/screenshots/overview.png" alt="NautGate dashboard Overview — live provider status, spend, subscription-saved, drift alerts, and 24h traffic" width="92%">
-  <br><sub>The Overview — live provider status, what you spent, what your subscription saved, and what the gateway learned from your traffic.</sub>
+  <img src="assets/screenshots/observatory.png" alt="NautGate Observatory — AI usage, token-consuming projects, live risk, Lighthouse, quality, drift, and sessions" width="92%">
+  <br><sub>The Observatory — operational usage, token-consuming projects, live risk, quality, drift, and sessions in one evidence-backed view.</sub>
 </p>
 
 ## Why
