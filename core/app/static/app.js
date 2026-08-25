@@ -1483,6 +1483,10 @@
   let auditExpandedId = null;
   let auditReceiptPage = 0;
   const auditDetailCache = new Map();
+  // Drift samples reuse the normal audit detail renderer. Preserve the sample
+  // context separately so its report can explain the anomaly instead of
+  // degrading into a generic call summary.
+  const driftReportContext = new Map();
 
   async function loadAudit() {
     const list = document.getElementById("audit-list");
@@ -2042,6 +2046,82 @@
       .map((s) => `<li>${esc(s.rule_id)} · ${esc(s.severity || s.sensitivity || "")} · ×${s.count || 1}</li>`).join("");
     const bloat = (d.bloat_findings || [])
       .map((f) => `<li><b>${esc(f.type)}</b> [${esc(f.severity || "info")}] — ${esc(f.detail || "")}</li>`).join("");
+    const drift = driftReportContext.get(d.decision_id);
+    let driftBlock = "";
+    if (drift) {
+      const p = drift.sample || {};
+      const alert = drift.alert || {};
+      const meta = DRIFT_METRIC_META[alert.metric] || {
+        label: alert.metric || "unknown metric",
+        fmt: driftMetricFmt(alert.metric),
+      };
+      const fmt = meta.fmt;
+      const observed = Number(p.observed);
+      const baseline = Number(p.mean);
+      const stddev = Number(p.stddev);
+      const z = Number(p.z);
+      const hasObserved = Number.isFinite(observed);
+      const hasBaseline = Number.isFinite(baseline);
+      const hasStddev = Number.isFinite(stddev);
+      const hasZ = Number.isFinite(z);
+      const deltaPct = hasObserved && hasBaseline && baseline !== 0
+        ? ((observed - baseline) / baseline) * 100 : null;
+      const direction = hasObserved && hasBaseline && observed < baseline ? "below" : "above";
+      const anomaly = hasZ && Math.abs(z) > 3;
+      let conclusion;
+      let impact;
+      let causes;
+      let nextStep;
+      if (alert.metric === "input_tokens_per_byte") {
+        conclusion = anomaly
+          ? `This request used ${deltaPct == null ? "an unusually different number of" : `<b>${Math.abs(deltaPct).toFixed(1)}% ${direction}</b>`} input tokens per byte than the learned baseline.`
+          : "This request's input-token density remained within the learned range.";
+        impact = direction === "above"
+          ? "If the shift is sustained for byte-for-byte equivalent prompts, input-token cost and context consumption increase."
+          : "If sustained for equivalent prompts, the same payload consumes fewer input tokens.";
+        causes = "This production sample alone does <b>not</b> prove Anthropic changed its tokenizer. Plausible causes are a tokenizer/model revision, changed cache or usage accounting, or a different prompt composition (code, JSON, prose and Unicode tokenize at different densities).";
+        nextStep = "Confirm with deterministic canary prompts against the same provider/model. A provider-side change is supported only when identical canary bytes reproduce the shift.";
+      } else if (alert.metric === "response_size_bytes") {
+        conclusion = `This response was ${deltaPct == null ? "outside" : `<b>${Math.abs(deltaPct).toFixed(1)}% ${direction}</b>`} the learned response-size baseline.`;
+        impact = "A sustained upward shift increases output-token cost and latency; a downward shift may indicate terser or truncated answers.";
+        causes = "One response can vary because of the task. It becomes evidence of model behavior drift only when controlled prompts reproduce it.";
+        nextStep = "Run the verbosity canary and compare repeated outputs for the same prompt.";
+      } else if (alert.metric === "first_byte_ms" || alert.metric === "duration_ms") {
+        conclusion = `This call's ${esc(meta.label)} was ${deltaPct == null ? "outside" : `<b>${Math.abs(deltaPct).toFixed(1)}% ${direction}</b>`} its learned baseline.`;
+        impact = direction === "above" ? "Users experienced slower service on this call." : "This call completed faster than the historical norm.";
+        causes = "Possible causes include provider load, network conditions, request size, model routing, or generation length. One sample cannot isolate the cause.";
+        nextStep = "Compare neighboring calls and run repeated latency canaries before attributing the change to the provider.";
+      } else {
+        conclusion = `NautGate observed ${esc(meta.label)} outside its learned baseline for this request.`;
+        impact = "The operational effect depends on whether the shift persists across comparable requests.";
+        causes = "This is anomaly evidence, not proof of a provider-side change.";
+        nextStep = "Compare equivalent requests and run the matching controlled investigation.";
+      }
+      const normalBand = hasBaseline && hasStddev
+        ? `${esc(fmt(baseline - 3 * stddev))} … ${esc(fmt(baseline + 3 * stddev))}` : "—";
+      driftBlock = `
+        <h3>Drift assessment</h3>
+        <div class="assessment ${anomaly ? "assessment-bad" : ""}">
+          <p><b>What happened:</b> ${conclusion}</p>
+          <p><b>Operational impact:</b> ${impact}</p>
+          <p><b>What the evidence does—and does not—show:</b> ${causes}</p>
+          <p><b>How to confirm:</b> ${nextStep}</p>
+        </div>
+        <h3>Drift evidence</h3>
+        <div class="grid">
+          ${kv("Metric", esc(meta.label))}
+          ${kv("Observed", hasObserved ? esc(fmt(observed)) : "—")}
+          ${kv("Baseline mean", hasBaseline ? esc(fmt(baseline)) : "—")}
+          ${kv("Normal band (±3σ)", normalBand)}
+          ${kv("Deviation", deltaPct == null ? "—" : `${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%`)}
+          ${kv("Z-score", hasZ ? `${z.toFixed(2)}σ` : "—")}
+          ${kv("Sample time", esc(p.ts || d.ts || "—"))}
+          ${kv("Linked decision", `<code>${esc(p.decisionId || d.decision_id || "—")}</code>`)}
+          ${kv("Alert observations", String(alert.sample_count ?? "—"))}
+          ${kv("Alert opened", esc(alert.started_at || "—"))}
+        </div>
+        <p class="dim small">Baseline evidence comes from NautGate's EWMA for this exact provider/model/metric. Request evidence below is the linked audit decision. Prompt and response bodies remain excluded from this share-safe report.</p>`;
+    }
     const judgeBlock = ev ? `
       <div class="scores">
         ${score("Task understanding", rubric.task_understanding)}
@@ -2072,6 +2152,8 @@
       .score { background:#12161F; border:1px solid #232B36; border-radius:6px; padding:8px 12px; min-width:104px; }
       .sl { color:#5C6675; font-size:10px; } .sv { font-size:20px; } .sv small { color:#5C6675; font-size:11px; }
       .tag { background:#1A2029; border:1px solid #232B36; border-radius:10px; padding:2px 8px; font-size:11px; }
+      .assessment { background:#12161F; border:1px solid #232B36; border-left:3px solid #D6A100; border-radius:6px; padding:10px 14px; }
+      .assessment-bad { border-left-color:#E5484D; } .assessment p { margin:5px 0; }
       pre { background:#12161F; border:1px solid #232B36; border-radius:6px; padding:10px; white-space:pre-wrap; }
       ul { margin:6px 0; padding-left:18px; } li { margin:2px 0; }
       .good { color:#3FB950; } .warn { color:#D6A100; } .bad { color:#E5484D; } .dim { color:#8893A4; } .small { font-size:11px; }
@@ -2079,6 +2161,7 @@
     </style></head><body><div class="wrap">
       <h1>NautGate · Call report</h1>
       <div class="sub">${esc(d.ts || "")} · decision ${esc(d.decision_id || "")}</div>
+      ${driftBlock}
       <h3>Call</h3>
       <div class="grid">
         ${kv("Endpoint", esc(inboundEndpoint(d.inbound_format)))}
@@ -4355,7 +4438,7 @@
 
   // What each drift metric means + how to format its value.
   const DRIFT_METRIC_META = {
-    input_tokens_per_byte: { label: "input tokens / byte", fmt: (v) => v == null ? "—" : v.toFixed(4), means: "How densely your prompt tokenizes. A shift means the provider changed its tokenizer or cache behaviour — same text, different token count (and cost)." },
+    input_tokens_per_byte: { label: "input tokens / byte", fmt: (v) => v == null ? "—" : v.toFixed(4), means: "How densely this prompt tokenizes. A shift may come from prompt composition, tokenizer/model revisions, or changed cache and usage accounting; a controlled canary is needed before attributing it to the provider." },
     response_size_bytes: { label: "response size (bytes)", fmt: (v) => v == null ? "—" : fmtNum(v) + " B", means: "How long the model's replies are. Drift here is verbosity change — the model getting chattier or terser for the same kind of request." },
     first_byte_ms: { label: "time to first byte", fmt: (v) => v == null ? "—" : Math.round(v) + " ms", means: "Latency until the first token streams back. Upward drift = the provider getting slower to start." },
     duration_ms: { label: "total duration", fmt: (v) => v == null ? "—" : Math.round(v) + " ms", means: "End-to-end call latency. Upward drift = slower completions overall." },
@@ -4402,6 +4485,8 @@
       try {
         const scope = getActiveAgentScope();
         const d = await api("/v1/decisions/" + encodeURIComponent(p.decisionId) + (scope ? "?agent_id=" + encodeURIComponent(scope) : ""));
+        auditDetailCache.set(p.decisionId, d);
+        driftReportContext.set(p.decisionId, { sample: { ...p }, alert: { ...alert } });
         const slot = document.getElementById("drift-req-loading");
         if (slot) slot.outerHTML = renderAuditDetail(d);
       } catch (_e) {
