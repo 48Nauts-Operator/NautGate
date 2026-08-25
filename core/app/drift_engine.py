@@ -394,11 +394,26 @@ async def get_drift_overview(pool: asyncpg.Pool) -> dict:
     """Returns: open alerts list + per-(provider, model, metric) baselines."""
     alerts = await pool.fetch(
         """
-        SELECT id::text, provider, model, metric_name, direction,
-               started_at, resolved_at, peak_z_score, peak_observed,
-               baseline_at_alert, sample_count
-          FROM nautgate.drift_alerts
-         ORDER BY (resolved_at IS NULL) DESC, started_at DESC
+        SELECT a.id::text, a.provider, a.model, a.metric_name, a.direction,
+               a.started_at, a.resolved_at, a.peak_z_score, a.peak_observed,
+               a.baseline_at_alert, a.sample_count,
+               i.id::text AS investigation_id,
+               i.status AS investigation_status,
+               i.skip_reason AS investigation_skip_reason,
+               i.verdict_label AS investigation_verdict_label,
+               i.verdict_text AS investigation_verdict_text,
+               i.triggered_at AS investigation_triggered_at,
+               i.completed_at AS investigation_completed_at
+          FROM nautgate.drift_alerts a
+          LEFT JOIN LATERAL (
+              SELECT di.id, di.status, di.skip_reason, di.verdict_label,
+                     di.verdict_text, di.triggered_at, di.completed_at
+                FROM nautgate.drift_investigations di
+               WHERE di.drift_alert_id = a.id
+               ORDER BY di.triggered_at DESC
+               LIMIT 1
+          ) i ON TRUE
+         ORDER BY (a.resolved_at IS NULL) DESC, a.started_at DESC
          LIMIT 100
         """
     )
@@ -427,6 +442,21 @@ async def get_drift_overview(pool: asyncpg.Pool) -> dict:
                 "baseline_at_alert": float(a["baseline_at_alert"]),
                 "sample_count": a["sample_count"],
                 "is_open": a["resolved_at"] is None,
+                "investigation": {
+                    "id": a["investigation_id"],
+                    "status": a["investigation_status"],
+                    "skip_reason": a["investigation_skip_reason"],
+                    "verdict_label": a["investigation_verdict_label"],
+                    "verdict_text": a["investigation_verdict_text"],
+                    "triggered_at": a["investigation_triggered_at"].isoformat()
+                    if a["investigation_triggered_at"]
+                    else None,
+                    "completed_at": a["investigation_completed_at"].isoformat()
+                    if a["investigation_completed_at"]
+                    else None,
+                }
+                if a["investigation_id"]
+                else None,
             }
             for a in alerts
         ],

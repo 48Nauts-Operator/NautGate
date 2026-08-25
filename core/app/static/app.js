@@ -2068,6 +2068,19 @@
         ? ((observed - baseline) / baseline) * 100 : null;
       const direction = hasObserved && hasBaseline && observed < baseline ? "below" : "above";
       const anomaly = hasZ && Math.abs(z) > 3;
+      const threshold = 3;
+      const boundary = hasBaseline && hasStddev
+        ? baseline + (z < 0 ? -threshold * stddev : threshold * stddev) : null;
+      const beyondBoundary = hasObserved && Number.isFinite(boundary)
+        ? Math.abs(observed - boundary) : null;
+      let zExplanation;
+      if (!hasZ) {
+        zExplanation = "There was not enough baseline variance to calculate a z-score for this sample.";
+      } else if (anomaly) {
+        zExplanation = `<b>${z.toFixed(2)}σ is the reason NautGate raised this alert.</b> It means the sample landed ${Math.abs(z).toFixed(2)} baseline standard deviations ${z < 0 ? "below" : "above"} the learned mean, crossing the alert threshold of ±${threshold}σ.${beyondBoundary == null ? "" : ` It sits ${esc(fmt(beyondBoundary))} beyond the nearest edge of the normal band.`} This is strong evidence that the sample is unusual relative to NautGate's history; it does not, by itself, identify who or what caused the change.`;
+      } else {
+        zExplanation = `<b>${z.toFixed(2)}σ did not cross NautGate's ±${threshold}σ alert threshold.</b> The sample remains inside the learned normal band.`;
+      }
       let conclusion;
       let impact;
       let causes;
@@ -2102,6 +2115,7 @@
       driftBlock = `
         <h3>Drift assessment</h3>
         <div class="assessment ${anomaly ? "assessment-bad" : ""}">
+          <p class="z-lead">${zExplanation}</p>
           <p><b>What happened:</b> ${conclusion}</p>
           <p><b>Operational impact:</b> ${impact}</p>
           <p><b>What the evidence does—and does not—show:</b> ${causes}</p>
@@ -2112,6 +2126,7 @@
           ${kv("Metric", esc(meta.label))}
           ${kv("Observed", hasObserved ? esc(fmt(observed)) : "—")}
           ${kv("Baseline mean", hasBaseline ? esc(fmt(baseline)) : "—")}
+          ${kv("Baseline σ", hasStddev ? esc(fmt(stddev)) : "—")}
           ${kv("Normal band (±3σ)", normalBand)}
           ${kv("Deviation", deltaPct == null ? "—" : `${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%`)}
           ${kv("Z-score", hasZ ? `${z.toFixed(2)}σ` : "—")}
@@ -2154,6 +2169,7 @@
       .tag { background:#1A2029; border:1px solid #232B36; border-radius:10px; padding:2px 8px; font-size:11px; }
       .assessment { background:#12161F; border:1px solid #232B36; border-left:3px solid #D6A100; border-radius:6px; padding:10px 14px; }
       .assessment-bad { border-left-color:#E5484D; } .assessment p { margin:5px 0; }
+      .z-lead { font-size:14px; line-height:1.6; padding-bottom:9px; margin-bottom:9px !important; border-bottom:1px solid #232B36; }
       pre { background:#12161F; border:1px solid #232B36; border-radius:6px; padding:10px; white-space:pre-wrap; }
       ul { margin:6px 0; padding-left:18px; } li { margin:2px 0; }
       .good { color:#3FB950; } .warn { color:#D6A100; } .bad { color:#E5484D; } .dim { color:#8893A4; } .small { font-size:11px; }
@@ -4353,20 +4369,78 @@
       if (!open.length) {
         alertsEl.appendChild(NG.el("p", { class: "hint" }, "No open alerts. Drift detection needs ~10 samples per (provider, model, metric) to warm up."));
       } else {
-        const row = NG.el("div", { class: "dr-callouts" });
+        const wrap = NG.el("div", { class: "dr-open-table-wrap" });
+        const table = NG.el("table", { class: "dr-open-table" });
+        table.innerHTML = `<thead><tr><th>Model</th><th>Metric</th><th class="num">Peak z</th><th class="num">Observed</th><th class="num">Baseline</th><th class="num">Samples</th><th>Opened</th><th>Investigation</th></tr></thead><tbody></tbody>`;
+        const tbody = table.querySelector("tbody");
         open.forEach((a) => {
-          const crit = Math.abs(a.peak_z_score || 0) > 3 || a.peak_z_score === -99;
-          const c = NG.el("div", { class: "dr-callout " + (crit ? "dr-callout-bad" : "dr-callout-warn") });
-          c.appendChild(NG.el("span", { class: "dr-callout-icon", html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l9 16H3z"/><path d="M12 10v4"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>' }));
-          const mid = NG.el("div", { class: "dr-callout-mid" });
-          mid.appendChild(NG.el("div", { class: "dr-callout-title" }, `${shortModelName(a.model)} · ${a.metric}`));
-          mid.appendChild(NG.el("div", { class: "dr-callout-sub" }, `${a.sample_count || 0} samples · started ${fmtAge(a.started_at)}`));
-          c.appendChild(mid);
-          const z = a.peak_z_score === -99 ? "compaction" : `z = ${(a.peak_z_score || 0).toFixed(1)} ${a.direction === "up" ? "▲" : "▼"}`;
-          c.appendChild(NG.el("span", { class: "dr-callout-z" }, z));
-          row.appendChild(c);
+          const tr = NG.el("tr", { class: "dr-open-row", title: "Open anomaly chart" });
+          const z = a.peak_z_score === -99 ? "compaction" : `${(a.peak_z_score || 0).toFixed(2)}σ ${a.direction === "up" ? "▲" : "▼"}`;
+          tr.innerHTML = `<td><b>${esc(shortModelName(a.model))}</b><small>${esc(a.provider)}</small></td><td><code>${esc(a.metric)}</code></td><td class="num dr-open-z">${esc(z)}</td><td class="num">${esc(fmtNum(a.peak_observed))}</td><td class="num">${esc(fmtNum(a.baseline_at_alert))}</td><td class="num">${a.sample_count || 0}</td><td>${esc(fmtAge(a.started_at))}</td><td class="dr-open-action"></td>`;
+          tr.addEventListener("click", () => renderDriftBand(a));
+          const action = tr.querySelector(".dr-open-action");
+          const inv = a.investigation;
+          if (inv && inv.status === "complete") {
+            const report = NG.el("button", {
+              class: "ghost dr-auto-report",
+              title: "Open the automatically generated investigation report",
+            }, "Open report");
+            report.addEventListener("click", async (ev) => {
+              ev.stopPropagation();
+              report.disabled = true;
+              report.textContent = "loading…";
+              try {
+                const [full, anomalyData] = await Promise.all([
+                  api("/v1/drift/investigations/" + encodeURIComponent(inv.id)),
+                  api(`/v1/drift/${encodeURIComponent(a.provider)}/${a.model}/anomalies?metric=${encodeURIComponent(a.metric)}&limit=1`),
+                ]);
+                _showAutoDriftReport(a, full, (anomalyData.items || [])[0] || null);
+              } catch (e) {
+                alert("Could not open investigation report: " + (e.message || e));
+              } finally {
+                report.disabled = false;
+                report.textContent = "Open report";
+              }
+            });
+            action.appendChild(report);
+          } else if (inv && inv.status === "running") {
+            action.appendChild(NG.el("span", { class: "dr-auto-state" }, "Investigating…"));
+          } else if (inv && (inv.status === "skipped" || inv.status === "failed")) {
+            action.appendChild(NG.el("span", {
+              class: "dr-auto-state dr-auto-state-warn",
+              title: inv.skip_reason || inv.verdict_text || inv.status,
+            }, inv.status === "skipped" ? "Investigation skipped" : "Investigation failed"));
+          } else {
+            const run = NG.el("button", { class: "ghost dr-auto-report", title: "Run the missing investigation for this older alert" }, "Run investigation");
+            run.addEventListener("click", async (ev) => {
+              ev.stopPropagation();
+              run.disabled = true;
+              run.textContent = "Investigating…";
+              try {
+                const response = await fetch("/v1/drift/investigate", {
+                  method: "POST",
+                  headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" },
+                  body: JSON.stringify({ alert_id: a.id, provider: a.provider, model: a.model, metric_name: a.metric }),
+                });
+                if (!response.ok) throw new Error("http_" + response.status + ": " + (await response.text()).slice(0, 160));
+                const started = await response.json();
+                const slot = NG.el("div");
+                action.innerHTML = "";
+                action.appendChild(slot);
+                await _pollInvestigation(started.investigation_id, slot);
+                loadDrift();
+              } catch (e) {
+                run.disabled = false;
+                run.textContent = "Run investigation";
+                run.title = e.message || String(e);
+              }
+            });
+            action.appendChild(run);
+          }
+          tbody.appendChild(tr);
         });
-        alertsEl.appendChild(row);
+        wrap.appendChild(table);
+        alertsEl.appendChild(wrap);
       }
 
       // Anomaly-band chart — defaults to the primary open alert, updates when
@@ -4428,6 +4502,72 @@
     } catch (e) {
       alertsEl.innerHTML = `<p class="hint">load failed: ${esc(e.message || e)}</p>`;
     }
+  }
+
+  function _showAutoDriftReport(alert, inv, sample) {
+    document.getElementById("dr-auto-report-modal")?.remove();
+    const findings = inv.findings || {};
+    const canaries = Array.isArray(findings.canaries) ? findings.canaries : [];
+    const z = Number(sample?.z_score ?? alert.peak_z_score);
+    const observed = Number(sample?.observed_value ?? alert.peak_observed);
+    const baseline = Number(sample?.baseline_mean ?? alert.baseline_at_alert);
+    const stddev = Number(sample?.baseline_stddev);
+    const hasZ = Number.isFinite(z);
+    const hasObserved = Number.isFinite(observed);
+    const hasBaseline = Number.isFinite(baseline);
+    const hasStddev = Number.isFinite(stddev);
+    const delta = hasObserved && hasBaseline && baseline !== 0 ? ((observed - baseline) / baseline) * 100 : null;
+    const bandLow = hasBaseline && hasStddev ? baseline - 3 * stddev : null;
+    const bandHigh = hasBaseline && hasStddev ? baseline + 3 * stddev : null;
+    const abnormal = hasZ && Math.abs(z) > 3;
+    const zText = !hasZ
+      ? "No z-score was available."
+      : abnormal
+        ? `<b>${z.toFixed(2)}σ crossed NautGate's ±3σ alert threshold.</b> The production sample was ${Math.abs(z).toFixed(2)} standard deviations ${z < 0 ? "below" : "above"} the learned mean. That establishes an anomaly relative to historical traffic; it does not establish the cause.`
+        : `<b>${z.toFixed(2)}σ remained inside NautGate's ±3σ range.</b>`;
+    const verdictClass = ["matches_baseline", "no_drift"].includes(inv.verdict_label) ? "good" : inv.verdict_label === "inconclusive" ? "warn" : "bad";
+    const verdictTitle = String(inv.verdict_label || inv.status || "unknown").replace(/_/g, " ");
+    const canaryRows = canaries.map((c) => {
+      const ratio = c.prompt_tokens != null && c.prompt_bytes ? (c.prompt_tokens / c.prompt_bytes).toFixed(4) : "—";
+      return `<tr><td>${esc(c.canary || "—")}</td><td>${esc(c.via || "—")}</td><td class="num">${c.status_code ?? "—"}</td><td class="num">${c.prompt_bytes ?? "—"}</td><td class="num">${c.prompt_tokens ?? "—"}</td><td class="num">${ratio}</td><td>${esc(c.error || "ok")}</td></tr>`;
+    }).join("");
+    const evidenceDecision = sample?.decision_id || "—";
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>NautGate drift investigation</title><style>
+      body{background:#0A0D12;color:#E6EBF2;font:13px/1.55 ui-monospace,"SF Mono",Menlo,monospace;margin:0;padding:32px}.wrap{max-width:900px;margin:auto}h1{font-size:18px;color:#C3CE1F;margin:0}.sub{color:#8893A4;font-size:11px;margin:3px 0 22px}h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#8893A4;border-bottom:1px solid #232B36;padding-bottom:5px;margin-top:24px}.lead{background:#12161F;border:1px solid #232B36;border-left:3px solid ${abnormal ? "#E5484D" : "#D6A100"};border-radius:6px;padding:12px 15px}.verdict{font-size:15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}.kv{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dotted #232B36;padding:4px 0}.k,.dim{color:#8893A4}.num{text-align:right;font-variant-numeric:tabular-nums}.good{color:#3FB950}.warn{color:#D6A100}.bad{color:#E5484D}table{width:100%;border-collapse:collapse;font-size:11px}th,td{padding:7px 8px;border-bottom:1px solid #232B36;text-align:left}th{color:#8893A4}.foot{margin-top:28px;padding-top:9px;border-top:1px solid #232B36;color:#5C6675;font-size:10px}
+    </style></head><body><div class="wrap">
+      <h1>NautGate · Automatic drift investigation</h1>
+      <div class="sub">alert ${esc(alert.id || "—")} · investigation ${esc(inv.id || "—")} · completed ${esc(inv.completed_at || "—")}</div>
+      <div class="lead"><p>${zText}</p><p>${delta == null ? "" : `Observed value was <b>${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%</b> versus the learned mean.`}</p></div>
+      <h2>Controlled investigation verdict</h2>
+      <p class="verdict ${verdictClass}"><b>${esc(verdictTitle)}</b></p>
+      <p>${esc(inv.verdict_text || "No verdict text was produced.")}</p>
+      <p class="dim">Interpretation boundary: the z-score proves historical abnormality. Canary probes test whether controlled requests reproduce the current behavior. Attribution to a provider-side change is strongest when identical canaries also have their own historical baseline; otherwise the result is supporting evidence, not absolute proof.</p>
+      <h2>Alert evidence</h2><div class="grid">
+        <div class="kv"><span class="k">Provider / model</span><span>${esc(alert.provider)} / ${esc(alert.model)}</span></div>
+        <div class="kv"><span class="k">Metric</span><span>${esc(alert.metric)}</span></div>
+        <div class="kv"><span class="k">Peak z-score</span><span>${hasZ ? z.toFixed(2) + "σ" : "—"}</span></div>
+        <div class="kv"><span class="k">Alert threshold</span><span>±3σ</span></div>
+        <div class="kv"><span class="k">Observed</span><span>${hasObserved ? fmtNum(observed) : "—"}</span></div>
+        <div class="kv"><span class="k">Baseline mean</span><span>${hasBaseline ? fmtNum(baseline) : "—"}</span></div>
+        <div class="kv"><span class="k">Baseline σ</span><span>${hasStddev ? fmtNum(stddev) : "—"}</span></div>
+        <div class="kv"><span class="k">Normal band</span><span>${bandLow == null ? "—" : fmtNum(bandLow) + " … " + fmtNum(bandHigh)}</span></div>
+        <div class="kv"><span class="k">Production decision</span><span>${esc(evidenceDecision)}</span></div>
+        <div class="kv"><span class="k">Sample timestamp</span><span>${esc(sample?.ts || alert.started_at || "—")}</span></div>
+      </div>
+      <h2>Canary evidence</h2>
+      ${canaryRows ? `<table><thead><tr><th>Canary</th><th>Transport</th><th class="num">HTTP</th><th class="num">Bytes</th><th class="num">Tokens</th><th class="num">Tok/byte</th><th>Result</th></tr></thead><tbody>${canaryRows}</tbody></table>` : '<p class="dim">No canary rows were stored.</p>'}
+      <div class="foot">Evidence source: nautgate.model_anomalies + nautgate.model_baselines + nautgate.drift_investigations · generated automatically · prompt bodies excluded</div>
+    </div></body></html>`;
+    const modal = document.createElement("div");
+    modal.id = "dr-auto-report-modal";
+    modal.className = "dr-report-modal";
+    modal.innerHTML = `<div class="dr-report-content"><div class="dr-report-head"><span>Automatic drift report · ${esc(shortModelName(alert.model))}</span><div class="dr-report-actions"><button class="ghost" data-action="tab">open tab</button><button class="ghost" data-action="download">download</button><button class="ghost" data-action="close">close</button></div></div><iframe class="audit-report-frame" sandbox=""></iframe></div>`;
+    document.body.appendChild(modal);
+    modal.querySelector("iframe").srcdoc = html;
+    const blobUrl = () => URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    modal.querySelector('[data-action="close"]').addEventListener("click", () => modal.remove());
+    modal.querySelector('[data-action="tab"]').addEventListener("click", () => window.open(blobUrl(), "_blank", "noopener"));
+    modal.querySelector('[data-action="download"]').addEventListener("click", () => { const a = document.createElement("a"); a.href = blobUrl(); a.download = `nautgate-drift-${alert.id}.html`; a.click(); });
   }
 
   function driftZCell(z) {

@@ -2387,7 +2387,19 @@ html, body { height: 100%; }
 .stream-model-calls { color: var(--label); font-family: var(--mono); font-size: 10.5px; }
 .stream-lanes { display: flex; flex-wrap: wrap; gap: 5px; min-width: 130px; }
 
-/* drift compact callouts */
+/* drift open-alert action table */
+.dr-open-table-wrap { overflow: auto; max-height: 430px; border: 1px solid var(--border); border-radius: 10px; }
+.dr-open-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dr-open-table th { position: sticky; top: 0; z-index: 1; background: var(--bg-card); color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.dr-open-table td { padding: 10px 11px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.dr-open-table tbody tr:last-child td { border-bottom: 0; }
+.dr-open-row { cursor: pointer; background: rgba(229,72,77,.035); }
+.dr-open-row:hover { background: rgba(229,72,77,.09); }
+.dr-open-row td:first-child small { display: block; color: var(--text-dim); margin-top: 2px; }
+.dr-open-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.dr-open-z { color: var(--bad); font-weight: 650; }
+.dr-open-action { min-width: 135px; }
+/* legacy cards retained for cached markup */
 .dr-callouts { display: flex; gap: 14px; flex-wrap: wrap; }
 .dr-callout {
   flex: 1; min-width: 320px; display: flex; align-items: center; gap: 12px;
@@ -2402,6 +2414,9 @@ html, body { height: 100%; }
 .dr-callout-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
 .dr-callout-sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .dr-callout-z { font-variant-numeric: tabular-nums; font-weight: 600; flex-shrink: 0; }
+.dr-auto-report { flex-shrink: 0; }
+.dr-auto-state { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
+.dr-auto-state-warn { color: var(--warn); cursor: help; }
 .dr-callout-bad .dr-callout-z { color: var(--bad); }
 .dr-callout-warn .dr-callout-z { color: var(--warn); }
 
