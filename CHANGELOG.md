@@ -15,6 +15,20 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-31
+
+### Added
+
+- **Drift investigations now connect alerts to the calls that produced them.**
+  Operators can open an evidence-backed report from a drift signal to inspect
+  affected calls, routing decisions, model identity, latency, token usage, and
+  cost without treating model self-report as evidence.
+
+- **Automatic drift investigations are visible in the dashboard.** Completed
+  investigation reports are attached to their alerts and surfaced with their
+  evidence and conclusions, so operators can distinguish a measured change
+  from an unexplained warning.
+
 ### Changed
 
 - **Observatory Summary is now the dashboard home.** The superseded Overview
