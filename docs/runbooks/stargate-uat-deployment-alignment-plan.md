@@ -10,6 +10,27 @@ than rebuilding them.
 This plan changes tooling and names only after compatibility checks. It does
 not authorize changes to the currently running UAT stack.
 
+## Implementation status
+
+Completed without live impact on 2026-09-05:
+
+- Added `deploy/compose.uat.yml` and `deploy/profiles/uat-stargate.env.example`.
+- Kept the legacy manifest/profile operational for the running project.
+- Added shared LM Studio variables for Core discovery/settings and NautRouter
+  confidential inference.
+- Added `just validate-uat-compose`, `just verify-uat`, `just uat-status`, and
+  `just uat-logs`.
+- Added a read-only verifier covering Core, Router, database readiness, and LM
+  Studio reachability from both application containers.
+- Moved CI Compose validation to the UAT manifest.
+
+Pending controlled changes:
+
+- Install the private `uat-stargate.env` on Stargate.
+- Apply the stable LM Studio MagicDNS endpoint to the running Core and Router.
+- Transition the running Compose project name in a maintenance window.
+- Implement package deployment, rollback, and exact-artifact GitHub promotion.
+
 ## Current state to preserve
 
 - Live client endpoint: `http://localhost:8090`
@@ -63,7 +84,7 @@ this exact accepted package and its checksums.
 
 ## Implementation phases
 
-### 1. Add UAT names without removing legacy names
+### 1. Add UAT names without removing legacy names — implemented
 
 - Add `deploy/compose.uat.yml` with the same validated service topology.
 - Add `deploy/profiles/uat-stargate.env.example`.
@@ -169,4 +190,3 @@ After UAT acceptance:
 - Historical migration evidence retains the actual legacy filenames and project
   names, clearly labelled as legacy.
 - Operator commands distinguish deploy, verify, rollback, package, and publish.
-

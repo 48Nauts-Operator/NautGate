@@ -22,7 +22,7 @@ jobs:
       - name: Verify Homebrew resources
         run: uv run --project core python packaging/homebrew/gen_resources.py --check
       - name: Validate portable production Compose
-        run: just validate-production-compose
+        run: just validate-uat-compose
       - name: Test
         run: just test
 

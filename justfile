@@ -56,9 +56,23 @@ down:
 logs:
     docker compose -f deploy/docker-compose.yml logs -f
 
-# Validate the additive portable-production manifest without starting it.
+# Compatibility validation for the legacy migration manifest.
 validate-production-compose:
     docker compose --env-file deploy/profiles/stargate.env.example -f deploy/compose.production.yml config --quiet
+
+# Validate the Stargate UAT manifest without starting or changing services.
+validate-uat-compose:
+    docker compose --env-file deploy/profiles/uat-stargate.env.example -f deploy/compose.uat.yml config --quiet
+
+# Verify the currently running Stargate UAT stack and private dependencies.
+verify-uat:
+    scripts/verify-uat.sh
+
+uat-status:
+    NAUTGATE_LOCAL_PORT=8090 NAUTGATE_REMOTE_PORT=18090 scripts/nautgate-remote.sh status
+
+uat-logs:
+    scripts/nautgate-remote.sh logs
 
 # Validate the immutable image IDs captured for the prepared Stargate snapshot.
 validate-stargate-images:

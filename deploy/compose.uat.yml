@@ -1,13 +1,10 @@
-# Legacy migration manifest. Stargate uses this as UAT, not production.
-# New UAT work belongs in compose.uat.yml. Keep this file during the controlled
-# compatibility transition because the live project currently references it.
+# Stargate UAT stack. GitHub release publication is a separate operation.
 #
-# Always provide an explicit project name and env files, for example:
-#   docker compose --env-file deploy/.env \
-#     --env-file deploy/profiles/stargate.env \
-#     -f deploy/compose.production.yml config
+# Always supply the UAT profile explicitly:
+#   docker compose --env-file deploy/profiles/uat-stargate.env \
+#     -f deploy/compose.uat.yml config
 
-name: ${NAUTGATE_PROJECT_NAME:-nautgate-production}
+name: ${NAUTGATE_PROJECT_NAME:-nautgate-uat}
 
 services:
   nautgate-db:
@@ -92,4 +89,5 @@ volumes:
     name: ${NAUTGATE_DB_VOLUME:?set NAUTGATE_DB_VOLUME}
     external: true
   nautgate-backups:
-    name: ${NAUTGATE_BACKUP_VOLUME:-nautgate-production-backups}
+    name: ${NAUTGATE_BACKUP_VOLUME:-nautgate-uat-backups}
+

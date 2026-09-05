@@ -18,6 +18,7 @@ required=(
   NAUTGATE_ROUTER_IMAGE
   NAUTGATE_POSTGRES_IMAGE
   NAUTGATE_DB_VOLUME
+  LMSTUDIO_BASE_URL
   POSTGRES_PASSWORD
 )
 
@@ -31,6 +32,12 @@ for key in "${required[@]}"; do
     echo "OK: $key"
   fi
 done
+
+lmstudio_url=$(read_value LMSTUDIO_BASE_URL)
+if [[ -n "$lmstudio_url" && ! "$lmstudio_url" =~ ^https?://[^/[:space:]]+:[0-9]+/?$ ]]; then
+  echo "INVALID: LMSTUDIO_BASE_URL must be an http(s) origin with an explicit port" >&2
+  failed=1
+fi
 
 provider_found=0
 for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
@@ -49,4 +56,3 @@ if (( failed )); then
   exit 1
 fi
 echo "Deployment environment contains all required keys. Values were not printed."
-
