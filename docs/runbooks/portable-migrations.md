@@ -3,14 +3,11 @@
 **Purpose:** make host-to-host moves predictable, reversible, and progressively
 closer to zero downtime.
 
-**Current baseline (2026-09-03):** NautGate Core runs natively on the source
-Mac while PostgreSQL and NautRouter run in Docker. A prepared Stargate target
-exists at `/Users/sg1/DevHub_STG/factory/02-development/NautGate-staged` with
-the source commit, pinned local images, a validated Compose manifest, a
-point-in-time PostgreSQL restore, and no staged containers running.
-
-The prepared database is a snapshot, not a live replica. A cutover still needs
-a write pause and a final synchronization.
+**Current baseline (2026-09-05):** Stargate is the active NautGate UAT host.
+Core, PostgreSQL, and NautRouter run in Stargate Colima; Mac Studio clients use
+the stable `localhost:8090` endpoint through an SSH/Tailscale tunnel. The old
+source Core is stopped and the source database is retained temporarily for
+rollback. GitHub, not Stargate, is the production release channel.
 
 ## What the preparation taught us
 
@@ -30,7 +27,7 @@ a write pause and a final synchronization.
 
 | Improvement | Safe during this migration? | Cutover impact |
 | --- | --- | --- |
-| Maintain one production Compose stack for Core, Router, and PostgreSQL | Yes, prepare and validate while stopped | Start it only at cutover |
+| Maintain one UAT Compose stack for Core, Router, and PostgreSQL | Yes, prepare and validate while stopped | Start it only at cutover |
 | Keep clients on one stable local endpoint through a managed SSH tunnel | Yes, install disabled and test on alternate ports | Enable/change destination at cutover |
 | Separate client commands from server lifecycle commands | Yes, add commands without changing existing aliases | Point aliases at new commands at cutover |
 | Automate backup, transfer, restore, comparison, and rollback preparation | Yes, default to dry-run/preparation mode | Explicit cutover flag only |
@@ -49,7 +46,7 @@ The concrete inactive deployment profile is documented in
 The following work must not stop, restart, reconfigure, or redirect the current
 NautGate instance:
 
-1. Commit the production Compose and host override files.
+1. Commit the UAT Compose and host override files.
 2. Pin and record image digests.
 3. Add a migration command whose default behavior is preparation-only.
 4. Add an SSH-tunnel LaunchAgent in a disabled state and test it against the
@@ -83,7 +80,7 @@ own tested rollback paths.
 - Every image has a recorded immutable digest.
 - Backup archives have checksums and pass a full isolated restore.
 - Target row counts and schema checks match the backup snapshot.
-- Preparation publishes no production ports and redirects no clients.
+- Preparation publishes no externally reachable UAT ports and redirects no clients.
 - Cutover and rollback are explicit, separate commands.
 - Existing clients use a stable endpoint independent of the hosting machine.
 - The old source remains recoverable through the agreed rollback window.
