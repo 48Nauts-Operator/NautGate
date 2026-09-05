@@ -6854,6 +6854,7 @@
       <div class="obs-grid-main obs-band"><div class="obs-card"><div class="obs-card-head"><h3>Projects consuming tokens</h3><span class="hint">fresh input · selected window</span></div><table class="obs-table"><thead><tr><th>Project</th><th>Requests</th><th>Fresh</th><th>Cache</th><th>Risk</th></tr></thead><tbody>${projects.length?projects.map(p=>`<tr><td>${p.key==='(none)'?'<span class="obs-warn">Unattributed traffic</span>':esc(p.key||'unassigned')}</td><td>${obsN(p.calls)}</td><td>${obsN(p.prompt_tokens)}</td><td>${obsPct(cacheHit)}</td><td>${p.key==='(none)'?'<span class="obs-warn">missing project metadata</span>':Number(p.prompt_tokens)>fresh*.4?'<span class="obs-warn">watch</span>':'<span class="obs-good">clean</span>'}</td></tr>`).join(''):'<tr><td colspan="5" class="hint">No project traffic recorded.</td></tr>'}</tbody></table>${projects.some(p=>p.key==='(none)')?'<p class="hint">Calls were recorded, but their OAuth launch did not supply a project ID. NautGate cannot safely assign them to one of the configured projects after the fact.</p>':''}</div>
         <div class="obs-stack"><button type="button" class="obs-card obs-signal obs-clickable obs-lighthouse-signal" id="obs-open-lighthouse" title="Open Lighthouse in a new tab"><canvas id="obs-lh-score" width="72" height="72" aria-label="Lighthouse score ${lighthouse.overall??0} out of 100"></canvas><span><div class="obs-eyebrow">LIGHTHOUSE</div><small>${esc(lighthouse.verdict||'unavailable')}<br>${obsN(lighthouse.scanned_count)} scanned</small></span><small class="obs-link">↗</small></button><div class="obs-card obs-signal"><span><div class="obs-eyebrow">CONFIDENTIAL</div><div class="obs-big ${confidentialOnline?'obs-good':'obs-warn'}" style="font-size:24px">${confidentialOnline?'ONLINE':'OFFLINE'}</div></span><small>${confidentialOnline?`local-only · ${esc(conf.local_model||'local model')}`:'routing disabled'}</small></div><button type="button" class="obs-card obs-signal obs-clickable" id="obs-open-quality" title="Open Quality in a new tab"><span><div class="obs-eyebrow">QUALITY</div><div class="obs-big ${qualitySlop?'obs-warn':'obs-good'}" style="font-size:24px">${obsN(qualitySlop)} SLOP</div></span><small>${qualityAverage==null?`${obsN(qualityTotals.evaluations)} evaluated`:`${qualityAverage.toFixed(1)} / 5 · ${obsN(qualityTotals.evaluations)} evaluated`}${qualityOnline?` · ${qualitySampleRate}% sampling`:' · judge disabled'} ↗</small></button></div></div>
       <div id="obs-wide-chart" class="obs-wide-chart"></div>
+      <div id="obs-model-activity" class="obs-model-activity"></div>
       <div class="obs-session-zone">${renderObservatorySessions(sessions)}<div class="obs-session-side"><div class="obs-card"><div class="obs-card-head"><h3>Recent evidence</h3><button class="obs-ghost" data-obs-tab="drift">Open Drift →</button></div><div class="obs-row"><span>Now</span><b>Max Guard</b><span>${sessions.length?'Capacity observed':'No warning'}</span></div><div class="obs-row"><span>${obsWindow.hours===24?'24h':`${obsWindow.hours}h`}</span><b>Drift</b><span>${alerts.length?`${alerts.length} signals`:'Inside baseline'}</span></div></div><div class="obs-card"><h3>Model verdicts</h3><p class="hint">Evidence-backed best and worst performers.</p><button class="obs-ghost" data-obs-tab="modelhealth">Model Health →</button></div></div></div>`;
     root.querySelectorAll("[data-obs-tab]").forEach(b => b.addEventListener("click", () => activateTab(b.dataset.obsTab)));
     document.getElementById("obs-open-lighthouse")?.addEventListener("click", () => {
@@ -6878,6 +6879,7 @@
     document.getElementById("obs-sessions-page-size")?.addEventListener("change",e=>{obsSessionPageSize=Number(e.target.value)||15;sessionPage=0;reloadObservatoryAtSessions();});
     enhanceObservatoryTables(root);
     renderObservatoryWideChart(alerts);
+    renderObservatoryModelActivity();
     const stamp = document.getElementById("obs-updated"); if (stamp) stamp.textContent = `updated ${new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}`;
   }
 
@@ -6900,6 +6902,26 @@
       if(x.length<2){chart.innerHTML='<div class="v2-chart-fallback">Not enough traffic in this window.</div>';return;}
       NG.chart(chart,{type:"area",x,height:475,series:[{label:"requests",values,color:"#7C9BFF"},{label:"active drift alerts",values:driftValues,color:"#FF5C5C",fill:"rgba(255,92,92,0)"}],fmtY:v=>fmtNum(v),fmtX:v=>new Date(v*1000).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})});
     } catch(_e){chart.innerHTML='<div class="v2-chart-fallback">No traffic data.</div>';}
+  }
+
+  async function renderObservatoryModelActivity() {
+    const mount = document.getElementById("obs-model-activity"); if (!mount) return;
+    const body=NG.el("div"), chart=NG.el("div",{class:"v2-chart",html:'<p class="hint">loading live model activity…</p>'});
+    const states=NG.el("div",{class:"obs-activity-states"}); body.appendChild(chart); body.appendChild(states);
+    mount.innerHTML=""; mount.appendChild(NG.card({title:"Agent & model activity",meta:"concurrent work · last 60 minutes",body}));
+    try {
+      const data=await api("/v1/activity/models?minutes=60&bucket_minutes=1&agent_id=*");
+      const points=data.points||[], models=data.models||[];
+      const labels=[...new Set(points.map(p=>p.bucket))].sort();
+      const names=[...new Set(points.map(p=>p.model))];
+      const palette=["#7C9BFF","#C3CE1F","#B983FF","#45C4B0","#F59E0B","#FF7A90"];
+      chart.innerHTML="";
+      if(labels.length<2||!names.length) chart.innerHTML='<div class="v2-chart-fallback">No model activity in the last hour.</div>';
+      else NG.chart(chart,{type:"line",x:labels.map(v=>new Date(v).getTime()/1000),height:240,
+        series:names.slice(0,8).map((name,index)=>({label:shortModelName(name),color:palette[index%palette.length],values:labels.map(bucket=>Number(points.find(p=>p.bucket===bucket&&p.model===name)?.concurrent||0))})),
+        fmtY:v=>String(Math.round(v)),fmtX:v=>new Date(v*1000).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})});
+      states.innerHTML=models.slice(0,10).map(m=>`<span class="obs-activity-state ${esc(m.state)}"><i></i><b>${esc(shortModelName(m.model))}</b><small>${m.inflight?`${m.inflight} in flight`:m.state==='recent'?'completed recently':`last ${fmtAgo(m.last_started_at)}`}</small></span>`).join("")||'<span class="hint">No models observed in 24 hours.</span>';
+    } catch(e){chart.innerHTML=`<div class="v2-chart-fallback">Activity unavailable: ${esc(e.message||e)}</div>`;}
   }
 
   function renderObservatorySessions(guardSessions) {

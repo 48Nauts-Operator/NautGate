@@ -2308,6 +2308,33 @@ async def safeguards_summary(request: Request) -> Response:
     )
 
 
+@router.get("/activity/models")
+async def model_activity(request: Request) -> Response:
+    """Model concurrency and liveness for the Summary activity chart."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    caller = await authenticate(pool, request)
+    target = request.query_params.get("agent_id", "").strip() or caller
+    try:
+        minutes = int(request.query_params.get("minutes", "60"))
+        bucket_minutes = int(request.query_params.get("bucket_minutes", "1"))
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="minutes and bucket_minutes must be integers"
+        ) from None
+    if minutes < 15 or minutes > 1440:
+        raise HTTPException(status_code=400, detail="minutes must be in 15..1440")
+    if bucket_minutes < 1 or bucket_minutes > 60 or bucket_minutes > minutes:
+        raise HTTPException(status_code=400, detail="invalid bucket_minutes")
+    data = await queries.get_model_activity(
+        pool, agent_id=target, minutes=minutes, bucket_minutes=bucket_minutes
+    )
+    return JSONResponse(
+        {"agent_id": target, "minutes": minutes, "bucket_minutes": bucket_minutes, **data}
+    )
+
+
 @router.get("/safeguards/events")
 async def safeguards_events(request: Request) -> Response:
     pool, _, target = await _safeguard_scope(request)

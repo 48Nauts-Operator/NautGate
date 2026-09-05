@@ -1562,6 +1562,89 @@ async def get_safeguard_patterns(pool: asyncpg.Pool, *, agent_id: str, hours: in
     }
 
 
+async def get_model_activity(
+    pool: asyncpg.Pool, *, agent_id: str, minutes: int, bucket_minutes: int
+) -> dict:
+    """Concurrent model work over time plus present liveness state.
+
+    A decision without an outcome is in-flight. Completed calls occupy every
+    bucket overlapped by decision start and outcome completion, which makes
+    long-running/background work visible instead of merely counting starts.
+    """
+    points = await pool.fetch(
+        """
+        WITH buckets AS (
+            SELECT generate_series(
+                date_trunc('minute', NOW() - make_interval(mins => $2)),
+                date_trunc('minute', NOW()),
+                make_interval(mins => $3)
+            ) AS bucket
+        ), calls AS (
+            SELECT d.id, d.ts AS started_at,
+                   COALESCE(o.ts, NOW()) AS ended_at,
+                   COALESCE(o.actual_model, d.decision_model, 'unknown') AS model
+              FROM nautgate.route_decisions d
+              LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+             WHERE ($1::text = '*' OR d.agent_id = $1)
+               AND d.ts >= NOW() - make_interval(mins => $2)
+        )
+        SELECT b.bucket, c.model, COUNT(c.id) AS concurrent
+          FROM buckets b
+          LEFT JOIN calls c
+            ON c.started_at < b.bucket + make_interval(mins => $3)
+           AND c.ended_at >= b.bucket
+         GROUP BY b.bucket, c.model
+         ORDER BY b.bucket, c.model
+        """,
+        agent_id,
+        minutes,
+        bucket_minutes,
+    )
+    states = await pool.fetch(
+        """
+        WITH ranked AS (
+            SELECT COALESCE(o.actual_model, d.decision_model, 'unknown') AS model,
+                   MAX(d.ts) AS last_started_at,
+                   MAX(o.ts) AS last_completed_at,
+                   COUNT(*) FILTER (WHERE o.decision_id IS NULL) AS inflight,
+                   COUNT(*) FILTER (WHERE o.status_code >= 400) AS failed
+              FROM nautgate.route_decisions d
+              LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+             WHERE ($1::text = '*' OR d.agent_id = $1)
+               AND d.ts >= NOW() - INTERVAL '24 hours'
+             GROUP BY 1
+        )
+        SELECT model, last_started_at, last_completed_at, inflight, failed,
+               CASE
+                   WHEN inflight > 0 AND last_started_at >= NOW() - INTERVAL '15 minutes' THEN 'active'
+                   WHEN inflight > 0 THEN 'stale'
+                   WHEN last_completed_at >= NOW() - INTERVAL '5 minutes' THEN 'recent'
+                   ELSE 'idle'
+               END AS state
+          FROM ranked
+         ORDER BY inflight DESC, last_started_at DESC
+        """,
+        agent_id,
+    )
+    out_points = []
+    for row in points:
+        item = dict(row)
+        item["bucket"] = item["bucket"].isoformat()
+        item["concurrent"] = int(item["concurrent"] or 0)
+        if item.get("model") is not None:
+            out_points.append(item)
+    out_states = []
+    for row in states:
+        item = dict(row)
+        for key in ("last_started_at", "last_completed_at"):
+            if item.get(key):
+                item[key] = item[key].isoformat()
+        item["inflight"] = int(item["inflight"] or 0)
+        item["failed"] = int(item["failed"] or 0)
+        out_states.append(item)
+    return {"points": out_points, "models": out_states}
+
+
 async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
     """Aggregate stats over recent route_decisions + route_outcomes for one agent.
 

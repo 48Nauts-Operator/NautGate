@@ -42,6 +42,10 @@ async def safeguard_app(monkeypatch):
     async def patterns(pool, *, agent_id, hours):
         return {"models": [], "interpretation": "leads only"}
 
+    async def activity(pool, *, agent_id, minutes, bucket_minutes):
+        calls["activity"] = (agent_id, minutes, bucket_minutes)
+        return {"points": [], "models": []}
+
     async def explain(pool, *, agent_id, decision_id):
         calls["explain"] = (agent_id, decision_id)
         return {"decision_id": decision_id, "provider_confirmed_safeguard": True}
@@ -54,6 +58,7 @@ async def safeguard_app(monkeypatch):
     monkeypatch.setattr("app.routes.v1.queries.get_safeguard_summary", summary)
     monkeypatch.setattr("app.routes.v1.queries.get_safeguard_events", events)
     monkeypatch.setattr("app.routes.v1.queries.get_safeguard_patterns", patterns)
+    monkeypatch.setattr("app.routes.v1.queries.get_model_activity", activity)
     monkeypatch.setattr("app.routes.v1.queries.explain_model_choice", explain)
     monkeypatch.setattr("app.routes.v1.queries.create_safeguard_review", review)
     from app.main import create_app
@@ -99,6 +104,20 @@ async def test_explanation_and_review(safeguard_app):
     assert review.status_code == 201
     assert calls["review"]["agent_id"] == "alice"
     assert calls["review"]["reviewer_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_model_activity_supports_all_agent_summary(safeguard_app):
+    app, calls = safeguard_app
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/v1/activity/models?minutes=120&bucket_minutes=5&agent_id=*",
+            headers={"Authorization": "Bearer ng_test"},
+        )
+    assert response.status_code == 200
+    assert calls["activity"] == ("*", 120, 5)
 
 
 @pytest.mark.asyncio
