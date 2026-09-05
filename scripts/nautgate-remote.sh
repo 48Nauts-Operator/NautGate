@@ -4,7 +4,9 @@ set -euo pipefail
 
 remote_host=${NAUTGATE_REMOTE_HOST:-stargate}
 remote_dir=${NAUTGATE_REMOTE_DIR:-/Users/sg1/DevHub_STG/factory/02-development/NautGate-staged}
-compose_file=${NAUTGATE_REMOTE_COMPOSE:-compose.migration.yml}
+compose_file=${NAUTGATE_REMOTE_COMPOSE:-deploy/compose.production.yml}
+compose_env=${NAUTGATE_REMOTE_ENV:-deploy/profiles/stargate.env}
+compose_project=${NAUTGATE_REMOTE_PROJECT:-nautgate-stargate}
 remote_port=${NAUTGATE_REMOTE_PORT:-18090}
 local_port=${NAUTGATE_LOCAL_PORT:-18091}
 control_socket=${NAUTGATE_TUNNEL_SOCKET:-$HOME/.ssh/nautgate-stargate.sock}
@@ -19,7 +21,7 @@ EOF
 }
 
 remote_compose() {
-  ssh "$remote_host" "export PATH=/opt/homebrew/bin:\$PATH; cd '$remote_dir'; docker compose -f '$compose_file' $*"
+  ssh "$remote_host" "export PATH=/opt/homebrew/bin:\$PATH; cd '$remote_dir'; docker compose --env-file '$compose_env' -p '$compose_project' -f '$compose_file' $*"
 }
 
 case ${1:-status} in
@@ -64,4 +66,3 @@ case ${1:-status} in
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
-
