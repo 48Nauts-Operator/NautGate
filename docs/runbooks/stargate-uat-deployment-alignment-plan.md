@@ -23,11 +23,18 @@ Completed without live impact on 2026-09-05:
 - Added a read-only verifier covering Core, Router, database readiness, and LM
   Studio reachability from both application containers.
 - Moved CI Compose validation to the UAT manifest.
+- Applied the LM Studio MagicDNS endpoint to the private legacy UAT profile and
+  recreated only Core and NautRouter. PostgreSQL remained running and healthy.
+- Verified LM Studio inference over the new endpoint with HTTP 200. The first
+  bounded 12-token smoke exhausted its completion budget on model reasoning and
+  therefore produced no visible answer; its audit row confirms the successful
+  local-model transport.
 
 Pending controlled changes:
 
 - Install the private `uat-stargate.env` on Stargate.
-- Apply the stable LM Studio MagicDNS endpoint to the running Core and Router.
+- Explicitly decide whether to enable the currently disabled confidential
+  routing policy after its local transport has been verified.
 - Transition the running Compose project name in a maintenance window.
 - Implement package deployment, rollback, and exact-artifact GitHub promotion.
 
