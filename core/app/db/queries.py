@@ -1344,6 +1344,8 @@ def _models_differ(decision_model: str | None, actual_model: str | None) -> bool
     """Compare provider-qualified route names with provider-reported model IDs."""
     if not actual_model:
         return False
+    if decision_model and decision_model.rsplit("/", 1)[-1] == "auto":
+        return False
     unqualified_decision = decision_model.split("/", 1)[-1] if decision_model else None
     return actual_model not in {decision_model, unqualified_decision}
 
@@ -1356,6 +1358,7 @@ async def get_safeguard_summary(pool: asyncpg.Pool, *, agent_id: str, hours: int
                COUNT(se.decision_id) AS confirmed_events,
                COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL) AS model_observed,
                COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL
+                                  AND d.decision_model !~ '(^|/)auto$'
                                   AND o.actual_model IS DISTINCT FROM d.decision_model
                                   AND o.actual_model IS DISTINCT FROM
                                       regexp_replace(d.decision_model, '^[^/]+/', '')) AS substitutions,
@@ -1500,6 +1503,7 @@ async def get_safeguard_patterns(pool: asyncpg.Pool, *, agent_id: str, hours: in
                COUNT(so.decision_id) AS inspected,
                COUNT(se.decision_id) AS confirmed,
                COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL
+                                  AND d.decision_model !~ '(^|/)auto$'
                                   AND o.actual_model IS DISTINCT FROM d.decision_model
                                   AND o.actual_model IS DISTINCT FROM
                                       regexp_replace(d.decision_model, '^[^/]+/', '')) AS substitutions,
