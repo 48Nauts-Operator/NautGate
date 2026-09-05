@@ -1340,6 +1340,14 @@ def _json_value(value):
     return value
 
 
+def _models_differ(decision_model: str | None, actual_model: str | None) -> bool:
+    """Compare provider-qualified route names with provider-reported model IDs."""
+    if not actual_model:
+        return False
+    unqualified_decision = decision_model.split("/", 1)[-1] if decision_model else None
+    return actual_model not in {decision_model, unqualified_decision}
+
+
 async def get_safeguard_summary(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
     row = await pool.fetchrow(
         """
@@ -1348,7 +1356,9 @@ async def get_safeguard_summary(pool: asyncpg.Pool, *, agent_id: str, hours: int
                COUNT(se.decision_id) AS confirmed_events,
                COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL) AS model_observed,
                COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL
-                                  AND o.actual_model IS DISTINCT FROM d.decision_model) AS substitutions,
+                                  AND o.actual_model IS DISTINCT FROM d.decision_model
+                                  AND o.actual_model IS DISTINCT FROM
+                                      regexp_replace(d.decision_model, '^[^/]+/', '')) AS substitutions,
                COUNT(*) FILTER (WHERE o.response_body IS NOT NULL) AS retained_responses
           FROM nautgate.route_decisions d
           LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
@@ -1441,9 +1451,7 @@ async def explain_model_choice(
     for key in ("fallback_chain", "stop_details", "fallback_blocks", "usage_iterations"):
         item[key] = _json_value(item.get(key))
     item["provider_confirmed_safeguard"] = bool(item.get("evidence_level"))
-    item["model_substituted"] = bool(
-        item.get("actual_model") and item.get("actual_model") != item.get("decision_model")
-    )
+    item["model_substituted"] = _models_differ(item.get("decision_model"), item.get("actual_model"))
     return item
 
 
@@ -1492,7 +1500,9 @@ async def get_safeguard_patterns(pool: asyncpg.Pool, *, agent_id: str, hours: in
                COUNT(so.decision_id) AS inspected,
                COUNT(se.decision_id) AS confirmed,
                COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL
-                                  AND o.actual_model IS DISTINCT FROM d.decision_model) AS substitutions,
+                                  AND o.actual_model IS DISTINCT FROM d.decision_model
+                                  AND o.actual_model IS DISTINCT FROM
+                                      regexp_replace(d.decision_model, '^[^/]+/', '')) AS substitutions,
                COUNT(so.decision_id) FILTER (
                    WHERE d.ts >= NOW() - make_interval(hours => $3)) AS recent_inspected,
                COUNT(se.decision_id) FILTER (

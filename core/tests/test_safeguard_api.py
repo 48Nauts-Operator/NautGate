@@ -7,6 +7,14 @@ import httpx
 import pytest
 from asgi_lifespan import LifespanManager
 
+from app.db.queries import _models_differ
+
+
+def test_provider_qualified_model_is_not_a_substitution():
+    assert not _models_differ("lmstudio/qwen3.8-27b-mlx", "qwen3.8-27b-mlx")
+    assert not _models_differ("claude-opus-5", "claude-opus-5")
+    assert _models_differ("anthropic/claude-fable-5-1", "claude-opus-5")
+
 
 @pytest.fixture
 async def safeguard_app(monkeypatch):
