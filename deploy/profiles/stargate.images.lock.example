@@ -1,0 +1,9 @@
+# Expected Docker image IDs for the prepared 2026-09-03 snapshot. Regenerate
+# this lock whenever an image is rebuilt or retagged; validation compares IDs
+# without pulling or restarting anything.
+NAUTGATE_CORE_IMAGE=nautgate-staged-core:0.5.1
+NAUTGATE_CORE_IMAGE_ID=sha256:6678d3201d7be694ba5be95b84036004a78505d0cd20794519f37a73c7ca24d4
+NAUTGATE_ROUTER_IMAGE=nautrouter:1.0.0
+NAUTGATE_ROUTER_IMAGE_ID=sha256:e61aecae4977cb757ef77a9996c287c087791dac9ed57bd42fab723b48c27748
+NAUTGATE_POSTGRES_IMAGE=postgres:16
+NAUTGATE_POSTGRES_IMAGE_ID=sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20

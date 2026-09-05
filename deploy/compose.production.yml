@@ -1,0 +1,93 @@
+# Portable production stack. This file is additive: it does not replace the
+# local development or published-install Compose files.
+#
+# Always provide an explicit project name and env files, for example:
+#   docker compose --env-file deploy/.env \
+#     --env-file deploy/profiles/stargate.env \
+#     -f deploy/compose.production.yml config
+
+name: ${NAUTGATE_PROJECT_NAME:-nautgate-production}
+
+services:
+  nautgate-db:
+    image: ${NAUTGATE_POSTGRES_IMAGE:?set NAUTGATE_POSTGRES_IMAGE}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nautgate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-nautgate}
+    volumes:
+      - nautgate-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nautgate} -d ${POSTGRES_DB:-nautgate}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: ${NAUTGATE_DB_MEMORY_LIMIT:-1536m}
+    cpus: ${NAUTGATE_DB_CPU_LIMIT:-2.0}
+
+  nautrouter:
+    image: ${NAUTGATE_ROUTER_IMAGE:?set NAUTGATE_ROUTER_IMAGE}
+    environment:
+      NAUT_PORT: "8404"
+      NAUT_WS_PORT: "8403"
+      NAUT_PROFILE: ${NAUTGATE_PROFILE:-auto}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LMSTUDIO_URL: ${LMSTUDIO_BASE_URL:-}
+      MEMORY_API: ${MEMORY_API:-}
+    ports:
+      - "127.0.0.1:${NAUTGATE_ROUTER_HOST_PORT:-18404}:8404"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8404/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: ${NAUTGATE_ROUTER_MEMORY_LIMIT:-512m}
+    cpus: ${NAUTGATE_ROUTER_CPU_LIMIT:-1.0}
+
+  nautgate-core:
+    image: ${NAUTGATE_CORE_IMAGE:?set NAUTGATE_CORE_IMAGE}
+    depends_on:
+      nautgate-db:
+        condition: service_healthy
+      nautrouter:
+        condition: service_healthy
+    environment:
+      NAUTGATE_DB_URL: postgres://${POSTGRES_USER:-nautgate}:${POSTGRES_PASSWORD}@nautgate-db:5432/${POSTGRES_DB:-nautgate}
+      NAUTGATE_LISTEN_HOST: 0.0.0.0
+      NAUTGATE_LISTEN_PORT: "8090"
+      NAUTGATE_LOG_LEVEL: ${NAUTGATE_LOG_LEVEL:-INFO}
+      NAUTGATE_PROFILE: ${NAUTGATE_PROFILE:-auto}
+      NAUTROUTER_BASE_URL: http://nautrouter:8404
+      NAUTGATE_MASTER_KEY: ${NAUTGATE_MASTER_KEY:-}
+      NAUTGATE_INGEST_TOKEN: ${NAUTGATE_INGEST_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - nautgate-backups:/root/.nautgate/backups
+    ports:
+      - "127.0.0.1:${NAUTGATE_CORE_HOST_PORT:-18090}:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/health', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    mem_limit: ${NAUTGATE_CORE_MEMORY_LIMIT:-1024m}
+    cpus: ${NAUTGATE_CORE_CPU_LIMIT:-2.0}
+
+volumes:
+  nautgate-db-data:
+    name: ${NAUTGATE_DB_VOLUME:?set NAUTGATE_DB_VOLUME}
+    external: true
+  nautgate-backups:
+    name: ${NAUTGATE_BACKUP_VOLUME:-nautgate-production-backups}
+

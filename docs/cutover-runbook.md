@@ -1,5 +1,9 @@
 # Flow Proxy → NautGate cutover runbook
 
+> For host-to-host portability, migration preparation boundaries, and the
+> associated hardening backlog, see
+> [Portable NautGate migrations](runbooks/portable-migrations.md).
+
 **Audience:** the operator (Andre) flipping the MacBook hooks from
 `flow-proxy` (port 4002) to NautGate (port 8090).
 

@@ -56,6 +56,14 @@ down:
 logs:
     docker compose -f deploy/docker-compose.yml logs -f
 
+# Validate the additive portable-production manifest without starting it.
+validate-production-compose:
+    docker compose --env-file deploy/profiles/stargate.env.example -f deploy/compose.production.yml config --quiet
+
+# Validate the immutable image IDs captured for the prepared Stargate snapshot.
+validate-stargate-images:
+    scripts/validate-image-lock.sh deploy/profiles/stargate.images.lock.example
+
 # --- DB ---
 
 psql:
