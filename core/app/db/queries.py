@@ -122,6 +122,7 @@ async def write_outcome(
     notional_cost_usd: float | None = None,
     rate_limited_429: bool = False,
     upstream_overload_retries: int = 0,
+    safeguard_evidence: dict | None = None,
     evidence: dict | None = None,
 ) -> None:
     tool_calls_json = json.dumps(tool_calls_made) if tool_calls_made else None
@@ -183,6 +184,25 @@ async def write_outcome(
             )
             if decision_row is None:
                 raise RuntimeError(f"route decision disappeared before outcome: {decision_id}")
+            if safeguard_evidence:
+                await conn.execute(
+                    """
+                    INSERT INTO nautgate.safeguard_events
+                        (decision_id, extractor_version, evidence_level, stop_reason,
+                         stop_details, served_model, fallback_blocks, usage_iterations, evidence)
+                    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9::jsonb)
+                    ON CONFLICT (decision_id) DO NOTHING
+                    """,
+                    decision_id,
+                    safeguard_evidence.get("extractor_version", "unknown"),
+                    safeguard_evidence.get("evidence_level", "insufficient"),
+                    safeguard_evidence.get("stop_reason"),
+                    json.dumps(safeguard_evidence.get("stop_details")),
+                    safeguard_evidence.get("served_model"),
+                    json.dumps(safeguard_evidence.get("fallback_blocks") or []),
+                    json.dumps(safeguard_evidence.get("usage_iterations") or []),
+                    json.dumps(safeguard_evidence),
+                )
             # A row counter, unlike nextval(), rolls back with this transaction.
             # Evidence sequence numbers therefore describe committed receipts
             # without manufacturing gaps after a failed outcome write.

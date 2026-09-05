@@ -176,3 +176,46 @@ async def test_caller_allocated_receipt_id_is_preserved_transactionally():
 
     assert conn.execute.await_args_list[0].args[1] == receipt_id
     assert conn.execute.await_args_list[1].args[1] == receipt_id
+
+
+@pytest.mark.asyncio
+async def test_safeguard_evidence_is_inserted_in_outcome_transaction():
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(side_effect=[{"ts": _outcome()["ts"]}, _decision()])
+    conn.fetchval = AsyncMock(return_value=8)
+    conn.execute = AsyncMock()
+    transaction = conn.transaction.return_value
+    transaction.__aenter__ = AsyncMock(return_value=None)
+    transaction.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    acquired = pool.acquire.return_value
+    acquired.__aenter__ = AsyncMock(return_value=conn)
+    acquired.__aexit__ = AsyncMock(return_value=None)
+
+    await queries.write_outcome(
+        pool,
+        decision_id=_decision()["id"],
+        status_code=200,
+        duration_ms=1,
+        safeguard_evidence={
+            "extractor_version": "safeguard-v1",
+            "evidence_level": "provider_confirmed",
+            "stop_reason": "refusal",
+            "stop_details": {"category": "cybersecurity"},
+            "served_model": "claude-opus-4-8",
+            "fallback_blocks": [],
+            "usage_iterations": [],
+        },
+    )
+
+    assert conn.execute.await_count == 3
+    safeguard_insert = conn.execute.await_args_list[0].args
+    assert "INSERT INTO nautgate.safeguard_events" in safeguard_insert[0]
+    assert safeguard_insert[1] == _decision()["id"]
+    assert safeguard_insert[2:5] == (
+        "safeguard-v1",
+        "provider_confirmed",
+        "refusal",
+    )
+    assert "INSERT INTO nautgate.audit_receipts" in conn.execute.await_args_list[1].args[0]
+    assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[2].args[0]

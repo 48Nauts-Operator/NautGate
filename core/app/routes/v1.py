@@ -37,6 +37,7 @@ from app.formats import anthropic as ant
 from app.formats import openai_responses as resp_fmt
 from app.outcome import persist_outcome
 from app.provider_health import upsert_health
+from app.safeguard import extract_safeguard_evidence
 from app.scoring import resolve_healthy, score, to_tier
 from app.streaming import ACCUMULATOR_CAP_BYTES_DEFAULT, StreamCapture, parse_sse_for_outcome
 from app.usage import cache_marker_topology, cache_prefix_hash, normalize_usage
@@ -798,6 +799,9 @@ async def _process_chat_request(
         actual_model=actual_model,
         actual_provider=actual_provider,
         notional_cost_usd=notional_cost_usd,
+        safeguard_evidence=(
+            extract_safeguard_evidence([upstream_resp]) if isinstance(upstream_resp, dict) else None
+        ),
         evidence={
             **evidence,
             "response_sha256": response_sha256,
@@ -1076,6 +1080,7 @@ def _streaming_response(
                     tool_calls_made=stream_tool_calls,
                     actual_model=parsed.get("actual_model"),
                     actual_provider=parsed.get("actual_provider"),
+                    safeguard_evidence=parsed.get("safeguard_evidence"),
                     evidence={
                         **(evidence or {}),
                         "response_sha256": hashlib.sha256(bytes(capture.accumulator)).hexdigest(),

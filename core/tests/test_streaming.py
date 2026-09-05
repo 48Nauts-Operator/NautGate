@@ -151,6 +151,61 @@ def test_parse_anthropic_stream():
     assert out["was_empty"] is False
 
 
+def test_parse_anthropic_stream_preserves_safeguard_evidence():
+    buf = b"".join(
+        [
+            _ev(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-fable-5-1",
+                        "usage": {"input_tokens": 10},
+                    },
+                }
+            ),
+            _ev(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "fallback",
+                        "from_model": "claude-fable-5-1",
+                        "to": {"model": "claude-opus-4-8"},
+                    },
+                }
+            ),
+            _ev(
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "refusal",
+                        "stop_details": {
+                            "category": "cybersecurity",
+                            "recommended_model": "claude-opus-4-8",
+                        },
+                    },
+                    "usage": {
+                        "output_tokens": 0,
+                        "iterations": [
+                            {
+                                "type": "fallback_message",
+                                "model": "claude-fable-5-1",
+                                "stop_reason": "refusal",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+    )
+
+    evidence = parse_sse_for_outcome(buf)["safeguard_evidence"]
+
+    assert evidence["evidence_level"] == "provider_confirmed"
+    assert evidence["stop_details"]["category"] == "cybersecurity"
+    assert evidence["fallback_blocks"][0]["to_model"] == "claude-opus-4-8"
+
+
 def test_parse_stream_retains_provider_error():
     buf = (
         b"event: error\n"

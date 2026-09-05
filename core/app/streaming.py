@@ -13,6 +13,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.safeguard import extract_safeguard_evidence
+
 ACCUMULATOR_CAP_BYTES_DEFAULT = 8 * 1024 * 1024  # 8 MB — Tech Paper §11.3
 
 
@@ -108,6 +110,7 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     tool_calls_acc: dict[int, dict] = {}
     # Anthropic content-block index → tool name/id captured at block start.
     anthropic_blocks: dict[int, dict] = {}
+    safeguard_payloads: list[dict[str, Any]] = []
 
     for _event_type, data in _iter_sse_events(buf):
         if data == "[DONE]":
@@ -116,6 +119,8 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
             payload = json.loads(data)
         except json.JSONDecodeError:
             continue
+        if isinstance(payload, dict):
+            safeguard_payloads.append(payload)
 
         if isinstance(payload.get("error"), dict):
             provider_error = payload["error"]
@@ -250,4 +255,5 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         "actual_model": actual_model,
         "actual_provider": actual_provider,
         "provider_error": provider_error,
+        "safeguard_evidence": extract_safeguard_evidence(safeguard_payloads),
     }

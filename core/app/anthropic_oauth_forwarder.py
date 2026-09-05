@@ -39,6 +39,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.audit_receipt import content_hash
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
+from app.safeguard import extract_safeguard_evidence
 from app.streaming import parse_sse_for_outcome
 from app.usage import cache_prefix_hash, normalize_usage
 
@@ -260,6 +261,7 @@ def _parse_response_meta(body_bytes: bytes, was_streaming: bool) -> dict:
                     }
                 )
     n = normalize_usage(usage, provider_hint="anthropic")
+    safeguard_evidence = extract_safeguard_evidence([payload])
     return {
         "prompt_tokens": n.prompt_tokens,
         "completion_tokens": n.completion_tokens,
@@ -268,6 +270,9 @@ def _parse_response_meta(body_bytes: bytes, was_streaming: bool) -> dict:
         "cache_write_tokens": n.cache_write_tokens,
         "tool_calls": tool_calls,
         "assembled_content": "".join(text_parts),
+        "actual_model": payload.get("model"),
+        "finish_reason": payload.get("stop_reason"),
+        "safeguard_evidence": safeguard_evidence,
     }
 
 
@@ -613,6 +618,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         notional_cost_usd=notional,
                         rate_limited_429=was_rate_limited,
                         upstream_overload_retries=overload_retries,
+                        safeguard_evidence=meta.get("safeguard_evidence"),
                         response_body=response_captured.body,
                         response_body_truncated_at_byte=response_captured.truncated_at_byte,
                         response_size_bytes=len(body_buf),
