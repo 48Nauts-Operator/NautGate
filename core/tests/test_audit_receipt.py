@@ -140,15 +140,16 @@ async def test_outcome_receipt_and_outbox_share_one_transaction():
     assert conn.fetchrow.await_count == 2  # outcome RETURNING + joined decision
     assert conn.fetchval.await_count == 1  # transactional, gapless evidence sequence
     assert "UPDATE nautgate.audit_state" in conn.fetchval.await_args.args[0]
-    assert conn.execute.await_count == 2  # receipt + outbox
-    receipt_insert = conn.execute.await_args_list[0].args
+    assert conn.execute.await_count == 3  # safeguard observation + receipt + outbox
+    assert "INSERT INTO nautgate.safeguard_observations" in conn.execute.await_args_list[0].args[0]
+    receipt_insert = conn.execute.await_args_list[1].args
     assert "INSERT INTO nautgate.audit_receipts" in receipt_insert[0]
     assert receipt_insert[3] == 42
     assert (
         bytes(receipt_insert[7]).hex()
         == receipt_hash(__import__("json").loads(receipt_insert[5])).hex()
     )
-    assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[1].args[0]
+    assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[2].args[0]
 
 
 @pytest.mark.asyncio
@@ -174,8 +175,8 @@ async def test_caller_allocated_receipt_id_is_preserved_transactionally():
         evidence={"receipt_id": str(receipt_id)},
     )
 
-    assert conn.execute.await_args_list[0].args[1] == receipt_id
     assert conn.execute.await_args_list[1].args[1] == receipt_id
+    assert conn.execute.await_args_list[2].args[1] == receipt_id
 
 
 @pytest.mark.asyncio
@@ -208,8 +209,11 @@ async def test_safeguard_evidence_is_inserted_in_outcome_transaction():
         },
     )
 
-    assert conn.execute.await_count == 3
-    safeguard_insert = conn.execute.await_args_list[0].args
+    assert conn.execute.await_count == 4
+    observation_insert = conn.execute.await_args_list[0].args
+    assert "INSERT INTO nautgate.safeguard_observations" in observation_insert[0]
+    assert observation_insert[3] is True
+    safeguard_insert = conn.execute.await_args_list[1].args
     assert "INSERT INTO nautgate.safeguard_events" in safeguard_insert[0]
     assert safeguard_insert[1] == _decision()["id"]
     assert safeguard_insert[2:5] == (
@@ -217,5 +221,5 @@ async def test_safeguard_evidence_is_inserted_in_outcome_transaction():
         "provider_confirmed",
         "refusal",
     )
-    assert "INSERT INTO nautgate.audit_receipts" in conn.execute.await_args_list[1].args[0]
-    assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[2].args[0]
+    assert "INSERT INTO nautgate.audit_receipts" in conn.execute.await_args_list[2].args[0]
+    assert "INSERT INTO nautgate.audit_outbox" in conn.execute.await_args_list[3].args[0]

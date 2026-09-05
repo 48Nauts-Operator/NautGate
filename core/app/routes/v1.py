@@ -2276,6 +2276,125 @@ async def decisions_recent(request: Request) -> Response:
     )
 
 
+def _safeguard_window(request: Request) -> int:
+    try:
+        hours = int(request.query_params.get("hours", "168"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="hours must be an integer") from None
+    if hours < 1 or hours > 8760:
+        raise HTTPException(status_code=400, detail="hours must be in 1..8760")
+    return hours
+
+
+async def _safeguard_scope(request: Request) -> tuple[object, str, str]:
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    caller = await authenticate(pool, request)
+    target = request.query_params.get("agent_id", "").strip() or caller
+    return pool, caller, target
+
+
+@router.get("/safeguards/summary")
+async def safeguards_summary(request: Request) -> Response:
+    pool, _, target = await _safeguard_scope(request)
+    hours = _safeguard_window(request)
+    return JSONResponse(
+        {
+            "agent_id": target,
+            "hours": hours,
+            **await queries.get_safeguard_summary(pool, agent_id=target, hours=hours),
+        }
+    )
+
+
+@router.get("/safeguards/events")
+async def safeguards_events(request: Request) -> Response:
+    pool, _, target = await _safeguard_scope(request)
+    hours = _safeguard_window(request)
+    try:
+        limit = int(request.query_params.get("limit", "100"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit must be an integer") from None
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be in 1..500")
+    rows = await queries.get_safeguard_events(pool, agent_id=target, hours=hours, limit=limit)
+    return JSONResponse({"agent_id": target, "hours": hours, "data": rows})
+
+
+@router.get("/safeguards/patterns")
+async def safeguards_patterns(request: Request) -> Response:
+    pool, _, target = await _safeguard_scope(request)
+    hours = _safeguard_window(request)
+    return JSONResponse(
+        {
+            "agent_id": target,
+            "hours": hours,
+            **await queries.get_safeguard_patterns(pool, agent_id=target, hours=hours),
+        }
+    )
+
+
+@router.get("/safeguards/decisions/{decision_id}/explanation")
+async def safeguard_explanation(decision_id: str, request: Request) -> Response:
+    pool, _, target = await _safeguard_scope(request)
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+    row = await queries.explain_model_choice(pool, agent_id=target, decision_id=decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse(row)
+
+
+_SAFEGUARD_DISPOSITIONS = {
+    "expected_safeguard",
+    "likely_false_positive",
+    "inconsistent_behavior",
+    "unexplained_substitution",
+    "billing_discrepancy",
+    "needs_investigation",
+    "insufficient_evidence",
+}
+
+
+@router.post("/safeguards/decisions/{decision_id}/reviews")
+async def safeguard_review(decision_id: str, request: Request) -> Response:
+    pool, caller, target = await _safeguard_scope(request)
+    try:
+        uuid.UUID(decision_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad decision_id") from None
+    body = await request.json()
+    disposition = str(body.get("disposition", ""))
+    confidence = str(body.get("confidence", ""))
+    reason_codes = body.get("reason_codes") or []
+    notes = body.get("notes")
+    if disposition not in _SAFEGUARD_DISPOSITIONS:
+        raise HTTPException(status_code=400, detail="invalid disposition")
+    if confidence not in {"low", "medium", "high"}:
+        raise HTTPException(status_code=400, detail="invalid confidence")
+    if not isinstance(reason_codes, list) or len(reason_codes) > 20:
+        raise HTTPException(status_code=400, detail="reason_codes must be a list of at most 20")
+    reason_codes = [str(code)[:80] for code in reason_codes]
+    if notes is not None:
+        notes = str(notes).strip()[:2000] or None
+    row = await queries.create_safeguard_review(
+        pool,
+        decision_id=decision_id,
+        agent_id=target,
+        reviewer_id=caller,
+        disposition=disposition,
+        confidence=confidence,
+        reason_codes=reason_codes,
+        notes=notes,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="safeguard_event_not_found")
+    return JSONResponse(row, status_code=201)
+
+
 @router.get("/agents/discovered")
 async def agents_discovered(request: Request) -> Response:
     """List of agent/session pairs that have produced traffic recently.

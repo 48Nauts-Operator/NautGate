@@ -184,6 +184,19 @@ async def write_outcome(
             )
             if decision_row is None:
                 raise RuntimeError(f"route decision disappeared before outcome: {decision_id}")
+            await conn.execute(
+                """
+                INSERT INTO nautgate.safeguard_observations
+                    (decision_id, extractor_version, event_detected, source)
+                VALUES ($1, $2, $3, 'live')
+                ON CONFLICT (decision_id) DO UPDATE SET
+                    inspected_at = NOW(), extractor_version = EXCLUDED.extractor_version,
+                    event_detected = EXCLUDED.event_detected
+                """,
+                decision_id,
+                (safeguard_evidence or {}).get("extractor_version", "safeguard-v1"),
+                bool(safeguard_evidence),
+            )
             if safeguard_evidence:
                 await conn.execute(
                     """
@@ -1313,6 +1326,226 @@ async def get_recent_decisions(
                 d["tool_calls_made"] = None
         out.append(d)
     return out
+
+
+# ── Safeguard Intelligence ─────────────────────────────────────────────────
+
+
+def _json_value(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    return value
+
+
+async def get_safeguard_summary(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(*) FILTER (WHERE o.decision_id IS NOT NULL) AS completed,
+               COUNT(so.decision_id) AS inspected,
+               COUNT(se.decision_id) AS confirmed_events,
+               COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL) AS model_observed,
+               COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL
+                                  AND o.actual_model IS DISTINCT FROM d.decision_model) AS substitutions,
+               COUNT(*) FILTER (WHERE o.response_body IS NOT NULL) AS retained_responses
+          FROM nautgate.route_decisions d
+          LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+          LEFT JOIN nautgate.safeguard_observations so ON so.decision_id = d.id
+          LEFT JOIN nautgate.safeguard_events se ON se.decision_id = d.id
+         WHERE d.agent_id = $1 AND d.ts > NOW() - make_interval(hours => $2)
+        """,
+        agent_id,
+        hours,
+    )
+    values = dict(row or {})
+    completed = int(values.get("completed") or 0)
+    inspected = int(values.get("inspected") or 0)
+    confirmed = int(values.get("confirmed_events") or 0)
+    values.update(
+        completed=completed,
+        inspected=inspected,
+        confirmed_events=confirmed,
+        inspection_coverage=round(inspected / completed, 4) if completed else 0.0,
+        confirmed_rate=round(confirmed / inspected, 4) if inspected else 0.0,
+    )
+    return values
+
+
+async def get_safeguard_events(
+    pool: asyncpg.Pool, *, agent_id: str, hours: int, limit: int
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT se.decision_id::text, se.created_at, se.extractor_version,
+               se.evidence_level, se.stop_reason, se.stop_details, se.served_model,
+               se.fallback_blocks, se.usage_iterations,
+               d.model_requested, d.decision_model, d.decision_provider,
+               d.session_id, d.project_id, o.actual_model, o.actual_provider,
+               latest.disposition, latest.confidence, latest.created_at AS reviewed_at
+          FROM nautgate.safeguard_events se
+          JOIN nautgate.route_decisions d ON d.id = se.decision_id
+          LEFT JOIN nautgate.route_outcomes o ON o.decision_id = se.decision_id
+          LEFT JOIN LATERAL (
+              SELECT disposition, confidence, created_at
+                FROM nautgate.safeguard_reviews sr
+               WHERE sr.decision_id = se.decision_id
+               ORDER BY created_at DESC LIMIT 1
+          ) latest ON TRUE
+         WHERE d.agent_id = $1 AND d.ts > NOW() - make_interval(hours => $2)
+         ORDER BY se.created_at DESC LIMIT $3
+        """,
+        agent_id,
+        hours,
+        limit,
+    )
+    out = []
+    for row in rows:
+        item = dict(row)
+        for key in ("created_at", "reviewed_at"):
+            if item.get(key):
+                item[key] = item[key].isoformat()
+        for key in ("stop_details", "fallback_blocks", "usage_iterations"):
+            item[key] = _json_value(item.get(key))
+        out.append(item)
+    return out
+
+
+async def explain_model_choice(
+    pool: asyncpg.Pool, *, agent_id: str, decision_id: str
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT d.id::text AS decision_id, d.ts, d.model_requested, d.classified_tier,
+               d.classified_sensitivity, d.decision_provider, d.decision_model,
+               d.decision_reason, d.fallback_chain, o.actual_provider, o.actual_model,
+               o.used_fallback, o.fallback_count, so.extractor_version, so.inspected_at,
+               se.evidence_level, se.stop_reason, se.stop_details, se.served_model,
+               se.fallback_blocks, se.usage_iterations
+          FROM nautgate.route_decisions d
+          LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+          LEFT JOIN nautgate.safeguard_observations so ON so.decision_id = d.id
+          LEFT JOIN nautgate.safeguard_events se ON se.decision_id = d.id
+         WHERE d.id::text = $1 AND d.agent_id = $2
+        """,
+        decision_id,
+        agent_id,
+    )
+    if row is None:
+        return None
+    item = dict(row)
+    for key in ("ts", "inspected_at"):
+        if item.get(key):
+            item[key] = item[key].isoformat()
+    for key in ("fallback_chain", "stop_details", "fallback_blocks", "usage_iterations"):
+        item[key] = _json_value(item.get(key))
+    item["provider_confirmed_safeguard"] = bool(item.get("evidence_level"))
+    item["model_substituted"] = bool(
+        item.get("actual_model") and item.get("actual_model") != item.get("decision_model")
+    )
+    return item
+
+
+async def create_safeguard_review(
+    pool: asyncpg.Pool,
+    *,
+    decision_id: str,
+    agent_id: str,
+    reviewer_id: str,
+    disposition: str,
+    confidence: str,
+    reason_codes: list[str],
+    notes: str | None,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO nautgate.safeguard_reviews
+            (decision_id, reviewer_type, reviewer_id, disposition, confidence, reason_codes, notes)
+        SELECT se.decision_id, 'operator', $2, $3, $4, $5, $6
+          FROM nautgate.safeguard_events se
+          JOIN nautgate.route_decisions d ON d.id = se.decision_id
+         WHERE se.decision_id::text = $1 AND d.agent_id = $7
+        RETURNING id::text, decision_id::text, created_at, reviewer_type, reviewer_id,
+                  disposition, confidence, reason_codes, notes
+        """,
+        decision_id,
+        reviewer_id,
+        disposition,
+        confidence,
+        reason_codes,
+        notes,
+        agent_id,
+    )
+    if row is None:
+        return None
+    item = dict(row)
+    item["created_at"] = item["created_at"].isoformat()
+    return item
+
+
+async def get_safeguard_patterns(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:
+    recent_hours = min(24, max(1, hours // 4))
+    rows = await pool.fetch(
+        """
+        SELECT COALESCE(se.served_model, o.actual_model, d.decision_model) AS model,
+               COUNT(so.decision_id) AS inspected,
+               COUNT(se.decision_id) AS confirmed,
+               COUNT(*) FILTER (WHERE o.actual_model IS NOT NULL
+                                  AND o.actual_model IS DISTINCT FROM d.decision_model) AS substitutions,
+               COUNT(so.decision_id) FILTER (
+                   WHERE d.ts >= NOW() - make_interval(hours => $3)) AS recent_inspected,
+               COUNT(se.decision_id) FILTER (
+                   WHERE d.ts >= NOW() - make_interval(hours => $3)) AS recent_confirmed,
+               COUNT(so.decision_id) FILTER (
+                   WHERE d.ts < NOW() - make_interval(hours => $3)) AS baseline_inspected,
+               COUNT(se.decision_id) FILTER (
+                   WHERE d.ts < NOW() - make_interval(hours => $3)) AS baseline_confirmed
+          FROM nautgate.route_decisions d
+          LEFT JOIN nautgate.route_outcomes o ON o.decision_id = d.id
+          LEFT JOIN nautgate.safeguard_observations so ON so.decision_id = d.id
+          LEFT JOIN nautgate.safeguard_events se ON se.decision_id = d.id
+         WHERE d.agent_id = $1 AND d.ts > NOW() - make_interval(hours => $2)
+         GROUP BY 1 ORDER BY confirmed DESC, inspected DESC
+        """,
+        agent_id,
+        hours,
+        recent_hours,
+    )
+    models = []
+    for row in rows:
+        item = dict(row)
+        inspected = int(item.get("inspected") or 0)
+        confirmed = int(item.get("confirmed") or 0)
+        recent_inspected = int(item.get("recent_inspected") or 0)
+        recent_confirmed = int(item.get("recent_confirmed") or 0)
+        baseline_inspected = int(item.get("baseline_inspected") or 0)
+        baseline_confirmed = int(item.get("baseline_confirmed") or 0)
+        recent_rate = recent_confirmed / recent_inspected if recent_inspected else 0.0
+        baseline_rate = baseline_confirmed / baseline_inspected if baseline_inspected else 0.0
+        item["confirmed_rate"] = round(confirmed / inspected, 4) if inspected else 0.0
+        item["recent_rate"] = round(recent_rate, 4)
+        item["baseline_rate"] = round(baseline_rate, 4)
+        enough_baseline = recent_inspected >= 20 and baseline_inspected >= 20
+        item["signal"] = (
+            "anomaly"
+            if (
+                enough_baseline
+                and recent_confirmed >= 3
+                and recent_rate >= max(0.05, baseline_rate * 3)
+            )
+            else "review"
+            if inspected >= 20 and confirmed >= 3 and confirmed / inspected >= 0.1
+            else "watch"
+            if confirmed
+            else "baseline"
+        )
+        models.append(item)
+    return {
+        "models": models,
+        "recent_hours": recent_hours,
+        "interpretation": "Statistical leads only; provider-confirmed events are evidence, patterns are not proof of intent or misuse.",
+    }
 
 
 async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:

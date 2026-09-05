@@ -516,6 +516,7 @@
     insights:  ["Insights", "Counterfactuals, SPC & efficiency — the research view"],
     experiments: ["Experiments", "Champion–challenger evidence · blind-judged on real traffic"],
     modelhealth: ["Model Health", "One model, one verdict — trust, drift, behavior & probes"],
+    safeguards:["Safeguard Monitor", "Provider evidence, model-choice explanations, reviews, and pattern leads"],
     improve:   ["Improvements", "Prompt coaching — learn from your own calls"],
     tooling:   ["Tooling", "What connected MCPs cost to carry & save in discovery"],
     bench:     ["Bench", "Same task, N models — behavior, tools, tokens & cost side by side"],
@@ -631,6 +632,7 @@
     else if (activeTab === "insights") loadInsights();
     else if (activeTab === "experiments") loadExperiments();
     else if (activeTab === "modelhealth") loadModelHealth();
+    else if (activeTab === "safeguards") loadSafeguards();
     else if (activeTab === "improve") loadImprove();
     else if (activeTab === "tooling") loadTooling();
     else if (activeTab === "bench") loadBench();
@@ -1476,6 +1478,109 @@
     return "#ef4444";
   }
 
+  // --- Safeguard Intelligence ---------------------------------------------
+
+  let safeguardHours = 168;
+  document.getElementById("safeguard-reload")?.addEventListener("click", loadSafeguards);
+  document.querySelectorAll("#safeguard-window button").forEach((button) => {
+    button.addEventListener("click", () => {
+      safeguardHours = Number(button.dataset.window || 168);
+      document.querySelectorAll("#safeguard-window button").forEach((b) => b.classList.toggle("active", b === button));
+      loadSafeguards();
+    });
+  });
+
+  function safeguardScopeQuery() {
+    const scope = getActiveAgentScope();
+    return `hours=${safeguardHours}` + (scope ? `&agent_id=${encodeURIComponent(scope)}` : "");
+  }
+
+  async function loadSafeguards() {
+    const kpis = document.getElementById("safeguard-kpis");
+    if (!kpis || !getToken()) return;
+    try {
+      const query = safeguardScopeQuery();
+      const [summary, events, patterns] = await Promise.all([
+        api(`/v1/safeguards/summary?${query}`),
+        api(`/v1/safeguards/events?${query}&limit=100`),
+        api(`/v1/safeguards/patterns?${query}`),
+      ]);
+      renderSafeguardSummary(summary);
+      renderSafeguardEvents(events.data || []);
+      renderSafeguardPatterns(patterns);
+    } catch (e) {
+      kpis.innerHTML = `<div class="v2-card"><p class="hint" style="color:var(--bad)">Safeguard monitor unavailable: ${esc(e.message || e)}</p></div>`;
+    }
+  }
+
+  function renderSafeguardSummary(s) {
+    const pct = (Number(s.inspection_coverage || 0) * 100).toFixed(1);
+    const rate = (Number(s.confirmed_rate || 0) * 100).toFixed(2);
+    document.getElementById("safeguard-kpis").innerHTML = `<div class="safeguard-kpis">
+      <div class="v2-card"><b>${s.inspected || 0}</b><span>responses inspected</span></div>
+      <div class="v2-card"><b>${pct}%</b><span>inspection coverage · ${s.completed || 0} completed</span></div>
+      <div class="v2-card"><b>${s.confirmed_events || 0}</b><span>provider-confirmed events · ${rate}%</span></div>
+      <div class="v2-card"><b>${s.substitutions || 0}</b><span>observed model substitutions</span></div>
+      <div class="v2-card"><b>${s.retained_responses || 0}</b><span>retained responses eligible for backfill</span></div>
+    </div>`;
+    const badge = document.getElementById("nav-safeguard-count");
+    if (badge) { badge.hidden = !(s.confirmed_events > 0); badge.textContent = String(s.confirmed_events || 0); }
+  }
+
+  function renderSafeguardEvents(rows) {
+    const host = document.getElementById("safeguard-events");
+    host.innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Confirmed evidence</span><span class="v2-card-meta">${rows.length} events</span></div>
+      <table class="safeguard-table"><thead><tr><th>time</th><th>decision → served</th><th>signal</th><th>review</th></tr></thead><tbody>${rows.map((r) => `<tr data-safeguard-id="${esc(r.decision_id)}">
+        <td>${esc(tsShort(r.created_at))}</td><td>${esc(shortModelName(r.decision_model || "—"))} → ${esc(shortModelName(r.served_model || r.actual_model || "—"))}</td>
+        <td><span class="safeguard-signal">${esc(r.stop_reason || ((r.fallback_blocks || []).length ? "fallback" : "provider signal"))}</span></td>
+        <td>${r.disposition ? esc(r.disposition.replaceAll("_", " ")) : '<span class="dim">unreviewed</span>'}</td>
+      </tr>`).join("") || '<tr><td colspan="4" class="hint">No provider-confirmed safeguard events in this window.</td></tr>'}</tbody></table></div>`;
+    host.querySelectorAll("tr[data-safeguard-id]").forEach((row) => row.addEventListener("click", () => showSafeguardDetail(row.dataset.safeguardId)));
+  }
+
+  function renderSafeguardPatterns(data) {
+    const models = data.models || [];
+    document.getElementById("safeguard-patterns").innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Pattern and anomaly leads</span><span class="v2-card-meta">review support · not an allegation</span></div>
+      <table><thead><tr><th>model</th><th>inspected</th><th>confirmed</th><th>all-time rate</th><th>recent / baseline</th><th>substitutions</th><th>signal</th></tr></thead><tbody>${models.map((m) => `<tr><td>${esc(shortModelName(m.model || "unknown"))}</td><td>${m.inspected || 0}</td><td>${m.confirmed || 0}</td><td>${(Number(m.confirmed_rate || 0) * 100).toFixed(2)}%</td><td>${(Number(m.recent_rate || 0) * 100).toFixed(2)}% / ${(Number(m.baseline_rate || 0) * 100).toFixed(2)}%</td><td>${m.substitutions || 0}</td><td><span class="safeguard-pattern ${esc(m.signal)}">${esc(m.signal)}</span></td></tr>`).join("") || '<tr><td colspan="7" class="hint">No inspected traffic yet.</td></tr>'}</tbody></table>
+      <p class="hint">${esc(data.interpretation || "")}</p></div>`;
+  }
+
+  async function showSafeguardDetail(decisionId) {
+    const host = document.getElementById("safeguard-detail");
+    host.innerHTML = '<div class="v2-card"><p class="hint">loading explanation…</p></div>';
+    try {
+      const scope = getActiveAgentScope();
+      const d = await api(`/v1/safeguards/decisions/${encodeURIComponent(decisionId)}/explanation${scope ? `?agent_id=${encodeURIComponent(scope)}` : ""}`);
+      host.innerHTML = renderSafeguardExplanation(d, true);
+    } catch (e) { host.innerHTML = `<div class="v2-card"><p class="hint">${esc(e.message || e)}</p></div>`; }
+  }
+
+  function renderSafeguardExplanation(d, withReview) {
+    const confirmed = d.provider_confirmed_safeguard;
+    return `<div class="v2-card safeguard-explanation"><div class="v2-card-head"><span class="v2-card-title">Why this model?</span><span class="audit-evidence-state ${confirmed ? "warning" : "verified"}">${confirmed ? "provider evidence" : "no confirmed event"}</span></div>
+      <dl><dt>Requested</dt><dd>${esc(d.model_requested || "auto")}</dd><dt>NautGate chose</dt><dd>${esc(d.decision_provider || "—")} / ${esc(d.decision_model || "—")}</dd><dt>Routing reason</dt><dd>${esc(d.decision_reason || "not recorded")}</dd><dt>Actually served</dt><dd>${esc(d.actual_provider || d.decision_provider || "—")} / ${esc(d.actual_model || d.served_model || d.decision_model || "—")}</dd><dt>Safeguard signal</dt><dd>${esc(d.stop_reason || (confirmed ? "structured fallback" : "none recorded"))}</dd><dt>Extractor</dt><dd>${esc(d.extractor_version || "not inspected")}</dd></dl>
+      ${withReview ? `<div class="safeguard-review"><label>Disposition<select class="safeguard-disposition"><option value="needs_investigation">Needs investigation</option><option value="expected_safeguard">Expected safeguard</option><option value="likely_false_positive">Likely false positive</option><option value="inconsistent_behavior">Inconsistent behavior</option><option value="unexplained_substitution">Unexplained substitution</option><option value="billing_discrepancy">Billing discrepancy</option><option value="insufficient_evidence">Insufficient evidence</option></select></label><label>Confidence<select class="safeguard-confidence"><option>medium</option><option>low</option><option>high</option></select></label><label>Notes<textarea class="safeguard-notes" rows="3" maxlength="2000"></textarea></label><button class="safeguard-review-save" data-decision="${esc(d.decision_id)}">Record append-only review</button><span class="safeguard-review-status hint"></span></div>` : ""}</div>`;
+  }
+
+  document.addEventListener("click", async (ev) => {
+    const save = ev.target?.closest?.(".safeguard-review-save");
+    if (!save) return;
+    const root = save.closest(".safeguard-explanation");
+    const status = root.querySelector(".safeguard-review-status");
+    save.disabled = true; status.textContent = "saving…";
+    try {
+      const scope = getActiveAgentScope();
+      await apiPost(`/v1/safeguards/decisions/${encodeURIComponent(save.dataset.decision)}/reviews${scope ? `?agent_id=${encodeURIComponent(scope)}` : ""}`, {
+        disposition: root.querySelector(".safeguard-disposition").value,
+        confidence: root.querySelector(".safeguard-confidence").value,
+        notes: root.querySelector(".safeguard-notes").value,
+        reason_codes: [],
+      });
+      status.textContent = "review recorded"; loadSafeguards();
+    } catch (e) { status.textContent = "failed: " + (e.message || e); }
+    finally { save.disabled = false; }
+  });
+
   // --- Audit log live feed ------------------------------------------------
 
   document.getElementById("audit-reload").addEventListener("click", () => loadAudit());
@@ -1813,6 +1918,7 @@
         <div class="section-title" style="margin:0">Analysis</div>
         <button class="ghost audit-call-report" data-decision="${esc(d.decision_id || "")}" title="Standalone HTML report for this call — overlay, open in tab, or download">📄 report</button>
         <button class="ghost audit-call-flow" data-decision="${esc(d.decision_id || "")}" title="Routing flow for this call — client → lane → decision → provider → model actually served">🔀 flow</button>
+        <button class="ghost audit-explain-model" data-decision="${esc(d.decision_id || "")}" title="Explain requested, selected, and actually served model">Why this model?</button>
       </div>
       <details class="coach-accordion" data-decision="${esc(d.decision_id || "")}">
         <summary>▸ Coach <span class="hint">(judge eval, click to load)</span></summary>
@@ -1996,6 +2102,16 @@
   // detail row + judge eval already available to the dashboard. No bodies in
   // the report: it stays screenshot/share-safe like the drift share view.
   document.addEventListener("click", async (ev) => {
+    const explain = ev.target?.closest?.(".audit-explain-model");
+    if (explain) {
+      const scope = getActiveAgentScope();
+      explain.disabled = true;
+      try {
+        const d = await api(`/v1/safeguards/decisions/${encodeURIComponent(explain.dataset.decision)}/explanation${scope ? `?agent_id=${encodeURIComponent(scope)}` : ""}`);
+        explain.closest("#audit-detail-panel")?.insertAdjacentHTML("afterbegin", renderSafeguardExplanation(d, d.provider_confirmed_safeguard));
+      } finally { explain.disabled = false; }
+      return;
+    }
     const btn = ev.target && ev.target.closest ? ev.target.closest(".audit-call-report") : null;
     if (!btn) return;
     const did = btn.dataset.decision;

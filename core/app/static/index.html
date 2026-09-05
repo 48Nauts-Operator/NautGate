@@ -57,6 +57,11 @@
         <span class="nav-label">Model Health</span>
         <span class="nav-badge" id="nav-drift-badge" hidden></span>
       </a>
+      <a class="nav-item" href="#safeguards" data-tab="safeguards">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M8 12h8M12 8v8"/></svg>
+        <span class="nav-label">Safeguards</span>
+        <span class="nav-count" id="nav-safeguard-count" hidden></span>
+      </a>
       <a class="nav-item" href="#drift" data-tab="drift">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 3-7 2 2h3"/><path d="M4 20h16"/></svg>
         <span class="nav-label">Drift</span>
@@ -337,6 +342,23 @@
       </div>
       <div id="audit-evidence-receipts" class="v2-section"></div>
       <div id="audit-evidence-operations" class="v2-section"></div>
+    </section>
+
+    <!-- Safeguard Intelligence --------------------------------------------->
+    <section id="tab-safeguards" class="tab">
+      <div class="page-toolbar">
+        <span class="window-buttons" id="safeguard-window">
+          <button data-window="24">24h</button><button data-window="168" class="active">7d</button><button data-window="720">30d</button>
+        </span>
+        <button class="reload" id="safeguard-reload" title="reload">↻</button>
+      </div>
+      <p class="hint" style="max-width:920px">Provider-confirmed refusal and fallback evidence, inspection coverage, and statistical leads. Pattern flags support review; they do not establish provider intent or misuse.</p>
+      <div id="safeguard-kpis" class="v2-section"></div>
+      <div class="safeguard-layout">
+        <div id="safeguard-events" class="v2-section"></div>
+        <aside id="safeguard-detail" class="v2-section"><div class="v2-card"><p class="hint">Select an event to explain the model choice or record a review.</p></div></aside>
+      </div>
+      <div id="safeguard-patterns" class="v2-section"></div>
     </section>
 
     <!-- Insights (next-level analytics) -------------------------------------->
