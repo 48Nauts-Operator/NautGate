@@ -1627,9 +1627,12 @@ async def get_model_activity(
         agent_id,
     )
     out_points = []
+    buckets = []
     for row in points:
         item = dict(row)
         item["bucket"] = item["bucket"].isoformat()
+        if item["bucket"] not in buckets:
+            buckets.append(item["bucket"])
         item["concurrent"] = int(item["concurrent"] or 0)
         if item.get("model") is not None:
             out_points.append(item)
@@ -1642,7 +1645,7 @@ async def get_model_activity(
         item["inflight"] = int(item["inflight"] or 0)
         item["failed"] = int(item["failed"] or 0)
         out_states.append(item)
-    return {"points": out_points, "models": out_states}
+    return {"buckets": buckets, "points": out_points, "models": out_states}
 
 
 async def get_stats(pool: asyncpg.Pool, *, agent_id: str, hours: int) -> dict:

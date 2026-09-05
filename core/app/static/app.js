@@ -6912,7 +6912,7 @@
     try {
       const data=await api("/v1/activity/models?minutes=60&bucket_minutes=1&agent_id=*");
       const points=data.points||[], models=data.models||[];
-      const labels=[...new Set(points.map(p=>p.bucket))].sort();
+      const labels=(data.buckets||[]).slice().sort();
       const names=[...new Set(points.map(p=>p.model))];
       const palette=["#7C9BFF","#C3CE1F","#B983FF","#45C4B0","#F59E0B","#FF7A90"];
       chart.innerHTML="";

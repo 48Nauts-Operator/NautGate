@@ -44,7 +44,7 @@ async def safeguard_app(monkeypatch):
 
     async def activity(pool, *, agent_id, minutes, bucket_minutes):
         calls["activity"] = (agent_id, minutes, bucket_minutes)
-        return {"points": [], "models": []}
+        return {"buckets": [], "points": [], "models": []}
 
     async def explain(pool, *, agent_id, decision_id):
         calls["explain"] = (agent_id, decision_id)
