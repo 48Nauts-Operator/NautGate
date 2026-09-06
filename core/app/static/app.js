@@ -1500,13 +1500,13 @@
     if (!kpis || !getToken()) return;
     try {
       const query = safeguardScopeQuery();
-      const [summary, events, patterns] = await Promise.all([
+      const [summary, observations, patterns] = await Promise.all([
         api(`/v1/safeguards/summary?${query}`),
-        api(`/v1/safeguards/events?${query}&limit=100`),
+        api(`/v1/safeguards/observations?${query}&limit=100`),
         api(`/v1/safeguards/patterns?${query}`),
       ]);
       renderSafeguardSummary(summary);
-      renderSafeguardEvents(events.data || []);
+      renderSafeguardObservations(observations.data || []);
       renderSafeguardPatterns(patterns);
     } catch (e) {
       kpis.innerHTML = `<div class="v2-card"><p class="hint" style="color:var(--bad)">Safeguard monitor unavailable: ${esc(e.message || e)}</p></div>`;
@@ -1527,15 +1527,16 @@
     if (badge) { badge.hidden = !(s.confirmed_events > 0); badge.textContent = String(s.confirmed_events || 0); }
   }
 
-  function renderSafeguardEvents(rows) {
+  function renderSafeguardObservations(rows) {
     const host = document.getElementById("safeguard-events");
-    host.innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Confirmed evidence</span><span class="v2-card-meta">${rows.length} events</span></div>
-      <table class="safeguard-table"><thead><tr><th>time</th><th>decision → served</th><th>signal</th><th>review</th></tr></thead><tbody>${rows.map((r) => `<tr data-safeguard-id="${esc(r.decision_id)}">
-        <td>${esc(tsShort(r.created_at))}</td><td>${esc(shortModelName(r.decision_model || "—"))} → ${esc(shortModelName(r.served_model || r.actual_model || "—"))}</td>
-        <td><span class="safeguard-signal">${esc(r.stop_reason || ((r.fallback_blocks || []).length ? "fallback" : "provider signal"))}</span></td>
-        <td>${r.disposition ? esc(r.disposition.replaceAll("_", " ")) : '<span class="dim">unreviewed</span>'}</td>
-      </tr>`).join("") || '<tr><td colspan="4" class="hint">No provider-confirmed safeguard events in this window.</td></tr>'}</tbody></table></div>`;
+    host.innerHTML = `<div class="v2-card"><div class="v2-card-head"><span class="v2-card-title">Inspected responses</span><span class="v2-card-meta">${rows.length} shown · click for explanation</span></div>
+      <table class="safeguard-table"><thead><tr><th>time</th><th>agent / project</th><th>selected → served</th><th>inspection result</th><th>source</th></tr></thead><tbody>${rows.map((r) => `<tr data-safeguard-id="${esc(r.decision_id)}" tabindex="0" role="button">
+        <td>${esc(tsShort(r.inspected_at))}</td><td>${esc(r.agent_id || "—")}${r.project_id ? ` / ${esc(r.project_id)}` : ""}</td><td>${esc(shortModelName(r.decision_model || "—"))} → ${esc(shortModelName(r.actual_model || r.decision_model || "—"))}</td>
+        <td><span class="safeguard-signal ${r.event_detected ? "confirmed" : "clear"}">${r.event_detected ? esc(r.stop_reason || "provider-confirmed event") : "no structured safeguard signal"}</span></td>
+        <td>${esc(r.source || "live")}</td>
+      </tr>`).join("") || '<tr><td colspan="5" class="hint">No responses have been inspected in this window.</td></tr>'}</tbody></table></div>`;
     host.querySelectorAll("tr[data-safeguard-id]").forEach((row) => row.addEventListener("click", () => showSafeguardDetail(row.dataset.safeguardId)));
+    host.querySelectorAll("tr[data-safeguard-id]").forEach((row) => row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); showSafeguardDetail(row.dataset.safeguardId); } }));
   }
 
   function renderSafeguardPatterns(data) {
@@ -1551,7 +1552,7 @@
     try {
       const scope = getActiveAgentScope();
       const d = await api(`/v1/safeguards/decisions/${encodeURIComponent(decisionId)}/explanation${scope ? `?agent_id=${encodeURIComponent(scope)}` : ""}`);
-      host.innerHTML = renderSafeguardExplanation(d, true);
+      host.innerHTML = renderSafeguardExplanation(d, d.provider_confirmed_safeguard);
     } catch (e) { host.innerHTML = `<div class="v2-card"><p class="hint">${esc(e.message || e)}</p></div>`; }
   }
 

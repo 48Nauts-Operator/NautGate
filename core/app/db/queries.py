@@ -1425,6 +1425,38 @@ async def get_safeguard_events(
     return out
 
 
+async def get_safeguard_observations(
+    pool: asyncpg.Pool, *, agent_id: str, hours: int, limit: int
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT so.decision_id::text, so.inspected_at, so.extractor_version,
+               so.event_detected, so.source, d.agent_id, d.session_id, d.project_id,
+               d.model_requested, d.decision_provider, d.decision_model,
+               o.actual_provider, o.actual_model, o.status_code,
+               se.evidence_level, se.stop_reason
+          FROM nautgate.safeguard_observations so
+          JOIN nautgate.route_decisions d ON d.id = so.decision_id
+          LEFT JOIN nautgate.route_outcomes o ON o.decision_id = so.decision_id
+          LEFT JOIN nautgate.safeguard_events se ON se.decision_id = so.decision_id
+         WHERE d.agent_id = $1
+           AND d.ts > NOW() - make_interval(hours => $2)
+         ORDER BY so.inspected_at DESC
+         LIMIT $3
+        """,
+        agent_id,
+        hours,
+        limit,
+    )
+    out = []
+    for row in rows:
+        item = dict(row)
+        if item.get("inspected_at"):
+            item["inspected_at"] = item["inspected_at"].isoformat()
+        out.append(item)
+    return out
+
+
 async def explain_model_choice(
     pool: asyncpg.Pool, *, agent_id: str, decision_id: str
 ) -> dict | None:

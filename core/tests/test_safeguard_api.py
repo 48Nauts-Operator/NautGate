@@ -39,6 +39,10 @@ async def safeguard_app(monkeypatch):
         calls["events"] = (agent_id, hours, limit)
         return []
 
+    async def observations(pool, *, agent_id, hours, limit):
+        calls["observations"] = (agent_id, hours, limit)
+        return []
+
     async def patterns(pool, *, agent_id, hours):
         return {"models": [], "interpretation": "leads only"}
 
@@ -57,6 +61,7 @@ async def safeguard_app(monkeypatch):
     monkeypatch.setattr("app.routes.v1.authenticate", auth)
     monkeypatch.setattr("app.routes.v1.queries.get_safeguard_summary", summary)
     monkeypatch.setattr("app.routes.v1.queries.get_safeguard_events", events)
+    monkeypatch.setattr("app.routes.v1.queries.get_safeguard_observations", observations)
     monkeypatch.setattr("app.routes.v1.queries.get_safeguard_patterns", patterns)
     monkeypatch.setattr("app.routes.v1.queries.get_model_activity", activity)
     monkeypatch.setattr("app.routes.v1.queries.explain_model_choice", explain)
@@ -82,6 +87,20 @@ async def test_monitor_scope_and_window(safeguard_app):
     assert response.status_code == 200
     assert response.json()["inspection_coverage"] == 0.8
     assert calls["summary"] == ("bob", 24)
+
+
+@pytest.mark.asyncio
+async def test_observations_are_bounded_and_clickable_source_data(safeguard_app):
+    app, calls = safeguard_app
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/v1/safeguards/observations?hours=24&limit=25",
+            headers={"Authorization": "Bearer ng_test"},
+        )
+    assert response.status_code == 200
+    assert calls["observations"] == ("alice", 24, 25)
 
 
 @pytest.mark.asyncio

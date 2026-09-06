@@ -2813,6 +2813,8 @@ html, body { height: 100%; }
 .safeguard-table tr[data-safeguard-id] { cursor:pointer; }
 .safeguard-table tr[data-safeguard-id]:hover { background:var(--bg-raised); }
 .safeguard-signal,.safeguard-pattern { display:inline-flex; padding:2px 8px; border-radius:999px; font-size:11px; background:rgba(214,161,0,.14); color:var(--warn); }
+.safeguard-signal.clear { background:rgba(63,185,80,.14); color:var(--good); }
+.safeguard-signal.confirmed { background:rgba(214,161,0,.14); color:var(--warn); }
 .safeguard-pattern.baseline { background:var(--bg-raised); color:var(--text-dim); }
 .safeguard-pattern.review,.safeguard-pattern.anomaly { background:rgba(229,72,77,.14); color:var(--bad); }
 .safeguard-explanation dl { display:grid; grid-template-columns:110px 1fr; gap:7px 12px; }

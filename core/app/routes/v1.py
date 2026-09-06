@@ -2349,6 +2349,20 @@ async def safeguards_events(request: Request) -> Response:
     return JSONResponse({"agent_id": target, "hours": hours, "data": rows})
 
 
+@router.get("/safeguards/observations")
+async def safeguards_observations(request: Request) -> Response:
+    pool, _, target = await _safeguard_scope(request)
+    hours = _safeguard_window(request)
+    try:
+        limit = int(request.query_params.get("limit", "100"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit must be an integer") from None
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be in 1..500")
+    rows = await queries.get_safeguard_observations(pool, agent_id=target, hours=hours, limit=limit)
+    return JSONResponse({"agent_id": target, "hours": hours, "data": rows})
+
+
 @router.get("/safeguards/patterns")
 async def safeguards_patterns(request: Request) -> Response:
     pool, _, target = await _safeguard_scope(request)
