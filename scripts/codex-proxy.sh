@@ -4,8 +4,9 @@
 # OPENAI_BASE_URL, so the old codexps base-URL trick no longer works — it honours
 # HTTPS_PROXY + a trusted CA instead).
 #
-# The addon POSTs to NautGate over HTTP; set NAUTGATE_INGEST_TOKEN to the same
-# value NautGate has (env NAUTGATE_INGEST_TOKEN) or the gateway rejects it (401).
+# The addon POSTs to NautGate over HTTP. Set NAUTGATE_INGEST_TOKEN to the same
+# value NautGate has, or store it in ~/.nautgate/ingest-token (mode 600).
+# Override that path with NAUTGATE_INGEST_TOKEN_FILE.
 # Override the target with NAUTGATE_INGEST_URL (default local :8090).
 #
 # Usage:
@@ -26,16 +27,40 @@ LOG_FILE="$LOG_DIR/codex-proxy.log"
 PID_FILE="$LOG_DIR/codex-proxy.pid"
 PORT="${CODEX_PROXY_PORT:-8092}"
 CA="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
+TOKEN_FILE="${NAUTGATE_INGEST_TOKEN_FILE:-$HOME/.nautgate/ingest-token}"
 mkdir -p "$LOG_DIR"
+
+load_ingest_token() {
+    if [[ -z "${NAUTGATE_INGEST_TOKEN:-}" && -r "$TOKEN_FILE" ]]; then
+        NAUTGATE_INGEST_TOKEN="$(<"$TOKEN_FILE")"
+        export NAUTGATE_INGEST_TOKEN
+    fi
+}
+
+token_status() {
+    load_ingest_token
+    if [[ -n "${NAUTGATE_INGEST_TOKEN:-}" ]]; then
+        if [[ -r "$TOKEN_FILE" ]]; then
+            local mode
+            mode="$(stat -f '%Lp' "$TOKEN_FILE" 2>/dev/null || true)"
+            [[ "$mode" == "600" ]] || echo "WARNING: $TOKEN_FILE should have mode 600 (currently ${mode:-unknown})"
+        fi
+        echo "Ingest token: configured"
+    else
+        echo "Ingest token: MISSING ($TOKEN_FILE)"
+    fi
+}
 
 _running() { [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
 
 start() {
-    if _running; then echo "✓ already running (pid $(cat "$PID_FILE")) on :$PORT"; env_block; return; fi
+    load_ingest_token
+    if _running; then echo "✓ already running (pid $(cat "$PID_FILE")) on :$PORT"; token_status; env_block; return; fi
     local ingest_url="${NAUTGATE_INGEST_URL:-http://localhost:8090/v1/ingest}"
     if [[ -z "${NAUTGATE_INGEST_TOKEN:-}" ]]; then
-        echo "⚠ NAUTGATE_INGEST_TOKEN is not set — NautGate will reject ingest (401)."
-        echo "  Set the same token here and on NautGate (:8090), then restart."
+        echo "✗ NautGate ingest token is missing; capture would be rejected (401)."
+        echo "  Set NAUTGATE_INGEST_TOKEN or create $TOKEN_FILE with mode 600."
+        exit 1
     fi
     echo "starting codex capture proxy on 127.0.0.1:${PORT} → ${ingest_url} ..."
     ( cd "$CORE_DIR" \
@@ -63,6 +88,7 @@ stop() {
 
 status() {
     if _running; then echo "✓ running (pid $(cat "$PID_FILE")) on 127.0.0.1:$PORT"; else echo "DOWN"; fi
+    token_status
     [[ -f "$CA" ]] && echo "CA: $CA" || echo "CA: not generated yet (run start once)"
 }
 
