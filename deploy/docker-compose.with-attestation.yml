@@ -19,7 +19,7 @@ services:
         condition: service_healthy
     environment:
       SB_ATTEST_PRODUCTION: "true"
-      SB_ATTEST_DB_URL: postgres://nautgate:nautgate@nautgate-db:5432/nautgate
+      SB_ATTEST_DB_URL: ${SB_ATTEST_DB_URL:-postgres://${POSTGRES_USER:-nautgate}:${POSTGRES_PASSWORD}@nautgate-db:5432/${POSTGRES_DB:-nautgate}}
       SB_ATTEST_TSB_URL: ${SB_ATTEST_TSB_URL:?set SB_ATTEST_TSB_URL}
       SB_ATTEST_KEY_NAME: ${SB_ATTEST_KEY_NAME:?set SB_ATTEST_KEY_NAME}
       SB_ATTEST_API_KEY: ${SB_ATTEST_API_KEY:-}
