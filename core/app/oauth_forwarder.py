@@ -38,7 +38,7 @@ from app.anthropic_oauth_forwarder import (
     _RETRY_CAP_S,
     _parse_retry_after,
 )
-from app.audit_receipt import environment_evidence, content_hash
+from app.audit_receipt import content_hash, environment_evidence
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.streaming import _iter_sse_events

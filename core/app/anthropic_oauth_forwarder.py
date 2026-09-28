@@ -36,7 +36,7 @@ import structlog
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.audit_receipt import environment_evidence, content_hash
+from app.audit_receipt import content_hash, environment_evidence
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.safeguard import extract_safeguard_evidence
