@@ -4,7 +4,7 @@
 # config/routing.yaml + config/pricing.yaml, which live outside core/. Without
 # them a containerised run silently loses routing (model:auto can't resolve) and
 # pricing (every cost_usd NULL). See docker-compose: `context: ..`.
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -21,7 +21,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY core/app/ ./app/
 COPY core/bowden_pii/ ./bowden_pii/
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 WORKDIR /app
 
 # pg_dump/psql so backups run inside the container via a direct DSN connection
