@@ -27,7 +27,6 @@ from app.audit import build_audit
 from app.audit_meta import extract as extract_meta
 from app.audit_meta import extract_source
 from app.audit_receipt import content_hash, sampling_evidence
-from app.model_integrity import weights_resolver
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response, capture_tools, redact
 from app.classify import assemble_user_text, classify
@@ -36,6 +35,7 @@ from app.compliance import build_trace as build_compliance_trace
 from app.db import queries
 from app.formats import anthropic as ant
 from app.formats import openai_responses as resp_fmt
+from app.model_integrity import weights_resolver
 from app.outcome import persist_outcome
 from app.provider_health import upsert_health
 from app.safeguard import extract_safeguard_evidence
