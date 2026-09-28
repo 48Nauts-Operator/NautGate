@@ -127,3 +127,59 @@ def extract_source(request) -> tuple[str | None, str | None]:
     if hostname and ":" in hostname:
         hostname = hostname.split(":", 1)[0]
     return ip, hostname
+
+
+def audit_health(
+    status: dict, *, enabled: bool, lag_warning_s: float, lag_critical_s: float
+) -> tuple[str, list[dict]]:
+    """Health verdict + alerts for /v1/audit/status.
+
+    The one non-obvious rule (NAUTGATE-72, born from the 11-day silent stall):
+    disabled attestation while traffic still flows is an incident, never a calm
+    'disabled' badge. Disabled with no traffic stays benign.
+    """
+    alerts: list[dict] = []
+    pending = int(status.get("pending") or 0)
+    decisions = int(status.get("decisions_last_hour") or 0)
+    receipts = int(status.get("receipts_last_hour") or 0)
+    lag = int(status.get("signing_lag_seconds") or 0)
+
+    if status.get("open_gaps"):
+        alerts.append({"code": "evidence_gap", "severity": "critical", "count": status["open_gaps"]})
+    if status.get("checkpoint_failures"):
+        alerts.append(
+            {
+                "code": "checkpoint_signing_failed",
+                "severity": "critical",
+                "count": status["checkpoint_failures"],
+            }
+        )
+    if enabled:
+        if lag >= lag_critical_s:
+            alerts.append({"code": "signing_lag", "severity": "critical", "seconds": lag})
+        elif lag >= lag_warning_s:
+            alerts.append({"code": "signing_lag", "severity": "warning", "seconds": lag})
+        if decisions and receipts < decisions * 0.95:
+            alerts.append(
+                {
+                    "code": "receipt_coverage",
+                    "severity": "warning",
+                    "decisions_last_hour": decisions,
+                    "receipts_last_hour": receipts,
+                }
+            )
+    elif pending or decisions:
+        alerts.append(
+            {
+                "code": "attestation_disabled_with_traffic",
+                "severity": "critical",
+                "pending": pending,
+                "decisions_last_hour": decisions,
+            }
+        )
+
+    if not enabled and not alerts:
+        return "disabled", alerts
+    if any(a["severity"] == "critical" for a in alerts):
+        return "critical", alerts
+    return ("warning", alerts) if alerts else ("healthy", alerts)

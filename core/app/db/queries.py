@@ -2924,7 +2924,12 @@ async def get_audit_status(pool: asyncpg.Pool, *, agent_id: str) -> dict:
                (SELECT COUNT(*) FROM nautgate.audit_checkpoints
                  WHERE status = 'failed') AS checkpoint_failures,
                (SELECT COUNT(*) FROM nautgate.audit_gaps
-                 WHERE resolved_at IS NULL) AS open_gaps
+                 WHERE resolved_at IS NULL) AS open_gaps,
+               (SELECT COUNT(*) FROM nautgate.route_decisions
+                 WHERE agent_id = $1 AND ts > NOW() - INTERVAL '1 hour')
+                   AS decisions_last_hour,
+               COUNT(*) FILTER (WHERE r.created_at > NOW() - INTERVAL '1 hour')
+                   AS receipts_last_hour
           FROM nautgate.audit_receipts r
           LEFT JOIN nautgate.route_decisions d ON d.id = r.decision_id
           LEFT JOIN nautgate.max_guard_control_events g ON g.id = r.guard_event_id
@@ -2942,6 +2947,8 @@ async def get_audit_status(pool: asyncpg.Pool, *, agent_id: str) -> dict:
         "signing_lag_seconds": int(row["signing_lag_seconds"] or 0),
         "checkpoint_failures": int(row["checkpoint_failures"] or 0),
         "open_gaps": int(row["open_gaps"] or 0),
+        "decisions_last_hour": int(row["decisions_last_hour"] or 0),
+        "receipts_last_hour": int(row["receipts_last_hour"] or 0),
     }
 
 

@@ -5351,30 +5351,18 @@ async def audit_status(request: Request) -> Response:
     agent_id = await authenticate(pool, request)
     status = await queries.get_audit_status(pool, agent_id=agent_id)
     settings = request.app.state.settings
-    lag = status["signing_lag_seconds"]
-    alerts = []
-    if status["open_gaps"]:
-        alerts.append(
-            {"code": "evidence_gap", "severity": "critical", "count": status["open_gaps"]}
-        )
-    if status["checkpoint_failures"]:
-        alerts.append(
-            {
-                "code": "checkpoint_signing_failed",
-                "severity": "critical",
-                "count": status["checkpoint_failures"],
-            }
-        )
-    if lag >= settings.nautgate_audit_lag_critical_s:
-        alerts.append({"code": "signing_lag", "severity": "critical", "seconds": lag})
-    elif lag >= settings.nautgate_audit_lag_warning_s:
-        alerts.append({"code": "signing_lag", "severity": "warning", "seconds": lag})
+    from app.audit_meta import audit_health
+
+    health, alerts = audit_health(
+        status,
+        enabled=settings.nautgate_verified_audit_trail,
+        lag_warning_s=settings.nautgate_audit_lag_warning_s,
+        lag_critical_s=settings.nautgate_audit_lag_critical_s,
+    )
     status.update(
         enabled=settings.nautgate_verified_audit_trail,
         mode=settings.nautgate_audit_mode,
-        health="critical"
-        if any(a["severity"] == "critical" for a in alerts)
-        else ("warning" if alerts else "healthy"),
+        health=health,
         alerts=alerts,
     )
     return JSONResponse(status)
