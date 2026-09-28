@@ -69,8 +69,12 @@ def build_receipt_pdf(
         c.drawString(x, y, title)
         y -= 5.5 * mm / 1.2
 
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColorRGB(0.76, 0.25, 0.05)
+    c.drawString(x, y + 5 * mm, "NAUTGATE · DECISION RECEIPT")
+    c.setFillColorRGB(0.09, 0.13, 0.16)
     c.setFont("Helvetica-Bold", 15)
-    c.drawString(x, y, "NautGate Decision Receipt")
+    c.drawString(x, y, "Decision Receipt")
     y -= 6 * mm
     c.setFont("Helvetica", 9)
     status = "ATTESTED" if meta.get("attested") else "NOT YET ATTESTED"
