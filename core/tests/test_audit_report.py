@@ -103,7 +103,7 @@ def test_verify_verdict_page_states_the_result_in_house_style():
     assert "VERIFIED" in html
     assert "88328fd3" in html
     assert "204411" in html
-    assert "#c2410c" in html  # NG report brand accent
+    assert "#808000" in html  # NG brand olive, public-report baseline
 
     failed = render_verify_verdict(ok=False, receipt_id="x", detail={})
     assert "NOT VERIFIED" in failed
