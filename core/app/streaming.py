@@ -102,6 +102,7 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
     cache_write_tokens: int | None = None
     finish_reason: str | None = None
     actual_model: str | None = None
+    system_fingerprint: str | None = None
     actual_provider: str | None = None
     provider_error: dict | None = None
     content_parts: list[str] = []
@@ -128,6 +129,8 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         # OpenRouter / OpenAI: each chunk carries the actual model picked.
         if isinstance(payload.get("model"), str) and not actual_model:
             actual_model = payload["model"]
+        if isinstance(payload.get("system_fingerprint"), str) and not system_fingerprint:
+            system_fingerprint = payload["system_fingerprint"]
         if isinstance(payload.get("provider"), str) and not actual_provider:
             actual_provider = payload["provider"]
 
@@ -253,6 +256,7 @@ def parse_sse_for_outcome(buf: bytes) -> dict[str, Any]:
         "was_empty": was_empty,
         "tool_calls": tool_calls,
         "actual_model": actual_model,
+        "system_fingerprint": system_fingerprint,
         "actual_provider": actual_provider,
         "provider_error": provider_error,
         "safeguard_evidence": extract_safeguard_evidence(safeguard_payloads),

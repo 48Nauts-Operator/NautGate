@@ -53,6 +53,21 @@ def _hash_optional_json(value: Any) -> str | None:
     return content_hash(value) if value else None
 
 
+def _numstr(value: Any) -> str | None:
+    # Sampling knobs arrive as JSON numbers; the strict evidence profile
+    # forbids floats, so the receipt commits to their decimal spelling.
+    return None if value is None else str(value)
+
+
+def sampling_evidence(payload: dict) -> dict:
+    """Evidence fields for the sampling knobs the client actually sent."""
+    return {
+        "sampling_temperature": payload.get("temperature"),
+        "sampling_top_p": payload.get("top_p"),
+        "sampling_seed": payload.get("seed"),
+    }
+
+
 def build_receipt(
     *,
     sequence: int,
@@ -93,6 +108,11 @@ def build_receipt(
             "tools_sha256": evidence.get("tools_sha256"),
             "requested_model": str(requested or ""),
             "stream": bool(decision.get("stream_flag")),
+            "sampling": {
+                "temperature": _numstr(evidence.get("sampling_temperature")),
+                "top_p": _numstr(evidence.get("sampling_top_p")),
+                "seed": evidence.get("sampling_seed"),
+            },
         },
         "classification": {
             "sensitivity": str(decision.get("classified_sensitivity") or "none"),
@@ -123,6 +143,12 @@ def build_receipt(
             "output_tokens": outcome.get("completion_tokens"),
             "cost_microusd": _microusd(outcome.get("cost_usd")),
             "error_code": evidence.get("error_code"),
+            "provider_fingerprint": evidence.get("provider_fingerprint"),
+        },
+        "model_integrity": {
+            "weights_digest": evidence.get("weights_digest"),
+            "digest_source": str(evidence.get("weights_digest_source") or "unresolved"),
+            "resolved_at": evidence.get("weights_resolved_at"),
         },
         "tool_evidence": {
             "calls_observed": len(tool_calls or []),

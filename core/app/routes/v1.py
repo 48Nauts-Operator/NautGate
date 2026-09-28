@@ -26,7 +26,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.audit import build_audit
 from app.audit_meta import extract as extract_meta
 from app.audit_meta import extract_source
-from app.audit_receipt import content_hash
+from app.audit_receipt import content_hash, sampling_evidence
+from app.model_integrity import weights_resolver
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response, capture_tools, redact
 from app.classify import assemble_user_text, classify
@@ -653,6 +654,8 @@ async def _process_chat_request(
         "cache_markers_forwarded": len(forwarded_cache_markers),
         "cache_marker_topology_sha256": content_hash(received_cache_markers),
         "cache_integrity_status": cache_integrity_status,
+        **sampling_evidence(payload),
+        **(await weights_resolver.resolve(decision_provider, decision_model)),
     }
 
     if payload.get("stream"):
@@ -809,6 +812,9 @@ async def _process_chat_request(
                 ((upstream_resp.get("choices") or [{}])[0].get("finish_reason"))
                 if upstream_resp
                 else None
+            ),
+            "provider_fingerprint": (
+                upstream_resp.get("system_fingerprint") if upstream_resp else None
             ),
             "error_code": None
             if 200 <= upstream_status < 300
@@ -1085,6 +1091,7 @@ def _streaming_response(
                         **(evidence or {}),
                         "response_sha256": hashlib.sha256(bytes(capture.accumulator)).hexdigest(),
                         "finish_reason": parsed.get("finish_reason"),
+                        "provider_fingerprint": parsed.get("system_fingerprint"),
                         "error_code": (
                             (parsed.get("provider_error") or {}).get("type")
                             if parsed.get("provider_error")
@@ -5019,6 +5026,7 @@ async def ingest(request: Request) -> JSONResponse:
             "tools_sha256": content_hash(tools),
             "response_sha256": content_hash(response),
             "selected_transport": provider,
+            **sampling_evidence(payload),
             "finish_reason": response.get("finish_reason"),
             "error_code": None if 200 <= status_code < 300 else f"upstream_http_{status_code}",
         },

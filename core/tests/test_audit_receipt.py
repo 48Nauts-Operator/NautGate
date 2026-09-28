@@ -102,6 +102,63 @@ def test_finalized_receipt_returns_the_signed_material():
     assert len(digest) == 32
 
 
+def test_sampling_parameters_are_recorded_in_the_receipt():
+    receipt = build_receipt(
+        sequence=1,
+        decision=_decision(),
+        outcome=_outcome(),
+        evidence={
+            "sampling_temperature": 0.7,
+            "sampling_top_p": 1,
+            "sampling_seed": 42,
+            "provider_fingerprint": "fp_44709d6fcb",
+        },
+    )
+    assert receipt["request"]["sampling"] == {
+        "temperature": "0.7",
+        "top_p": "1",
+        "seed": 42,
+    }
+    assert receipt["result"]["provider_fingerprint"] == "fp_44709d6fcb"
+    canonical_json(receipt)  # strict profile must accept the new fields
+
+
+def test_absent_sampling_parameters_are_recorded_as_null_not_omitted():
+    receipt = build_receipt(sequence=1, decision=_decision(), outcome=_outcome())
+    assert receipt["request"]["sampling"] == {"temperature": None, "top_p": None, "seed": None}
+    assert receipt["result"]["provider_fingerprint"] is None
+    canonical_json(receipt)
+
+
+def test_model_integrity_block_pins_local_weights():
+    receipt = build_receipt(
+        sequence=1,
+        decision=_decision(),
+        outcome=_outcome(),
+        evidence={
+            "weights_digest": "sha256:" + "a" * 64,
+            "weights_digest_source": "ollama-manifest",
+            "weights_resolved_at": "2026-09-28T12:00:00.000000Z",
+        },
+    )
+    assert receipt["model_integrity"] == {
+        "weights_digest": "sha256:" + "a" * 64,
+        "digest_source": "ollama-manifest",
+        "resolved_at": "2026-09-28T12:00:00.000000Z",
+    }
+    canonical_json(receipt)
+
+
+def test_model_integrity_block_is_unresolved_when_no_digest_was_observed():
+    receipt = build_receipt(sequence=1, decision=_decision(), outcome=_outcome())
+    assert receipt["model_integrity"] == {
+        "weights_digest": None,
+        "digest_source": "unresolved",
+        "resolved_at": None,
+    }
+    canonical_json(receipt)
+
+
 def test_content_hash_distinguishes_bytes_text_and_structured_values():
     assert content_hash(b"hello") == content_hash("hello")
     assert content_hash({"b": 2, "a": 1}) == content_hash({"a": 1, "b": 2})

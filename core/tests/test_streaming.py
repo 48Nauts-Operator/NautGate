@@ -106,6 +106,22 @@ def test_parse_openai_stream_extracts_content_and_usage():
     assert out["was_empty"] is False
 
 
+def test_parse_openai_stream_captures_system_fingerprint():
+    buf = b"".join(
+        [
+            _ev(
+                {
+                    "system_fingerprint": "fp_44709d6fcb",
+                    "choices": [{"index": 0, "delta": {"content": "hi"}}],
+                }
+            ),
+            _ev({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+            b"data: [DONE]\n\n",
+        ]
+    )
+    assert parse_sse_for_outcome(buf)["system_fingerprint"] == "fp_44709d6fcb"
+
+
 def test_parse_was_empty_when_tokens_but_no_content():
     """Tongyi failure mode: completion tokens generated but content empty."""
     buf = b"".join(
