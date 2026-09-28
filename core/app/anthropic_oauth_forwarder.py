@@ -36,7 +36,7 @@ import structlog
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.audit_receipt import content_hash
+from app.audit_receipt import environment_evidence, content_hash
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.safeguard import extract_safeguard_evidence
@@ -628,6 +628,7 @@ async def forward_to_anthropic(request: Request) -> StreamingResponse | JSONResp
                         evidence={
                             "receipt_id": str(receipt_id),
                             "body_sha256": hashlib.sha256(raw_body).hexdigest(),
+                            **environment_evidence(request.headers, capture_path="oauth_anthropic"),
                             "upstream_body_sha256": hashlib.sha256(raw_body).hexdigest(),
                             "prompt_sha256": content_hash(
                                 (payload or {}).get("messages")

@@ -159,6 +159,35 @@ def test_model_integrity_block_is_unresolved_when_no_digest_was_observed():
     canonical_json(receipt)
 
 
+def test_environment_block_records_harness_sandbox_and_capture_path():
+    receipt = build_receipt(
+        sequence=1,
+        decision=_decision(),
+        outcome=_outcome(),
+        evidence={
+            "env_harness": "claude-cli/2.1.0 (external, cli)",
+            "env_sandbox_id": "gitvm-pi-dev-4821",
+            "env_capture_path": "gateway",
+        },
+    )
+    assert receipt["environment"] == {
+        "harness": "claude-cli/2.1.0 (external, cli)",
+        "sandbox_id": "gitvm-pi-dev-4821",
+        "capture_path": "gateway",
+    }
+    canonical_json(receipt)
+
+
+def test_environment_block_defaults_are_honest_nulls():
+    receipt = build_receipt(sequence=1, decision=_decision(), outcome=_outcome())
+    assert receipt["environment"] == {
+        "harness": None,
+        "sandbox_id": None,
+        "capture_path": "unknown",
+    }
+    canonical_json(receipt)
+
+
 def test_content_hash_distinguishes_bytes_text_and_structured_values():
     assert content_hash(b"hello") == content_hash("hello")
     assert content_hash({"b": 2, "a": 1}) == content_hash({"a": 1, "b": 2})

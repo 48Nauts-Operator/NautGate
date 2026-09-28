@@ -38,7 +38,7 @@ from app.anthropic_oauth_forwarder import (
     _RETRY_CAP_S,
     _parse_retry_after,
 )
-from app.audit_receipt import content_hash
+from app.audit_receipt import environment_evidence, content_hash
 from app.capture import capture_prompt, capture_response, capture_tools
 from app.db import queries
 from app.streaming import _iter_sse_events
@@ -335,6 +335,7 @@ async def forward_to_chatgpt(request: Request) -> StreamingResponse | JSONRespon
                         evidence={
                             "receipt_id": str(receipt_id),
                             "body_sha256": hashlib.sha256(raw_body).hexdigest(),
+                            **environment_evidence(request.headers, capture_path="oauth_openai"),
                             "upstream_body_sha256": hashlib.sha256(raw_body).hexdigest(),
                             "prompt_sha256": content_hash(
                                 (payload or {}).get("messages")

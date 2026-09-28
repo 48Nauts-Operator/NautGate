@@ -68,6 +68,21 @@ def sampling_evidence(payload: dict) -> dict:
     }
 
 
+def environment_evidence(headers, *, capture_path: str) -> dict:
+    """Evidence fields for the runtime environment the client declared.
+
+    Recorded, not attested: the harness string and sandbox id are what the
+    client sent; capture_path is NautGate's own observation of how the call
+    reached it (gateway = in-path, ingest = self-reported by a sidecar).
+    """
+    get = headers.get if hasattr(headers, "get") else dict(headers).get
+    return {
+        "env_harness": get("user-agent") or None,
+        "env_sandbox_id": get("x-nautgate-sandbox-id") or None,
+        "env_capture_path": capture_path,
+    }
+
+
 def build_receipt(
     *,
     sequence: int,
@@ -144,6 +159,11 @@ def build_receipt(
             "cost_microusd": _microusd(outcome.get("cost_usd")),
             "error_code": evidence.get("error_code"),
             "provider_fingerprint": evidence.get("provider_fingerprint"),
+        },
+        "environment": {
+            "harness": evidence.get("env_harness"),
+            "sandbox_id": evidence.get("env_sandbox_id"),
+            "capture_path": str(evidence.get("env_capture_path") or "unknown"),
         },
         "model_integrity": {
             "weights_digest": evidence.get("weights_digest"),

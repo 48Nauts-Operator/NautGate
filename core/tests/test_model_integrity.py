@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.audit_receipt import sampling_evidence
+from app.audit_receipt import environment_evidence, sampling_evidence
 from app.model_integrity import WeightsResolver
 
 
@@ -11,6 +11,23 @@ def test_sampling_evidence_extracts_knobs_from_the_request_payload():
         "sampling_temperature": 0.7,
         "sampling_top_p": None,
         "sampling_seed": 1,
+    }
+
+
+def test_environment_evidence_reads_harness_and_declared_sandbox_headers():
+    headers = {"user-agent": "claude-cli/2.1.0 (external, cli)", "x-nautgate-sandbox-id": "gitvm-7"}
+    assert environment_evidence(headers, capture_path="gateway") == {
+        "env_harness": "claude-cli/2.1.0 (external, cli)",
+        "env_sandbox_id": "gitvm-7",
+        "env_capture_path": "gateway",
+    }
+
+
+def test_environment_evidence_without_headers_stays_null():
+    assert environment_evidence({}, capture_path="ingest") == {
+        "env_harness": None,
+        "env_sandbox_id": None,
+        "env_capture_path": "ingest",
     }
 
 

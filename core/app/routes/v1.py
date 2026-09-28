@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.audit import build_audit
 from app.audit_meta import extract as extract_meta
 from app.audit_meta import extract_source
-from app.audit_receipt import content_hash, sampling_evidence
+from app.audit_receipt import content_hash, environment_evidence, sampling_evidence
 from app.auth import authenticate
 from app.capture import capture_prompt, capture_response, capture_tools, redact
 from app.classify import assemble_user_text, classify
@@ -655,6 +655,7 @@ async def _process_chat_request(
         "cache_marker_topology_sha256": content_hash(received_cache_markers),
         "cache_integrity_status": cache_integrity_status,
         **sampling_evidence(payload),
+        **environment_evidence(request.headers, capture_path="gateway"),
         **(await weights_resolver.resolve(decision_provider, decision_model)),
     }
 
@@ -5027,6 +5028,7 @@ async def ingest(request: Request) -> JSONResponse:
             "response_sha256": content_hash(response),
             "selected_transport": provider,
             **sampling_evidence(payload),
+            **environment_evidence({}, capture_path="ingest"),
             "finish_reason": response.get("finish_reason"),
             "error_code": None if 200 <= status_code < 300 else f"upstream_http_{status_code}",
         },
