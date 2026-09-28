@@ -5171,6 +5171,55 @@ async def audit_evidence_bundle(receipt_id: str, request: Request) -> Response:
     return JSONResponse(bundle)
 
 
+async def _load_report_material(receipt_id: str, request: Request) -> tuple[dict, dict, bytes]:
+    """Receipt, attestation meta and bundle bytes for the auditor-facing report."""
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    agent_id = await authenticate(pool, request)
+    try:
+        parsed = uuid.UUID(receipt_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="receipt_id must be a uuid") from None
+    bundle = await queries.export_evidence_bundle(pool, receipt_id=parsed, agent_id=agent_id)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="verified_evidence_bundle_not_found")
+    checkpoint = bundle.get("checkpoint") or {}
+    signature = bundle.get("signature") or {}
+    meta = {
+        "attested": True,
+        "checkpoint_id": checkpoint.get("checkpoint_id"),
+        "key_id": checkpoint.get("signing_key_id") or signature.get("key_id"),
+        "key_fingerprint": signature.get("public_key_fingerprint")
+        or signature.get("key_fingerprint"),
+    }
+    encoded = json.dumps(bundle, ensure_ascii=False, separators=(",", ":")).encode()
+    return bundle["receipt"], meta, encoded
+
+
+@router.get("/audit/receipts/{receipt_id}/report")
+async def audit_receipt_report(receipt_id: str, request: Request) -> Response:
+    from app.audit_report import render_receipt_report
+
+    receipt, meta, _ = await _load_report_material(receipt_id, request)
+    return Response(render_receipt_report(receipt, meta), media_type="text/html")
+
+
+@router.get("/audit/receipts/{receipt_id}/report.pdf")
+async def audit_receipt_report_pdf(receipt_id: str, request: Request) -> Response:
+    from app.audit_report_pdf import build_receipt_pdf
+
+    receipt, meta, bundle_json = await _load_report_material(receipt_id, request)
+    pdf = build_receipt_pdf(receipt, meta, bundle_json=bundle_json)
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="nautgate-receipt-{receipt_id}.pdf"'
+        },
+    )
+
+
 @router.get("/audit/receipts/{receipt_id}")
 async def audit_receipt_status(receipt_id: str, request: Request) -> Response:
     pool = getattr(request.app.state, "db", None)
