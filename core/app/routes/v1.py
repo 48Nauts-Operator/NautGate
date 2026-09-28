@@ -5226,6 +5226,27 @@ async def audit_receipt_report_pdf(receipt_id: str, request: Request) -> Respons
     )
 
 
+@router.get("/audit/receipts/{receipt_id}/evidence.zip")
+async def audit_receipt_evidence_zip(receipt_id: str, request: Request) -> Response:
+    from app.audit_report_pdf import build_evidence_package
+
+    receipt, meta, bundle_json = await _load_report_material(receipt_id, request)
+    settings = getattr(request.app.state, "settings", None)
+    blob = build_evidence_package(
+        receipt,
+        meta,
+        bundle_json=bundle_json,
+        public_base_url=getattr(settings, "nautgate_public_base_url", None),
+    )
+    return Response(
+        blob,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="nautgate-evidence-{receipt_id}.zip"'
+        },
+    )
+
+
 @router.get("/audit/receipts/{receipt_id}/verify")
 async def audit_receipt_verify_page(receipt_id: str, request: Request, h: str = "") -> Response:
     """Scanner-facing verdict page. The hash prefix is proof-of-possession of

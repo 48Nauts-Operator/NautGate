@@ -52,3 +52,23 @@ def test_pdf_page_carries_the_material_facts():
         "nautgate receipt verify",
     ):
         assert fact in text, fact
+
+
+def test_evidence_package_zip_contains_pdf_bundle_and_instructions():
+    import io as _io
+    import zipfile
+
+    from app.audit_report_pdf import build_evidence_package
+
+    blob = build_evidence_package(RECEIPT, META, bundle_json=BUNDLE)
+    zf = zipfile.ZipFile(_io.BytesIO(blob))
+    names = set(zf.namelist())
+    rid = RECEIPT["receipt_id"]
+    assert names == {
+        f"nautgate-receipt-{rid}.pdf",
+        f"evidence-{rid}.json",
+        "VERIFY.txt",
+    }
+    assert zf.read(f"evidence-{rid}.json") == BUNDLE  # byte-identical, verifiable
+    assert zf.read(f"nautgate-receipt-{rid}.pdf").startswith(b"%PDF-")
+    assert b"nautgate receipt verify" in zf.read("VERIFY.txt")

@@ -153,3 +153,29 @@ def build_receipt_pdf(
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue()
+
+
+def build_evidence_package(
+    receipt: dict, meta: dict, *, bundle_json: bytes, public_base_url: str | None = None
+) -> bytes:
+    """One auditor-ready zip: branded PDF, canonical bundle, verify instructions."""
+    import zipfile
+
+    rid = receipt.get("receipt_id")
+    pdf = build_receipt_pdf(receipt, meta, bundle_json=bundle_json, public_base_url=public_base_url)
+    instructions = (
+        "NautGate evidence package\n"
+        f"Receipt: {rid}\n\n"
+        f"The signed evidence is evidence-{rid}.json (canonical, byte-exact).\n"
+        "Verify it independently, without trusting NautGate:\n\n"
+        f"  nautgate receipt verify evidence-{rid}.json --public-key <trusted-public-key.pem>\n\n"
+        "Obtain the public key out of band (not from this package).\n"
+        "The PDF is a human-readable rendering and also embeds the same JSON as an attachment.\n"
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"nautgate-receipt-{rid}.pdf", pdf)
+        # Stored uncompressed: the bundle must stay byte-identical and obvious.
+        zf.writestr(zipfile.ZipInfo(f"evidence-{rid}.json"), bundle_json)
+        zf.writestr("VERIFY.txt", instructions)
+    return out.getvalue()

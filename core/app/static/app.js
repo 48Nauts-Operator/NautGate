@@ -1656,7 +1656,7 @@
             <td>${r.sequence}</td><td><code title="${esc(r.receipt_id)}">${esc(r.receipt_id.slice(0, 12))}…</code></td>
             <td><span class="audit-evidence-state ${esc(r.evidence_status)}">${esc(r.evidence_status)}</span></td>
             <td>${r.checkpoint_id ? `<code title="${esc(r.checkpoint_id)}">${esc(r.checkpoint_id.slice(0, 12))}…</code>` : "—"}</td>
-            <td>${r.attested ? `<button class="ghost audit-bundle-download" data-receipt="${esc(r.receipt_id)}">download bundle</button>` : '<span class="dim">not attested</span>'}</td>
+            <td>${r.attested ? `<button class="ghost audit-bundle-download" data-receipt="${esc(r.receipt_id)}">evidence (pdf+json)</button>` : '<span class="dim">not attested</span>'}</td>
           </tr>`).join("") || '<tr><td colspan="5" class="hint">No evidence receipts yet.</td></tr>'}</tbody></table>
           <div class="table-pagination"><button class="ghost audit-receipts-prev" ${auditReceiptPage === 0 ? "disabled" : ""}>Previous</button><span class="dim">Page ${auditReceiptPage + 1} of ${pageCount}</span><button class="ghost audit-receipts-next" ${auditReceiptPage >= pageCount - 1 ? "disabled" : ""}>Next</button></div></div>
         </details>`;
@@ -1667,10 +1667,12 @@
             const receiptId = button.dataset.receipt;
             button.disabled = true;
             try {
-              const bundle = await api(`/v1/audit/receipts/${encodeURIComponent(receiptId)}/bundle`);
+              const resp = await fetch(`/v1/audit/receipts/${encodeURIComponent(receiptId)}/evidence.zip`, { headers: { Authorization: "Bearer " + getToken() } });
+              if (!resp.ok) throw new Error(`evidence.zip ${resp.status}`);
+              const blob = await resp.blob();
               const link = document.createElement("a");
-              link.href = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
-              link.download = `nautgate-evidence-${receiptId}.json`;
+              link.href = URL.createObjectURL(blob);
+              link.download = `nautgate-evidence-${receiptId}.zip`;
               link.click();
               URL.revokeObjectURL(link.href);
             } finally { button.disabled = false; }
