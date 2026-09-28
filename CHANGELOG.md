@@ -15,6 +15,63 @@ regression we introduced, the entry says so.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-28
+
+### Added
+
+- **Receipts now state which weights answered, under which settings, in which
+  environment.** Three new receipt blocks: `model_integrity` records the
+  weight-manifest digest for locally served (Ollama) models, so "which model
+  answered" is a cryptographic claim, not a label; `request.sampling` records
+  temperature, top_p and seed exactly as sent, so the receipt states whether a
+  call ran under deterministic settings; `environment` records the calling
+  harness, a declared sandbox id, and the capture path (in-path gateway vs
+  self-reported sidecar ingest). All fields are null when unobserved, never
+  guessed. Successful OpenAI-shaped responses also record the provider
+  fingerprint.
+
+- **Attested receipts export as an auditor-ready evidence package.**
+  `/v1/audit/receipts/{id}/report` renders the receipt as a branded HTML
+  page; `/report.pdf` produces the same template as PDF (weasyprint) with the
+  canonical bundle embedded byte-identical as a file attachment and a QR
+  code; `/evidence.zip` bundles the PDF, the bundle JSON and VERIFY.txt in
+  one download, wired to the dashboard's Evidence Receipts table. The QR
+  opens `/verify?h=<bundle-hash-prefix>`, a signature-check verdict page
+  where the hash prefix is proof of possession; without a configured
+  `NAUTGATE_PUBLIC_BASE_URL` the QR carries offline integrity anchors
+  instead. The rendering is never the evidence; the embedded canonical JSON
+  remains the signed artifact.
+
+- **Safeguard monitoring and review workflow.** Client-reported safeguard
+  refusals and model fallbacks are captured as structured events, reviewable
+  with verdict, confidence and evidence; agent and model liveness surface on
+  the Summary page.
+
+### Fixed
+
+- **A disabled Verified Audit Trail with traffic still flowing now alarms
+  instead of showing a calm grey badge.** An 11-day silent attestation stall
+  (a deploy that dropped the compose overlay carrying the audit environment)
+  was invisible because health treated `enabled=false` as benign. Audit
+  status now reports `attestation_disabled_with_traffic` as critical whenever
+  attestation is off while decisions or pending receipts exist, and reports
+  hourly decisions-vs-receipts coverage with a shortfall warning. Affected:
+  any deployment that toggles the attestation overlay.
+
+- **Provider auto-resolution and local aliases no longer count as model
+  substitutions**, so substitution flags on receipts mean an actual model
+  change. Codex capture credentials persist across restarts; the activity
+  chart preserves quiet intervals; safeguard observations are inspectable
+  from the dashboard.
+
+### Dependencies
+
+- New: weasyprint (PDF from the report template; the container image ships
+  the pango libraries it needs), segno (QR), pypdf (bundle attachment).
+  Removed: none. The Homebrew formula regeneration must pick these up; its
+  generator currently fails on a pre-existing metadata parse issue and the
+  formula was not updated in this release.
+
 ## [0.5.1] — 2026-08-31
 
 ### Added
