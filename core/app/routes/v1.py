@@ -5210,7 +5210,13 @@ async def audit_receipt_report_pdf(receipt_id: str, request: Request) -> Respons
     from app.audit_report_pdf import build_receipt_pdf
 
     receipt, meta, bundle_json = await _load_report_material(receipt_id, request)
-    pdf = build_receipt_pdf(receipt, meta, bundle_json=bundle_json)
+    settings = getattr(request.app.state, "settings", None)
+    pdf = build_receipt_pdf(
+        receipt,
+        meta,
+        bundle_json=bundle_json,
+        public_base_url=getattr(settings, "nautgate_public_base_url", None),
+    )
     return Response(
         pdf,
         media_type="application/pdf",
@@ -5218,6 +5224,59 @@ async def audit_receipt_report_pdf(receipt_id: str, request: Request) -> Respons
             "Content-Disposition": f'attachment; filename="nautgate-receipt-{receipt_id}.pdf"'
         },
     )
+
+
+@router.get("/audit/receipts/{receipt_id}/verify")
+async def audit_receipt_verify_page(receipt_id: str, request: Request, h: str = "") -> Response:
+    """Scanner-facing verdict page. The hash prefix is proof-of-possession of
+    the document; the page reveals a verdict and attestation facts, never
+    receipt content. Trust-grade verification stays the offline CLI."""
+    from app.audit_report import render_verify_verdict
+    from app.audit_verify import VerificationError, load_verification_key, verify_bundle
+
+    pool = getattr(request.app.state, "db", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db_unavailable")
+    try:
+        parsed = uuid.UUID(receipt_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="receipt_id must be a uuid") from None
+    not_found = Response(
+        render_verify_verdict(ok=False, receipt_id=receipt_id, detail={}),
+        media_type="text/html",
+        status_code=404,
+    )
+    if len(h) < 16:
+        return not_found
+    bundle = await queries.export_evidence_bundle(pool, receipt_id=parsed, agent_id=None)
+    if bundle is None:
+        return not_found
+    encoded = json.dumps(bundle, ensure_ascii=False, separators=(",", ":")).encode()
+    if not hashlib.sha256(encoded).hexdigest().startswith(h):
+        return not_found
+    signature = bundle.get("signature") or {}
+    keys = await queries.get_audit_signing_keys(pool)
+    key_rows = keys.get("keys") if isinstance(keys, dict) else keys
+    pem = next(
+        (k["public_key_pem"] for k in (key_rows or []) if k.get("key_id") == signature.get("key_id")),
+        None,
+    )
+    ok = False
+    if pem:
+        try:
+            verify_bundle(bundle, load_verification_key(pem))
+            ok = True
+        except VerificationError:
+            ok = False
+    checkpoint = bundle.get("checkpoint") or {}
+    detail = {
+        "Sequence": (bundle.get("receipt") or {}).get("sequence"),
+        "Completed": (bundle.get("receipt") or {}).get("completed_at"),
+        "Checkpoint": checkpoint.get("checkpoint_id"),
+        "Signing key": signature.get("key_id"),
+        "Key fingerprint": signature.get("public_key_fingerprint"),
+    }
+    return Response(render_verify_verdict(ok=ok, receipt_id=receipt_id, detail=detail), media_type="text/html")
 
 
 @router.get("/audit/receipts/{receipt_id}")

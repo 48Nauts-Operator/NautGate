@@ -90,3 +90,20 @@ def test_report_escapes_client_controlled_strings():
     html = render_receipt_report(hostile, META)
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_verify_verdict_page_states_the_result_in_house_style():
+    from app.audit_report import render_verify_verdict
+
+    html = render_verify_verdict(
+        ok=True,
+        receipt_id="88328fd3-dd5f-4e39-ad9d-c337ee421e29",
+        detail={"Sequence": 204411, "Signing key": "NAUTGATE_AUDIT_KEY"},
+    )
+    assert "VERIFIED" in html
+    assert "88328fd3" in html
+    assert "204411" in html
+    assert "#C3CE1F" in html  # house accent
+
+    failed = render_verify_verdict(ok=False, receipt_id="x", detail={})
+    assert "NOT VERIFIED" in failed

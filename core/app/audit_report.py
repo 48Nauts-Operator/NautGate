@@ -39,18 +39,23 @@ def render_receipt_report(receipt: dict, meta: dict) -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>NautGate Decision Receipt {_e(receipt.get("receipt_id"))}</title>
 <style>
-body{{font:14px/1.5 -apple-system,system-ui,sans-serif;color:#16202a;margin:2rem auto;max-width:52rem;padding:0 1rem}}
-h1{{font-size:1.3rem;margin-bottom:.2rem}} h2{{font-size:1rem;margin:1.4rem 0 .4rem;border-bottom:1px solid #cdd5db;padding-bottom:.2rem}}
-table{{border-collapse:collapse;width:100%}} th{{text-align:left;width:14rem;font-weight:500;color:#54626f;padding:.18rem 0;vertical-align:top}}
-td{{font-family:ui-monospace,Menlo,monospace;font-size:.85rem;word-break:break-all;padding:.18rem 0}}
-.ok{{color:#186b3c;border:1px solid #186b3c;padding:2px 8px;font-size:.8rem}}
-.pending{{color:#9a6b15;border:1px solid #9a6b15;padding:2px 8px;font-size:.8rem}}
-.verify{{background:#f2f5f7;border:1px solid #cdd5db;padding:.8rem 1rem;font-family:ui-monospace,Menlo,monospace;font-size:.8rem}}
-footer{{margin-top:2rem;color:#54626f;font-size:.78rem}}
-@media print{{body{{margin:0 auto}}}}
+body{{background:#0A0D12;color:#E6EBF2;font:13px/1.55 ui-monospace,"SF Mono",Menlo,monospace;margin:0;padding:32px}}
+.wrap{{max-width:760px;margin:0 auto}}
+h1{{font-size:16px;color:#C3CE1F;margin:0 0 2px}}
+.sub{{color:#8893A4;font-size:11px;margin-bottom:20px}}
+h2{{font-size:12px;color:#8893A4;text-transform:uppercase;letter-spacing:.08em;margin:22px 0 8px;border-bottom:1px solid #232B36;padding-bottom:4px}}
+table{{border-collapse:collapse;width:100%}}
+th{{text-align:left;width:15rem;color:#5C6675;font-weight:400;padding:3px 0;vertical-align:top;border-bottom:1px dotted #232B36}}
+td{{font-size:12px;word-break:break-all;padding:3px 0;border-bottom:1px dotted #232B36}}
+.ok{{color:#3FB950;border:1px solid #3FB950;border-radius:10px;padding:2px 8px;font-size:11px}}
+.pending{{color:#D6A100;border:1px solid #D6A100;border-radius:10px;padding:2px 8px;font-size:11px}}
+.verify{{background:#12161F;border:1px solid #232B36;border-radius:6px;padding:10px 14px;font-size:12px}}
+footer{{margin-top:28px;color:#5C6675;font-size:10px;border-top:1px solid #232B36;padding-top:8px}}
+@media print{{body{{background:#fff;color:#16202a}}h1{{color:#5f6b00}}}}
 </style></head><body>
-<h1>NautGate Decision Receipt</h1>
-<p>{badge} · schema {_e(receipt.get("schema"))} · sequence {_e(receipt.get("sequence"))}</p>
+<div class="wrap">
+<h1>NautGate · Decision receipt</h1>
+<p class="sub">{badge} · schema {_e(receipt.get("schema"))} · sequence {_e(receipt.get("sequence"))}</p>
 
 <h2>Transaction</h2>
 <table>
@@ -107,4 +112,35 @@ footer{{margin-top:2rem;color:#54626f;font-size:.78rem}}
 <footer>This report is a rendering of the canonical receipt. The receipt's canonical JSON,
 not this page, is the signed evidence; verify it with the command above against a
 public key obtained out of band.</footer>
-</body></html>"""
+</div></body></html>"""
+
+
+_VERDICT_STYLE = """<style>
+body{background:#0A0D12;color:#E6EBF2;font:13px/1.55 ui-monospace,"SF Mono",Menlo,monospace;margin:0;padding:32px}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:16px;color:#C3CE1F;margin:0 0 2px}
+.sub{color:#8893A4;font-size:11px;margin-bottom:20px}
+h2{font-size:12px;color:#8893A4;text-transform:uppercase;letter-spacing:.08em;margin:22px 0 8px;border-bottom:1px solid #232B36;padding-bottom:4px}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;width:15rem;color:#5C6675;font-weight:400;padding:3px 0;vertical-align:top;border-bottom:1px dotted #232B36}
+td{font-size:12px;word-break:break-all;padding:3px 0;border-bottom:1px dotted #232B36}
+.ok{color:#3FB950;border:1px solid #3FB950;border-radius:10px;padding:2px 8px;font-size:11px}
+.pending{color:#D6A100;border:1px solid #D6A100;border-radius:10px;padding:2px 8px;font-size:11px}
+.verify{background:#12161F;border:1px solid #232B36;border-radius:6px;padding:10px 14px;font-size:12px}
+footer{margin-top:28px;color:#5C6675;font-size:10px;border-top:1px solid #232B36;padding-top:8px}
+@media print{body{background:#fff;color:#16202a}h1{color:#5f6b00}}
+</style>"""
+
+
+def render_verify_verdict(*, ok: bool, receipt_id: str, detail: dict) -> str:
+    state = '<span class="ok">VERIFIED</span>' if ok else '<span class="pending">NOT VERIFIED</span>'
+    rows = "".join(_row(k, v) for k, v in detail.items())
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>NautGate Receipt Verification</title>
+{_VERDICT_STYLE}</head><body><div class="wrap">
+<h1>NautGate · Receipt verification</h1>
+<p class="sub">{state} · receipt {_e(receipt_id)}</p>
+<table>{rows}</table>
+<footer>Server-side check by this NautGate instance. For trust-grade verification run
+nautgate receipt verify against the evidence bundle with a public key obtained out of band.</footer>
+</div></body></html>"""

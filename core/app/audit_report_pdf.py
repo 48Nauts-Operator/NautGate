@@ -19,18 +19,31 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
 
-def _qr_payload(receipt: dict, meta: dict, bundle_json: bytes) -> str:
+def qr_payload(
+    receipt: dict, meta: dict, bundle_json: bytes, *, public_base_url: str | None
+) -> str:
+    """Verify link when the instance has a reachable base URL; anchors otherwise.
+
+    The hash prefix in the link is proof-of-possession: scanning grants the
+    verdict page, never receipt content.
+    """
+    digest = hashlib.sha256(bundle_json).hexdigest()
+    if public_base_url:
+        base = public_base_url.rstrip("/")
+        return f"{base}/v1/audit/receipts/{receipt.get('receipt_id')}/verify?h={digest[:16]}"
     return json.dumps(
         {
             "receipt_id": receipt.get("receipt_id"),
-            "bundle_sha256": hashlib.sha256(bundle_json).hexdigest(),
+            "bundle_sha256": digest,
             "key_fingerprint": meta.get("key_fingerprint"),
         },
         separators=(",", ":"),
     )
 
 
-def build_receipt_pdf(receipt: dict, meta: dict, *, bundle_json: bytes) -> bytes:
+def build_receipt_pdf(
+    receipt: dict, meta: dict, *, bundle_json: bytes, public_base_url: str | None = None
+) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4, pageCompression=0)
     c.setTitle(f"NautGate Decision Receipt {receipt.get('receipt_id')}")
@@ -65,7 +78,7 @@ def build_receipt_pdf(receipt: dict, meta: dict, *, bundle_json: bytes) -> bytes
     y -= 4 * mm
 
     # QR: integrity anchors for a phone-side check against the printed page.
-    qr = segno.make(_qr_payload(receipt, meta, bundle_json), error="m")
+    qr = segno.make(qr_payload(receipt, meta, bundle_json, public_base_url=public_base_url), error="m")
     qr_buf = io.BytesIO()
     qr.save(qr_buf, kind="png", scale=3, border=1)
     qr_buf.seek(0)

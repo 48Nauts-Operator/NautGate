@@ -18,6 +18,28 @@ def test_pdf_renders_and_embeds_the_evidence_bundle():
     assert reader.attachments[name][0] == BUNDLE  # byte-identical, still verifiable
 
 
+def test_qr_is_a_verify_link_when_a_public_base_url_is_configured():
+    import hashlib
+
+    from app.audit_report_pdf import qr_payload
+
+    url = qr_payload(RECEIPT, META, BUNDLE, public_base_url="https://ng.example.ch")
+    assert url.startswith(
+        "https://ng.example.ch/v1/audit/receipts/88328fd3-dd5f-4e39-ad9d-c337ee421e29/verify?h="
+    )
+    assert url.endswith(hashlib.sha256(BUNDLE).hexdigest()[:16])
+
+
+def test_qr_falls_back_to_integrity_anchors_without_a_base_url():
+    import json as _json
+
+    from app.audit_report_pdf import qr_payload
+
+    payload = _json.loads(qr_payload(RECEIPT, META, BUNDLE, public_base_url=None))
+    assert payload["receipt_id"] == RECEIPT["receipt_id"]
+    assert payload["key_fingerprint"] == META["key_fingerprint"]
+
+
 def test_pdf_page_carries_the_material_facts():
     pdf = build_receipt_pdf(RECEIPT, META, bundle_json=BUNDLE)
     text = PdfReader(io.BytesIO(pdf)).pages[0].extract_text()
