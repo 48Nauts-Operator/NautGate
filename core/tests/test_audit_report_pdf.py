@@ -42,7 +42,7 @@ def test_qr_falls_back_to_integrity_anchors_without_a_base_url():
 
 def test_pdf_page_carries_the_material_facts():
     pdf = build_receipt_pdf(RECEIPT, META, bundle_json=BUNDLE)
-    text = PdfReader(io.BytesIO(pdf)).pages[0].extract_text()
+    text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf)).pages)
     for fact in (
         RECEIPT["receipt_id"],
         "openrouter/deepseek/deepseek-v4-flash",

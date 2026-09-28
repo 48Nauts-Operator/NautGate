@@ -49,7 +49,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.65 ui-monospace,SFMo
 .note{font-size:13px;color:var(--muted)}
 footer{padding:22px 48px;background:var(--bg);font-size:12px;color:var(--muted)}
 .print-tip{float:right}
-@media(max-width:700px){main{margin:0}header,.hero,section,footer{padding:24px}h1{font-size:28px}.metrics{grid-template-columns:1fr}.metric{border-bottom:1px solid var(--line)}.stamp,.print-tip{display:none}dl{grid-template-columns:1fr;gap:4px}dd{margin-bottom:12px}}
+@media (max-width:700px){main{margin:0}header,.hero,section,footer{padding:24px}h1{font-size:28px}.metrics{grid-template-columns:1fr}.metric{border-bottom:1px solid var(--line)}.stamp,.print-tip{display:none}dl{grid-template-columns:1fr;gap:4px}dd{margin-bottom:12px}}
 @media print{:root{color-scheme:light;--ink:#172331;--muted:#576674;--line:#dce3e7;--accent:#626800;--paper:#fff;--soft:#f3f4f0;--bg:#fff;--good:#186b3c;--warn:#8a5d00;--bad:#a3403c}
 body{background:white;font-size:11px}main{max-width:none;margin:0;box-shadow:none}
 header{background:white;color:var(--ink);border-bottom:2px solid var(--ink)}
@@ -81,7 +81,7 @@ def _shell(*, eyebrow: str, stamp: str, body: str, module: str) -> str:
 </main></body></html>"""
 
 
-def render_receipt_report(receipt: dict, meta: dict) -> str:
+def render_receipt_report(receipt: dict, meta: dict, *, qr_data_uri: str | None = None) -> str:
     req = receipt.get("request") or {}
     sampling = req.get("sampling") or {}
     routing = receipt.get("routing") or {}
@@ -104,6 +104,7 @@ def render_receipt_report(receipt: dict, meta: dict) -> str:
     )
     body = f"""
 <div class="hero">
+  {f'<img src="{qr_data_uri}" alt="verification QR" style="float:right;width:112px;height:112px;image-rendering:pixelated;border:6px solid #fff;border-radius:4px">' if qr_data_uri else ""}
   <div class="eyebrow">Verified Audit Trail</div>
   <h1 class="{h1_class}">{_e(headline)}</h1>
   <p class="lede">Cryptographic record of one model decision: what was asked, which model

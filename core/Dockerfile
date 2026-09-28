@@ -28,8 +28,11 @@ WORKDIR /app
 # to the db service — no docker-exec, which can't work from inside a container
 # (NAUTGATE-7). Debian trixie's own postgresql-client is v17, which dumps a PG16
 # server fine (pg_dump must be >= the server major, and 17 >= 16).
+# pango/gobject + a real font: weasyprint renders the branded receipt PDFs
+# (NAUTGATE-66) from the same HTML template the report pages use.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client \
+       libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
